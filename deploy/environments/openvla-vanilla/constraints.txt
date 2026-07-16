@@ -1,0 +1,8 @@
+# Compatibility baseline for the upstream OpenVLA dependency stack.
+accelerate==0.30.1
+bitsandbytes==0.43.1
+flash-attn==2.5.5
+torch==2.2.0
+torchaudio==2.2.0
+torchvision==0.17.0
+transformers==4.40.1
