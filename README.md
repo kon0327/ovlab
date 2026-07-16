@@ -17,3 +17,13 @@ The experiment runner and benchmark adapter execute together in a runner process
 - `runs/`: generated experiment manifests, traces, and results; contents are not versioned.
 
 OVLAB is currently in the **scaffolding phase**. Package implementations, dependency definitions, protocols, containers, and runtime configuration will be designed in later phases.
+
+## Testing
+
+OVLAB uses the lightweight `ovlab-tester` Conda environment for CPU-only automated tests. Create it from `deploy/environments/ovlab-tester/environment.yml`, then run:
+
+```bash
+conda run -n ovlab-tester deploy/scripts/test.sh
+```
+
+GPU and policy-specific smoke tests remain isolated in their corresponding policy environments.
