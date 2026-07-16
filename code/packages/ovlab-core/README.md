@@ -8,7 +8,15 @@ The Python package version and contract schema version are separate. Schema comp
 
 `PolicyObservation` contains only inputs intentionally visible to a policy: the current instruction, named images, and named proprioceptive observations. Evaluation data uses `SignalSpec`, `SignalValue`, and `SignalRegistry`. Signals explicitly declare whether they are policy-visible, evaluation-only, or privileged. There is no helper that copies arbitrary benchmark state or evaluation signals into a policy observation.
 
-This structural separation prevents simulator-only state, success predicates, object poses, and similar privileged information from being passed to a policy accidentally. Benchmark adapters will be responsible for constructing both channels explicitly in a later phase.
+This structural separation prevents simulator-only state, success predicates, object poses, and similar privileged information from being passed to a policy accidentally. Benchmark adapters construct both channels explicitly and capability negotiation rejects attempts to request privileged signals as policy inputs.
+
+## Adapter capabilities and compatibility
+
+`BenchmarkCapabilities` declares produced observations, accepted actions,
+evaluation signals, task suites, and benchmark behavior. `PolicyCapabilities`
+declares required observations, produced actions, supported action horizons, and
+policy behavior. `negotiate_capabilities()` returns a stable, inspectable report;
+`require_compatible()` raises when the report contains errors.
 
 ## Action lifecycle
 
@@ -40,10 +48,10 @@ Trace construction validates deterministic event ordering and verifies event ste
 
 ## Deferred work
 
-This phase intentionally does not implement:
+The adapter-contract phase intentionally does not implement:
 
-- benchmark adapters or benchmark-specific fields,
-- policy backends or model decoding,
+- concrete benchmark integrations or benchmark-specific fields,
+- concrete policy backends or model decoding,
 - metrics and failure analysis,
 - RPC, protobuf, or other transport codecs,
 - JSONL, Parquet, or database persistence,

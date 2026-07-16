@@ -17,7 +17,7 @@ if [[ ${#source_paths[@]} -eq 0 ]]; then
 fi
 
 joined_paths="$(IFS=:; echo "${source_paths[*]}")"
-export PYTHONPATH="$joined_paths"
+export PYTHONPATH="$joined_paths:$repository_root/code/tests"
 
 if [[ $# -eq 0 ]]; then
     set -- code/tests/unit

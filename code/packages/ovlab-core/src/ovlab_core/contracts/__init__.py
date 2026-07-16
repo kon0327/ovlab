@@ -10,11 +10,20 @@ from .actions import (
     RawPolicyOutput,
     RotationRepresentation,
 )
+from .capabilities import (
+    AdapterState,
+    BenchmarkCapabilities,
+    ImageObservationSpec,
+    ObservationRequirements,
+    ObservationSpec,
+    PolicyCapabilities,
+    ProprioceptiveObservationSpec,
+)
 from .errors import ContractCompatibilityError, ContractError, ContractValidationError
 from .identifiers import EpisodeId, InstructionId, PredictionId, RunId, StepId, TaskId
 from .instruction import Instruction, InstructionSource
 from .lifecycle import EpisodeContext, RunContext, StepContext, TaskContext
-from .metadata import Metadata, MetadataScalar, MetadataValue, normalize_metadata
+from .metadata import Metadata, MetadataScalar, MetadataValue, immutable_numeric_array, normalize_metadata
 from .observation import (
     ColorSpace,
     ImageEncoding,
@@ -28,9 +37,11 @@ from .version import OVLAB_CONTRACT_VERSION
 
 __all__ = [
     "OVLAB_CONTRACT_VERSION",
+    "AdapterState",
     "ActionPrediction",
     "ActionRepresentation",
     "ActionSpec",
+    "BenchmarkCapabilities",
     "ColorSpace",
     "ContractCompatibilityError",
     "ContractError",
@@ -43,16 +54,21 @@ __all__ = [
     "GripperConvention",
     "ImageEncoding",
     "ImageObservation",
+    "ImageObservationSpec",
     "Instruction",
     "InstructionId",
     "InstructionSource",
     "Metadata",
     "MetadataScalar",
     "MetadataValue",
+    "ObservationRequirements",
+    "ObservationSpec",
     "PolicyObservation",
+    "PolicyCapabilities",
     "PredictionId",
     "PredictionValidity",
     "ProprioceptiveObservation",
+    "ProprioceptiveObservationSpec",
     "RawPolicyOutput",
     "RotationRepresentation",
     "RunContext",
@@ -65,5 +81,6 @@ __all__ = [
     "StepId",
     "TaskContext",
     "TaskId",
+    "immutable_numeric_array",
     "normalize_metadata",
 ]
