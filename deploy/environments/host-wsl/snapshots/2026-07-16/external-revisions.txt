@@ -1,0 +1,4 @@
+ 8f1084e3132a39270c3a13ebe37270a43ece2a01 external/libero (heads/master)
+ c8f03f48af692657d3060c19588038c7220e9af9 external/openvla (heads/main)
+ e4287e94541f459edc4feabc4e181f537cd569a8 external/openvla-oft (heads/main)
+ deab81fbe4035c3de2c2da3d63db966fe3361f82 external/openvla-quic (heads/main)

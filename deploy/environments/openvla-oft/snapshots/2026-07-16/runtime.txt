@@ -1,0 +1,8 @@
+python=3.10.20 (main, Jun 11 2026, 15:17:37) [GCC 14.3.0]
+executable=/home/kony/miniconda3/envs/openvla-oft/bin/python
+platform=Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.35
+torch=2.2.0+cu121
+torch_cuda=12.1
+cuda_available=True
+gpu=NVIDIA GeForce RTX 4090
+transformers=4.40.1
