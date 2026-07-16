@@ -1,0 +1,12 @@
+[submodule "external/libero"]
+	path = external/libero
+	url = https://github.com/Lifelong-Robot-Learning/LIBERO.git
+[submodule "external/openvla"]
+	path = external/openvla
+	url = https://github.com/openvla/openvla.git
+[submodule "external/openvla-oft"]
+	path = external/openvla-oft
+	url = https://github.com/moojink/openvla-oft.git
+[submodule "external/openvla-quic"]
+	path = external/openvla-quic
+	url = https://github.com/kon0327/openvla-quic.git
