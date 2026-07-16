@@ -8,9 +8,9 @@ from ovlab_core import negotiate_capabilities
 from ovlab_core.contracts import AdapterState, PredictionId
 
 
-def assert_benchmark_conformance(adapter) -> None:
+def assert_benchmark_conformance(adapter, episode=None) -> None:
     run = make_run_context()
-    episode = make_episode_context()
+    episode = episode or make_episode_context()
     capabilities = adapter.initialize(run)
     assert adapter.state is AdapterState.READY
     assert adapter.list_tasks()
