@@ -44,12 +44,12 @@ def map_signals(
     initial_state_index: int,
 ) -> tuple[SignalValue, ...]:
     values = [
-        SignalValue("benchmark.task_success", success, timestamp_ns, "libero", step_id),
-        SignalValue("benchmark.reward", float(reward), timestamp_ns, "libero", step_id),
-        SignalValue("episode.terminated", terminated, timestamp_ns, "ovlab-libero", step_id),
-        SignalValue("episode.truncated", truncated, timestamp_ns, "ovlab-libero", step_id),
-        SignalValue("episode.native_step_index", native_step_index, timestamp_ns, "ovlab-libero", step_id),
-        SignalValue("episode.initial_state_index", initial_state_index, timestamp_ns, "ovlab-libero", step_id),
+        SignalValue("benchmark.task_success", success, timestamp_ns, "libero", step_id, access=SignalAccess.EVALUATION_ONLY),
+        SignalValue("benchmark.reward", float(reward), timestamp_ns, "libero", step_id, access=SignalAccess.EVALUATION_ONLY),
+        SignalValue("episode.terminated", terminated, timestamp_ns, "ovlab-libero", step_id, access=SignalAccess.EVALUATION_ONLY),
+        SignalValue("episode.truncated", truncated, timestamp_ns, "ovlab-libero", step_id, access=SignalAccess.EVALUATION_ONLY),
+        SignalValue("episode.native_step_index", native_step_index, timestamp_ns, "ovlab-libero", step_id, access=SignalAccess.EVALUATION_ONLY),
+        SignalValue("episode.initial_state_index", initial_state_index, timestamp_ns, "ovlab-libero", step_id, access=SignalAccess.EVALUATION_ONLY),
     ]
     if profile is not LiberoObservationProfile.RGB_PROPRIOCEPTION:
         for signal_name, key, shape in (
@@ -62,5 +62,7 @@ def map_signals(
             value = np.asarray(raw[key], dtype=np.float32)
             if value.shape != shape or not np.all(np.isfinite(value)):
                 raise LiberoObservationError(f"privileged native signal {key!r} is invalid")
-            values.append(SignalValue(signal_name, value, timestamp_ns, "libero", step_id))
+            values.append(
+                SignalValue(signal_name, value, timestamp_ns, "libero", step_id, access=SignalAccess.PRIVILEGED)
+            )
     return tuple(sorted(values, key=lambda value: value.name))

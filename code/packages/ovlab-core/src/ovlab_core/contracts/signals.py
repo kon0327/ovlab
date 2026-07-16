@@ -52,6 +52,7 @@ class SignalValue:
     source: str
     step_id: StepId | None = None
     metadata: Metadata = field(default_factory=dict)
+    access: SignalAccess | None = None
 
     def __post_init__(self) -> None:
         contract = type(self).__name__
@@ -61,6 +62,8 @@ class SignalValue:
             raise validation_error(contract, "source", "must not be empty or whitespace-only")
         if self.step_id is not None and not isinstance(self.step_id, StepId):
             raise validation_error(contract, "step_id", "must be a StepId or None")
+        if self.access is not None and not isinstance(self.access, SignalAccess):
+            raise validation_error(contract, "access", "must be a SignalAccess or None")
         validate_timestamp_ns(self.timestamp_ns, contract, "timestamp_ns")
         object.__setattr__(self, "value", normalize_contract_value(self.value, contract, "value"))
         object.__setattr__(self, "metadata", normalize_metadata(self.metadata, contract))
