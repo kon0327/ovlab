@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovlab-benchctl"
+version = "0.1.0"
+description = "Strict configuration composition root for OpenVLABenchmark"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "ovlab-core>=0.1.0",
+  "ovlab-benchmarks>=0.1.0",
+  "ovlab-metrics>=0.1.0",
+  "ovlab-openvla-common>=0.1.0",
+  "ovlab-openvla-vanilla>=0.1.0",
+  "ovlab-runner>=0.1.0",
+  "numpy>=1.24",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

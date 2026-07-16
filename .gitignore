@@ -42,3 +42,5 @@ dist/
 .env
 .env.*
 !.env.example
+configs/local/*.yaml
+!configs/local/profile.example.yaml

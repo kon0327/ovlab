@@ -1,0 +1,28 @@
+schema_version: "0.1.0"
+kind: protocol
+id: libero-standard-v1
+
+execution:
+  rollouts_per_task: 50
+  base_seed: 42
+  maximum_episode_steps: 300
+
+  action_chunks:
+    mode: receding_horizon
+    replan_interval: 1
+
+  episode_errors: continue_run
+  unavailable_metrics: allow_unavailable
+
+recording:
+  observations: true
+  images: false
+  proprioception: true
+  predictions: true
+  raw_policy_output: false
+  evaluation_signals: true
+  privileged_signals: true
+
+reproducibility:
+  reject_dirty_external_repositories: true
+  require_checkpoint_identity: true

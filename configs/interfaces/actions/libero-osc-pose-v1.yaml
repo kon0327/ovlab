@@ -1,0 +1,16 @@
+schema_version: "0.1.0"
+kind: action_interface
+id: libero-osc-pose-v1
+
+dimension: 7
+representation: delta_pose
+translation_indices: [0, 1, 2]
+rotation_indices: [3, 4, 5]
+gripper_indices: [6]
+rotation_representation: axis_angle
+gripper_convention: closed_positive
+dtype: float32
+units: normalized_command
+control_frequency_hz: 20.0
+minimum: [-1, -1, -1, -1, -1, -1, -1]
+maximum: [1, 1, 1, 1, 1, 1, 1]

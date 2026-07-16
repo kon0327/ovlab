@@ -1,0 +1,7 @@
+schema_version: "0.1.0"
+kind: benchmark
+type: libero
+extends: base.yaml
+
+settings:
+  suite: libero_10

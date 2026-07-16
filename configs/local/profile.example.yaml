@@ -1,0 +1,11 @@
+schema_version: "0.1.0"
+kind: local_profile
+id: example-local-machine
+
+paths:
+  checkpoint_root: /absolute/path/to/checkpoints
+  dataset_root: /absolute/path/to/datasets
+  runs_root: /absolute/path/to/ovlab/runs
+
+devices:
+  primary_gpu: cuda:0

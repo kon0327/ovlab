@@ -1,0 +1,32 @@
+schema_version: "0.1.0"
+kind: benchmark
+type: libero
+
+settings:
+  suite: libero_spatial
+  task_indices: all
+
+  observation:
+    profile: primary_rgb
+    cameras:
+      primary:
+        native_name: agentview
+        canonical_name: camera.primary.rgb
+    width: 256
+    height: 256
+    color_space: rgb
+    dtype: uint8
+
+  initialization:
+    state_selection: rollout_index
+    settling_steps: 10
+
+  rendering:
+    mode: headless
+    gpu_resource: primary_gpu
+
+  action:
+    interface_ref: interfaces/actions/libero-osc-pose-v1.yaml
+
+  privileged_signals:
+    enabled: true

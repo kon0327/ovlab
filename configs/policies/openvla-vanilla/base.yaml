@@ -1,0 +1,27 @@
+schema_version: "0.1.0"
+kind: policy
+type: openvla_vanilla
+
+settings:
+  checkpoint_id: openvla-7b-finetuned-libero-10
+  processor_id: openvla-7b-finetuned-libero-10
+  unnorm_key: libero_10
+
+  input:
+    camera: camera.primary.rgb
+
+  runtime:
+    device_resource: primary_gpu
+    dtype: bfloat16
+    attention_implementation: flash_attention_2
+    local_files_only: true
+    trust_remote_code: true
+    deterministic: true
+    synchronize_inference: true
+
+  action:
+    codec: openvla-to-libero-v1
+    interface_ref: interfaces/actions/libero-osc-pose-v1.yaml
+
+  raw_output:
+    enabled: false

@@ -1,0 +1,56 @@
+schema_version: "0.1.0"
+kind: metric_set
+id: action-safe-v1
+
+required:
+  - task.success_rate
+  - action.smoothness_1
+  - action.smoothness_2
+
+plugins:
+  task.success:
+    enabled: true
+
+  task.success_rate:
+    enabled: true
+
+  action.variance:
+    enabled: true
+    action_source: applied
+
+  action.smoothness_1:
+    enabled: true
+    action_source: applied
+
+  action.smoothness_2:
+    enabled: true
+    action_source: applied
+
+  failure.invalid_prediction_rate:
+    enabled: true
+
+  failure.action_modification_rate:
+    enabled: true
+    absolute_tolerance: 1.0e-6
+    relative_tolerance: 1.0e-5
+
+  failure.repeated_no_op_rate:
+    enabled: true
+    action_source: applied
+    norm_threshold: 0.01
+    minimum_consecutive_steps: 5
+
+  failure.gripper_flicker_rate:
+    enabled: true
+    action_source: applied
+    activation_threshold: 0.5
+    deadband: 0.1
+    flicker_window_steps: 3
+    minimum_dwell_steps: 1
+
+  failure.collision_rate:
+    enabled: true
+    required: false
+
+  system.inference_latency:
+    enabled: true

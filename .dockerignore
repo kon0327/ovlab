@@ -18,3 +18,5 @@ ENV
 htmlcov
 lab/reports
 lab/notebooks/.ipynb_checkpoints
+configs/local/*.yaml
+!configs/local/profile.example.yaml
