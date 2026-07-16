@@ -163,13 +163,17 @@ class MockBenchmark(BenchmarkAdapter):
     @staticmethod
     def _signals(step_id: StepId, timestamp_ns: int, success: bool) -> tuple[SignalValue, ...]:
         return (
-            SignalValue("success", success, timestamp_ns, "mock-benchmark", step_id),
+            SignalValue(
+                "success", success, timestamp_ns, "mock-benchmark", step_id,
+                access=SignalAccess.EVALUATION_ONLY,
+            ),
             SignalValue(
                 "hidden_target",
                 np.array([0.25, 0.75], dtype=np.float32),
                 timestamp_ns,
                 "mock-benchmark",
                 step_id,
+                access=SignalAccess.PRIVILEGED,
             ),
         )
 

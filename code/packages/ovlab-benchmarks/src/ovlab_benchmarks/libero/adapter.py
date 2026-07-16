@@ -214,3 +214,6 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
 
     def _close(self) -> None:
         self._release_environment()
+
+    def _abort_episode(self) -> None:
+        self._release_environment()

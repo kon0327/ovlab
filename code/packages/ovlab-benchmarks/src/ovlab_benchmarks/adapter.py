@@ -77,6 +77,13 @@ class BenchmarkAdapter(ABC):
             self._state = AdapterState.READY
         return result
 
+    def abort_episode(self) -> None:
+        """Release an active episode after a runner or policy failure."""
+        self._require_state("abort_episode", AdapterState.EPISODE_ACTIVE)
+        self._abort_episode()
+        self._episode_context = None
+        self._state = AdapterState.READY
+
     def close(self) -> None:
         if self._state is AdapterState.CLOSED:
             return
@@ -109,6 +116,9 @@ class BenchmarkAdapter(ABC):
 
     @abstractmethod
     def _step(self, request: BenchmarkActionRequest) -> BenchmarkStepResult: ...
+
+    def _abort_episode(self) -> None:
+        """Optional concrete hook for releasing active episode resources."""
 
     @abstractmethod
     def _close(self) -> None: ...

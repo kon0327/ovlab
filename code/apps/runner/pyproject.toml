@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovlab-runner"
+version = "0.1.0"
+description = "Synchronous in-process experiment runner for OVLAB"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["ovlab-core>=0.1.0", "ovlab-benchmarks>=0.1.0", "ovlab-policy-sdk>=0.1.0", "ovlab-metrics>=0.1.0", "numpy>=1.24"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

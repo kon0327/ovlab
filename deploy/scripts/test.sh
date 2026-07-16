@@ -5,7 +5,7 @@ repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repository_root"
 
 source_paths=()
-for source_path in code/packages/*/src code/policies/*/src; do
+for source_path in code/packages/*/src code/policies/*/src code/apps/*/src; do
     if [[ -d "$source_path" ]]; then
         source_paths+=("$repository_root/$source_path")
     fi
