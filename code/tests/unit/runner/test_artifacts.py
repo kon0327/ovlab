@@ -5,7 +5,7 @@ import json
 import pytest
 
 from helpers.metric_traces import synthetic_trace
-from ovlab_runner import ArtifactError, FilesystemRunArtifactStore, TraceCodec
+from ovlab_runner import ArtifactError, FilesystemRunArtifactStore, RunConfigurationSnapshot, TraceCodec
 from ovlab_runner.artifacts.layout import safe_key
 
 
@@ -53,3 +53,24 @@ def test_filesystem_store_never_overwrites_finalized_trace_or_started_manifest(t
 def test_safe_keys_allow_stable_slash_ids_but_reject_traversal() -> None:
     assert "/" not in safe_key("libero/spatial/0")
     with pytest.raises(ArtifactError): safe_key("../escape")
+
+
+def test_configuration_and_run_manifests_are_immutable_and_distinguish_partial_runs(tmp_path) -> None:
+    store = FilesystemRunArtifactStore(tmp_path)
+    run_id = synthetic_trace().episode_context.run_id
+    digest = "a" * 64
+    snapshot = RunConfigurationSnapshot("kind: source\n", "kind: resolved\n", digest, digest)
+    store.create_run(run_id, {"status": "started"})
+    store.write_configuration(run_id, snapshot)
+    run_path = store._run_path(run_id)
+    assert (run_path / "manifest.started.json").is_file()
+    assert not (run_path / "manifest.completed.json").exists()
+    assert not (run_path / "manifest.failed.json").exists()
+    with pytest.raises(ArtifactError, match="configuration already exists"):
+        store.write_configuration(run_id, snapshot)
+    assert (run_path / "source_config.yaml").read_text(encoding="utf-8") == snapshot.portable_source_yaml
+    assert (run_path / "resolved_config.yaml").read_text(encoding="utf-8") == snapshot.resolved_config_yaml
+    store.finalize_run(run_id, {"status": "completed"})
+    assert (run_path / "manifest.completed.json").is_file()
+    with pytest.raises(ArtifactError, match="already finalized"):
+        store.mark_run_failed(run_id, {"status": "failed"})

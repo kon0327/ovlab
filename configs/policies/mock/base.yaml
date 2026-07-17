@@ -1,0 +1,17 @@
+schema_version: "0.1.0"
+kind: policy
+type: mock
+
+settings:
+  horizon: 1
+  deterministic: true
+
+  input:
+    camera: front_rgb
+    proprioception: robot_state
+
+  action:
+    interface_ref: interfaces/actions/mock-delta-gripper-v1.yaml
+
+  raw_output:
+    enabled: true

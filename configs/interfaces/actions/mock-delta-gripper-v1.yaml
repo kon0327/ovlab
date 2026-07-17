@@ -1,0 +1,16 @@
+schema_version: "0.1.0"
+kind: action_interface
+id: mock-delta-gripper-v1
+
+dimension: 3
+representation: delta_pose
+translation_indices: [0, 1]
+rotation_indices: []
+gripper_indices: [2]
+rotation_representation: none
+gripper_convention: open_positive
+dtype: float32
+units: [m, m, unitless]
+control_frequency_hz: 10.0
+minimum: [-1, -1, -1]
+maximum: [1, 1, 1]

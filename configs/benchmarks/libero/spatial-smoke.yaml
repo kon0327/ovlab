@@ -1,0 +1,11 @@
+schema_version: "0.1.0"
+kind: benchmark
+type: libero
+extends: spatial.yaml
+
+settings:
+  task_indices: [0]
+
+  initialization:
+    state_selection: rollout_index
+    settling_steps: 1

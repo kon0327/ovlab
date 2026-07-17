@@ -7,6 +7,7 @@ from ovlab_metrics import (
 )
 
 from .connection import connect_components
+from .configuration import RunConfigurationSnapshot
 from .errors import ConnectionError, ExperimentExecutionError, RunnerLifecycleError
 from .execution import execute_episode
 from .lifecycle import RunnerState, SystemClock
@@ -17,7 +18,7 @@ from .provenance import StaticProvenanceProvider
 class ExperimentRunner:
     version = "0.1.0"
 
-    def __init__(self, plan, benchmark, policy, artifact_store, *, metric_registry=None, clock=None, provenance_provider=None):
+    def __init__(self, plan, benchmark, policy, artifact_store, *, metric_registry=None, clock=None, provenance_provider=None, configuration_snapshot=None):
         self.plan = plan
         self.benchmark = benchmark
         self.policy = policy
@@ -25,6 +26,9 @@ class ExperimentRunner:
         self.metric_registry = metric_registry or MetricRegistry.default()
         self.clock = clock or SystemClock()
         self.provenance_provider = provenance_provider or StaticProvenanceProvider()
+        if configuration_snapshot is not None and not isinstance(configuration_snapshot, RunConfigurationSnapshot):
+            raise TypeError("configuration_snapshot must be a RunConfigurationSnapshot or None")
+        self.configuration_snapshot = configuration_snapshot
         self.state = RunnerState.CREATED
         self.connection_report = None
         self._resources_closed = False
@@ -48,9 +52,19 @@ class ExperimentRunner:
             "start_wall_time_utc_ns": self.clock.wall_time_utc_ns(),
             "provenance": self.provenance_provider.collect().as_dict(), "metadata": dict(self.plan.metadata),
         }
-        self.store.create_run(self.plan.run_context.run_id, started)
-        self.store.write_plan(self.plan.run_context.run_id, self.plan)
-        self.store.write_connection_report(self.plan.run_context.run_id, report)
+        if self.configuration_snapshot is not None:
+            started["scientific_config_hash"] = self.configuration_snapshot.scientific_config_hash
+            started["execution_config_hash"] = self.configuration_snapshot.execution_config_hash
+        try:
+            self.store.create_run(self.plan.run_context.run_id, started)
+            if self.configuration_snapshot is not None:
+                self.store.write_configuration(self.plan.run_context.run_id, self.configuration_snapshot)
+            self.store.write_plan(self.plan.run_context.run_id, self.plan)
+            self.store.write_connection_report(self.plan.run_context.run_id, report)
+        except Exception as exc:
+            self.state = RunnerState.FAILED
+            self._close_resources()
+            raise ConnectionError("runner artifact initialization failed") from exc
         self.state = RunnerState.CONNECTED
         return report
 

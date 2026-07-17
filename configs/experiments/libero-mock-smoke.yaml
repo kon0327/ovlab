@@ -1,0 +1,18 @@
+schema_version: "0.1.0"
+kind: experiment
+
+experiment:
+  id: libero-mock-smoke
+  name: Deterministic mock policy on LIBERO-Spatial
+  tags: [libero, mock, smoke, integration-reference]
+
+components:
+  benchmark: benchmarks/libero/spatial-smoke.yaml
+  policy: policies/mock/libero-noop.yaml
+  metrics: metrics/action-safe-v1.yaml
+  protocol: protocols/libero-smoke-v1.yaml
+  action_interface: interfaces/actions/libero-osc-pose-v1.yaml
+  artifacts: artifacts/filesystem.yaml
+
+resources:
+  registry: resources/registry.yaml

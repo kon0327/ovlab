@@ -3,11 +3,11 @@ kind: resource_registry
 
 checkpoints:
   openvla-7b:
-    relative_path: openvla/openvla-7b
+    repo_id: openvla/openvla-7b
     expected_revision: null
     expected_sha256: null
   openvla-7b-finetuned-libero-10:
-    relative_path: openvla/openvla-7b-finetuned-libero-10
+    repo_id: openvla/openvla-7b-finetuned-libero-10
     expected_revision: "80970322773f81baa2e22fe495d0487b93a05cfa"
     expected_sha256: null
 

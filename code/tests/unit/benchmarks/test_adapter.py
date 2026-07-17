@@ -41,7 +41,7 @@ def test_reset_exposes_only_policy_observations_and_registered_signals() -> None
     result = adapter.reset_episode(make_episode_context())
     assert adapter.state is AdapterState.EPISODE_ACTIVE
     assert {image.name for image in result.initial_observation.images} == {"front_rgb"}
-    assert {value.name for value in result.evaluation_signals} == {"success", "hidden_target"}
+    assert {value.name for value in result.evaluation_signals} == {"benchmark.task_success", "hidden_target"}
     registry = adapter.capabilities.signal_registry
     assert registry.resolve("hidden_target").access is SignalAccess.PRIVILEGED
     assert "hidden_target" not in {item.name for item in result.initial_observation.images}

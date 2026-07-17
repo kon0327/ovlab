@@ -23,6 +23,14 @@ required:
     assert loads(dumps(value)) == value
 
 
+def test_strict_yaml_round_trip_preserves_empty_nested_collections():
+    value = {"empty_sequence": [], "empty_mapping": {}, "nested": {"indices": ()}}
+    dumped = dumps(value)
+    assert "empty_sequence: []" in dumped
+    assert "empty_mapping: {}" in dumped
+    assert loads(dumped) == {"empty_sequence": [], "empty_mapping": {}, "nested": {"indices": []}}
+
+
 @pytest.mark.parametrize("text,match", [
     ("key: 1\nkey: 2\n", "duplicate key"),
     ("key:\n   nested: true\n", "multiples of two"),

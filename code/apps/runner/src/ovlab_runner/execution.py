@@ -1,5 +1,6 @@
 """Synchronous deterministic episode execution."""
 
+from dataclasses import replace
 import hashlib
 
 from ovlab_benchmarks import BenchmarkActionRequest
@@ -45,6 +46,7 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
         step_index = 0
         maximum_steps = task.maximum_steps or plan.default_maximum_episode_steps
         while step_index < maximum_steps:
+            closed_loop_started_ns = clock.monotonic_ns()
             needs_prediction = pending is None or chunk_index >= execution_limit
             if needs_prediction:
                 failure_domain = "policy"
@@ -69,11 +71,28 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
             request_timestamp = clock.monotonic_ns()
             request = BenchmarkActionRequest(
                 step_context, pending.prediction_id, chunk_index, pending.actions[chunk_index], request_timestamp,
-                {"closed_loop_step_started_ns": request_timestamp, "action_execution_mode": plan.action_execution_policy.mode.value},
+                {
+                    "closed_loop_step_started_ns": closed_loop_started_ns,
+                    "action_request_timestamp_ns": request_timestamp,
+                    "action_execution_mode": plan.action_execution_policy.mode.value,
+                },
             )
             failure_domain = "benchmark"
             result = benchmark.step(request)
             failure_domain = "runner"
+            closed_loop_finished_ns = clock.monotonic_ns()
+            if closed_loop_finished_ns < closed_loop_started_ns:
+                raise ExperimentExecutionError("runner closed-loop clock moved backwards")
+            action_metadata = dict(result.executed_action.metadata)
+            action_metadata.update({
+                "closed_loop_started_ns": closed_loop_started_ns,
+                "closed_loop_finished_ns": closed_loop_finished_ns,
+                "closed_loop_step_duration_ns": closed_loop_finished_ns - closed_loop_started_ns,
+            })
+            result = replace(
+                result,
+                executed_action=replace(result.executed_action, metadata=action_metadata),
+            )
             recorder.record_step(step_context, result)
             step_index += 1
             if result.terminated or result.truncated:

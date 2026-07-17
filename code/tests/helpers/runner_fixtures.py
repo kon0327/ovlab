@@ -31,26 +31,59 @@ def runner_plan(**overrides):
 
 
 class TrackingBenchmark(MockBenchmark):
-    def __init__(self, **kwargs):
+    def __init__(self, *, event_log=None, **kwargs):
         super().__init__(**kwargs)
         self.closed = False
         self.reset_contexts = []
+        self.event_log = [] if event_log is None else event_log
+
+    def _initialize(self, context):
+        self.event_log.append(("benchmark.initialize", str(context.run_id)))
+        return super()._initialize(context)
+
+    def _list_tasks(self):
+        self.event_log.append(("benchmark.list_tasks", None))
+        return super()._list_tasks()
 
     def _reset_episode(self, context):
+        self.event_log.append(("benchmark.reset", str(context.episode_id)))
         self.reset_contexts.append(context)
         return super()._reset_episode(context)
 
-    def _close(self): self.closed = True
+    def _step(self, request):
+        self.event_log.append(("benchmark.step", str(request.step_context.step_id)))
+        return super()._step(request)
+
+    def _close(self):
+        self.event_log.append(("benchmark.close", None))
+        self.closed = True
 
 
 class TrackingPolicy(MockPolicy):
-    def __init__(self, **kwargs):
+    def __init__(self, *, event_log=None, **kwargs):
         super().__init__(**kwargs)
         self.closed = False
         self.reset_contexts = []
+        self.observations = []
+        self.event_log = [] if event_log is None else event_log
+
+    def _initialize(self, context):
+        self.event_log.append(("policy.initialize", str(context.run_id)))
+        return super()._initialize(context)
 
     def _reset_episode(self, context):
+        self.event_log.append(("policy.reset", str(context.episode_id)))
         self.reset_contexts.append(context)
         return super()._reset_episode(context)
 
-    def _close(self): self.closed = True
+    def _predict(self, observation):
+        self.event_log.append(("policy.predict", str(observation.step_id)))
+        self.observations.append(observation)
+        return super()._predict(observation)
+
+    def _end_episode(self, context):
+        self.event_log.append(("policy.end", str(context.episode_id)))
+
+    def _close(self):
+        self.event_log.append(("policy.close", None))
+        self.closed = True

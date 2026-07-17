@@ -64,7 +64,8 @@ authoritative success, the runner records it, and `task.success` validates it;
 the runner never infers success from reward.
 
 Inference duration comes from `ActionPrediction`. Runner call timing is
-closed-loop telemetry. Neither is labelled RPC latency.
+closed-loop telemetry stored on each executed action as start, finish, and
+duration nanoseconds. Neither is labelled RPC latency.
 
 ## Artifacts
 
@@ -73,6 +74,8 @@ The filesystem store derives hashed safe keys rather than using IDs as paths:
 ```text
 runs/<run-key>/
 ├── manifest.started.json
+├── source_config.yaml
+├── resolved_config.yaml
 ├── plan.json
 ├── connection.json
 ├── tasks/<task-key>/episodes/<episode-key>/
@@ -93,11 +96,17 @@ or path-traversing arrays. Writes use temporary sibling files and atomic rename;
 started manifests, traces, results, and final manifests are never overwritten.
 Partial directories remain distinguishable and no cleanup is automatic.
 
+`ExperimentRunner` accepts an optional immutable `RunConfigurationSnapshot`.
+The filesystem and in-memory stores persist it before the plan and connection
+report. Existing third-party `RunArtifactStore` implementations remain usable
+without snapshots; stores must implement `write_configuration()` only when a
+caller supplies one.
+
 The optional real test uses pinned LIBERO plus a deterministic no-checkpoint
 policy:
 
 ```bash
-OVLAB_RUN_LIBERO_RUNNER=1 MUJOCO_GL=egl \
+OVLAB_RUN_LIBERO_RUNNER=1 OVLAB_LOCAL_PROFILE=/path/to/local-profile.yaml MUJOCO_GL=egl \
   conda run -n openvla-oft deploy/scripts/test.sh \
   code/tests/integration/runner/test_libero_runner_manual.py -q -s
 ```

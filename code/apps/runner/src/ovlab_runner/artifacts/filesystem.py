@@ -28,6 +28,13 @@ class FilesystemRunArtifactStore(RunArtifactStore):
         path.mkdir(parents=True)
         self._atomic_json(path / "manifest.started.json", started_manifest)
 
+    def write_configuration(self, run_id, snapshot):
+        path = self._run_path(run_id)
+        if (path / "source_config.yaml").exists() or (path / "resolved_config.yaml").exists():
+            raise ArtifactError("run configuration already exists")
+        self._atomic_text(path / "source_config.yaml", snapshot.portable_source_yaml)
+        self._atomic_text(path / "resolved_config.yaml", snapshot.resolved_config_yaml)
+
     def write_plan(self, run_id, plan): self._atomic_json(self._run_path(run_id) / "plan.json", plan.canonical())
     def write_connection_report(self, run_id, report): self._atomic_json(self._run_path(run_id) / "connection.json", _connection(report))
 
@@ -80,6 +87,14 @@ class FilesystemRunArtifactStore(RunArtifactStore):
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(_json_value(value), sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(path)
+
+    @staticmethod
+    def _atomic_text(path, value):
+        if path.exists(): raise ArtifactError(f"finalized artifact already exists: {path.name}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(value, encoding="utf-8")
         temporary.replace(path)
 
 

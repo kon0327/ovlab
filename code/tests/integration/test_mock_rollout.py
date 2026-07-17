@@ -54,7 +54,7 @@ def test_negotiated_mock_rollout_preserves_boundary_evidence() -> None:
         for action, prediction in zip(executed_actions, predictions)
     )
     assert all(not np.array_equal(action.requested_action, action.applied_action) for action in executed_actions)
-    assert {signal.name for signal in signals} == {"success", "hidden_target"}
+    assert {signal.name for signal in signals} == {"benchmark.task_success", "hidden_target"}
     policy_inputs = reset.initial_observation.images + reset.initial_observation.proprioception
     policy_input_names = {item.name for item in policy_inputs}
     assert "hidden_target" not in policy_input_names

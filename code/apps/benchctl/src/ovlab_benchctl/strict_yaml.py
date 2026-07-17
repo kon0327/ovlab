@@ -91,6 +91,8 @@ def _scalar(value: str, source: str, line: int) -> Any:
             raise StrictYamlError(f"{source}:{line}: unterminated inline sequence")
         inner = value[1:-1].strip()
         return [] if not inner else [_scalar(item, source, line) for item in _split_inline(inner, source, line)]
+    if value == "{}":
+        return {}
     if value.startswith("{") or value.endswith("}"):
         raise StrictYamlError(f"{source}:{line}: inline mappings are not supported")
     if value.startswith('"'):
@@ -210,7 +212,11 @@ def dumps(value: Any) -> str:
             for key, nested in item.items():
                 if not isinstance(key, str) or not _SAFE_KEY.fullmatch(key):
                     raise TypeError(f"unsupported YAML key: {key!r}")
-                if isinstance(nested, (Mapping, list, tuple)):
+                if isinstance(nested, Mapping) and not nested:
+                    lines.append(f"{prefix}{key}: {{}}")
+                elif isinstance(nested, (list, tuple)) and not nested:
+                    lines.append(f"{prefix}{key}: []")
+                elif isinstance(nested, (Mapping, list, tuple)):
                     lines.append(f"{prefix}{key}:")
                     emit(nested, indent + 2)
                 else:

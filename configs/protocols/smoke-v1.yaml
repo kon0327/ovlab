@@ -1,11 +1,11 @@
 schema_version: "0.1.0"
 kind: protocol
-id: libero-smoke-v1
+id: smoke-v1
 
 execution:
-  rollouts_per_task: 1
-  base_seed: 42
-  maximum_episode_steps: 2
+  rollouts_per_task: 2
+  base_seed: 17
+  maximum_episode_steps: 3
 
   action_chunks:
     mode: receding_horizon
@@ -16,13 +16,13 @@ execution:
 
 recording:
   observations: true
-  images: true
-  proprioception: false
+  images: false
+  proprioception: true
   predictions: true
-  raw_policy_output: false
+  raw_policy_output: true
   evaluation_signals: true
   privileged_signals: true
 
 reproducibility:
   reject_dirty_external_repositories: true
-  require_checkpoint_identity: true
+  require_checkpoint_identity: false

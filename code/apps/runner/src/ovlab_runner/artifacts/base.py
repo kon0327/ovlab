@@ -8,6 +8,9 @@ from ..errors import ArtifactError
 class RunArtifactStore(ABC):
     @abstractmethod
     def create_run(self, run_id, started_manifest): ...
+    def write_configuration(self, run_id, snapshot):
+        """Persist configuration evidence when supported by a concrete store."""
+        raise ArtifactError("artifact store does not support configuration snapshots")
     @abstractmethod
     def write_plan(self, run_id, plan): ...
     @abstractmethod
@@ -39,6 +42,12 @@ class InMemoryRunArtifactStore(RunArtifactStore):
             raise ArtifactError("run already exists")
         self.runs[key] = {"started": started_manifest, "episodes": {}, "task_metrics": {}}
         self.write_order.append("manifest.started")
+
+    def write_configuration(self, run_id, snapshot):
+        run = self._run(run_id)
+        if "configuration" in run: raise ArtifactError("run configuration already exists")
+        run["configuration"] = snapshot
+        self.write_order.append("configuration")
 
     def _run(self, run_id):
         try: return self.runs[str(run_id)]

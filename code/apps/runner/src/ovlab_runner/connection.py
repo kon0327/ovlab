@@ -85,5 +85,9 @@ def connect_components(plan, benchmark, policy, metric_registry) -> ConnectionRe
         tuple(sorted(available)),
         tuple(sorted(conditional)),
         plan.hash,
-        {"metric_runtime_samples_are_conditional": True},
+        {
+            "metric_runtime_samples_are_conditional": True,
+            "benchmark_capabilities": dict(benchmark_caps.metadata),
+            "policy_capabilities": dict(policy_caps.metadata),
+        },
     )

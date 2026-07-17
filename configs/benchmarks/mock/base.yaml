@@ -1,0 +1,23 @@
+schema_version: "0.1.0"
+kind: benchmark
+type: mock
+
+settings:
+  task_count: 2
+  maximum_episode_steps: 3
+  modify_actions: true
+  terminal_outcomes: [success, time_limit]
+
+  observation:
+    camera: front_rgb
+    width: 4
+    height: 4
+    dtype: uint8
+    color_space: rgb
+    proprioception: robot_state
+
+  action:
+    interface_ref: interfaces/actions/mock-delta-gripper-v1.yaml
+
+  privileged_signals:
+    enabled: true

@@ -76,7 +76,34 @@ def validate_experiment(doc, path):
 def validate_benchmark(doc, path):
     header(doc, path, "benchmark", typed=True)
     mapping(doc, path, required=("schema_version", "kind", "type", "settings"), optional=("extends",))
-    if doc["type"] != "libero": raise ConfigSchemaError(f"{path}.type supports only 'libero'")
+    if doc["type"] == "mock":
+        settings = mapping(doc["settings"], f"{path}.settings", required=(
+            "task_count", "maximum_episode_steps", "modify_actions", "terminal_outcomes",
+            "observation", "action", "privileged_signals"))
+        for key in ("task_count", "maximum_episode_steps"):
+            exact_type(settings[key], int, f"{path}.settings.{key}")
+            if settings[key] <= 0: raise ConfigSchemaError(f"{path}.settings.{key} must be positive")
+        exact_type(settings["modify_actions"], bool, f"{path}.settings.modify_actions")
+        exact_type(settings["terminal_outcomes"], list, f"{path}.settings.terminal_outcomes")
+        if len(settings["terminal_outcomes"]) != settings["task_count"]:
+            raise ConfigSchemaError(f"{path}.settings.terminal_outcomes must match task_count")
+        for outcome in settings["terminal_outcomes"]:
+            enum(outcome, ("success", "failure", "time_limit"), f"{path}.settings.terminal_outcomes[]")
+        obs = mapping(settings["observation"], f"{path}.settings.observation", required=(
+            "camera", "width", "height", "dtype", "color_space", "proprioception"))
+        non_empty_string(obs["camera"], f"{path}.settings.observation.camera")
+        non_empty_string(obs["proprioception"], f"{path}.settings.observation.proprioception")
+        for key in ("width", "height"):
+            exact_type(obs[key], int, f"{path}.settings.observation.{key}")
+            if obs[key] <= 0: raise ConfigSchemaError(f"{path}.settings.observation.{key} must be positive")
+        enum(obs["dtype"], ("uint8",), f"{path}.settings.observation.dtype")
+        enum(obs["color_space"], ("rgb",), f"{path}.settings.observation.color_space")
+        action = mapping(settings["action"], f"{path}.settings.action", required=("interface_ref",))
+        non_empty_string(action["interface_ref"], f"{path}.settings.action.interface_ref")
+        signals = mapping(settings["privileged_signals"], f"{path}.settings.privileged_signals", required=("enabled",))
+        exact_type(signals["enabled"], bool, f"{path}.settings.privileged_signals.enabled")
+        return
+    if doc["type"] != "libero": raise ConfigSchemaError(f"{path}.type supports only 'libero' or 'mock'")
     settings = mapping(doc["settings"], f"{path}.settings", required=(
         "suite", "task_indices", "observation", "initialization", "rendering", "action", "privileged_signals"))
     enum(settings["suite"], ("libero_spatial", "libero_object", "libero_goal", "libero_10"), f"{path}.settings.suite")
@@ -111,7 +138,22 @@ def validate_benchmark(doc, path):
 def validate_policy(doc, path):
     header(doc, path, "policy", typed=True)
     mapping(doc, path, required=("schema_version", "kind", "type", "settings"), optional=("extends",))
-    if doc["type"] != "openvla_vanilla": raise ConfigSchemaError(f"{path}.type supports only 'openvla_vanilla'")
+    if doc["type"] == "mock":
+        settings = mapping(doc["settings"], f"{path}.settings", required=(
+            "horizon", "deterministic", "input", "action", "raw_output"))
+        exact_type(settings["horizon"], int, f"{path}.settings.horizon")
+        if settings["horizon"] <= 0: raise ConfigSchemaError(f"{path}.settings.horizon must be positive")
+        exact_type(settings["deterministic"], bool, f"{path}.settings.deterministic")
+        input_ = mapping(settings["input"], f"{path}.settings.input", required=("camera", "proprioception"))
+        non_empty_string(input_["camera"], f"{path}.settings.input.camera")
+        if input_["proprioception"] is not None:
+            non_empty_string(input_["proprioception"], f"{path}.settings.input.proprioception")
+        action = mapping(settings["action"], f"{path}.settings.action", required=("interface_ref",))
+        non_empty_string(action["interface_ref"], f"{path}.settings.action.interface_ref")
+        raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
+        exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
+        return
+    if doc["type"] != "openvla_vanilla": raise ConfigSchemaError(f"{path}.type supports only 'openvla_vanilla' or 'mock'")
     settings = mapping(doc["settings"], f"{path}.settings", required=(
         "checkpoint_id", "processor_id", "unnorm_key", "input", "runtime", "action", "raw_output"))
     for key in ("checkpoint_id", "processor_id", "unnorm_key"):
@@ -143,11 +185,16 @@ def validate_action_interface(doc, path):
     if doc["dimension"] <= 0: raise ConfigSchemaError(f"{path}.dimension must be positive")
     for key in ("translation_indices", "rotation_indices", "gripper_indices", "minimum", "maximum"):
         exact_type(doc[key], list, f"{path}.{key}")
-    enum(doc["gripper_convention"], ("closed_positive",), f"{path}.gripper_convention")
-    enum(doc["representation"], ("delta_pose",), f"{path}.representation")
-    enum(doc["rotation_representation"], ("axis_angle",), f"{path}.rotation_representation")
+    enum(doc["gripper_convention"], ("closed_positive", "open_positive", "binary_closed_one", "binary_open_one", "none"), f"{path}.gripper_convention")
+    enum(doc["representation"], ("delta_pose", "absolute_pose", "joint_position", "joint_delta", "other"), f"{path}.representation")
+    enum(doc["rotation_representation"], ("axis_angle", "euler_xyz", "quaternion_xyzw", "quaternion_wxyz", "none"), f"{path}.rotation_representation")
     enum(doc["dtype"], ("float32",), f"{path}.dtype")
-    non_empty_string(doc["units"], f"{path}.units")
+    if isinstance(doc["units"], str):
+        non_empty_string(doc["units"], f"{path}.units")
+    else:
+        exact_type(doc["units"], list, f"{path}.units")
+        if any(not isinstance(item, str) or not item for item in doc["units"]):
+            raise ConfigSchemaError(f"{path}.units must contain non-empty strings")
     number(doc["control_frequency_hz"], f"{path}.control_frequency_hz")
 
 
@@ -213,8 +260,8 @@ def validate_registry(doc, path):
     if not isinstance(doc["repositories"], dict) or not doc["repositories"]:
         raise ConfigSchemaError(f"{path}.repositories must be a non-empty mapping")
     for resource_id, entry in doc["checkpoints"].items():
-        mapping(entry, f"{path}.checkpoints.{resource_id}", required=("relative_path", "expected_revision", "expected_sha256"))
-        non_empty_string(entry["relative_path"], f"{path}.checkpoints.{resource_id}.relative_path")
+        mapping(entry, f"{path}.checkpoints.{resource_id}", required=("repo_id", "expected_revision", "expected_sha256"))
+        non_empty_string(entry["repo_id"], f"{path}.checkpoints.{resource_id}.repo_id")
         for key in ("expected_revision", "expected_sha256"):
             if entry[key] is not None: exact_type(entry[key], str, f"{path}.checkpoints.{resource_id}.{key}")
     for resource_id, entry in doc["repositories"].items():

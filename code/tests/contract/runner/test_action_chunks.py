@@ -28,6 +28,14 @@ def test_chunk_modes_preserve_prediction_and_chunk_indices(policy, horizon, expe
     assert tuple(action.selected_chunk_index for action in trace.executed_actions) == expected_indices
     assert len(trace.policy_predictions) == expected_predictions
     assert len(trace.executed_actions) == 3
+    predictions = {prediction.prediction_id: prediction for prediction in trace.policy_predictions}
+    assert all(action.prediction_id in predictions for action in trace.executed_actions)
+    assert all(
+        action.requested_action.tobytes()
+        == predictions[action.prediction_id].actions[action.selected_chunk_index].tobytes()
+        for action in trace.executed_actions
+    )
+    assert all(action.metadata["closed_loop_step_duration_ns"] > 0 for action in trace.executed_actions)
 
 
 def test_early_termination_discards_remaining_chunk() -> None:
@@ -40,3 +48,7 @@ def test_early_termination_discards_remaining_chunk() -> None:
     trace = next(iter(store.runs["runner-test"]["episodes"].values()))["trace"]
     assert len(trace.executed_actions) == 1
     assert trace.executed_actions[0].selected_chunk_index == 0
+    assert trace.executed_actions[0].prediction_id == trace.policy_predictions[0].prediction_id
+    assert not any(
+        action.selected_chunk_index in (1, 2) for action in trace.executed_actions
+    )

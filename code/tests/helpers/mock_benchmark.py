@@ -38,14 +38,27 @@ class MockBenchmark(BenchmarkAdapter):
         *,
         maximum_steps: int = 3,
         modify_actions: bool = False,
+        task_count: int = 1,
+        terminal_outcomes: tuple[str, ...] | None = None,
         capabilities_override: BenchmarkCapabilities | None = None,
     ) -> None:
         super().__init__()
+        if type(task_count) is not int or task_count <= 0:
+            raise ValueError("task_count must be a positive integer")
+        if terminal_outcomes is None:
+            terminal_outcomes = ("success",) + ("time_limit",) * (task_count - 1)
+        if len(terminal_outcomes) != task_count or any(
+            outcome not in {"success", "failure", "time_limit"} for outcome in terminal_outcomes
+        ):
+            raise ValueError("terminal_outcomes must define success, failure, or time_limit for every task")
         self.maximum_steps = maximum_steps
         self.modify_actions = modify_actions
+        self.task_count = task_count
+        self.terminal_outcomes = tuple(terminal_outcomes)
         self.capabilities_override = capabilities_override
         self._step_index = 0
         self._seed = 0
+        self._terminal_outcome = "success"
 
     def _initialize(self, run_context: RunContext) -> BenchmarkCapabilities:
         if self.capabilities_override is not None:
@@ -59,7 +72,8 @@ class MockBenchmark(BenchmarkAdapter):
             signal_registry=SignalRegistry(
                 (
                     SignalSpec(
-                        "success", "bool", (), "", SignalAccess.EVALUATION_ONLY, "Terminal success"
+                        "benchmark.task_success", "bool", (), "", SignalAccess.EVALUATION_ONLY,
+                        "Authoritative terminal task success",
                     ),
                     SignalSpec(
                         "hidden_target",
@@ -78,20 +92,27 @@ class MockBenchmark(BenchmarkAdapter):
         )
 
     def _list_tasks(self) -> tuple[TaskDescriptor, ...]:
-        return (
+        return tuple(
             TaskDescriptor(
                 "mock-suite",
-                TaskId("mock-task-0"),
-                "deterministic task",
-                0,
-                "move deterministically",
+                TaskId(f"mock-task-{index}"),
+                f"deterministic task {index}",
+                index,
+                f"move deterministically for task {index}",
                 self.maximum_steps,
-            ),
+                {"terminal_outcome": self.terminal_outcomes[index]},
+            )
+            for index in range(self.task_count)
         )
 
     def _reset_episode(self, episode_context: EpisodeContext) -> BenchmarkResetResult:
         self._step_index = 0
         self._seed = episode_context.seed
+        try:
+            task_index = int(str(episode_context.task_id).removeprefix("mock-task-"))
+            self._terminal_outcome = self.terminal_outcomes[task_index]
+        except (ValueError, IndexError) as exc:
+            raise ValueError("mock benchmark received an unknown task ID") from exc
         observation = self._observation(episode_context, 0)
         signals = self._signals(observation.step_id, 0, False)
         return BenchmarkResetResult(episode_context, observation, signals, 0)
@@ -118,9 +139,12 @@ class MockBenchmark(BenchmarkAdapter):
             reason,
         )
         self._step_index += 1
-        terminated = self._step_index >= self.maximum_steps
-        next_observation = None if terminated else self._observation_from_step(request.step_context, self._step_index)
-        signals = self._signals(request.step_context.step_id, request.timestamp_ns, terminated)
+        terminal = self._step_index >= self.maximum_steps
+        truncated = terminal and self._terminal_outcome == "time_limit"
+        terminated = terminal and not truncated
+        success = terminal and self._terminal_outcome == "success"
+        next_observation = None if terminal else self._observation_from_step(request.step_context, self._step_index)
+        signals = self._signals(request.step_context.step_id, request.timestamp_ns, success)
         return BenchmarkStepResult(
             request.step_context,
             executed,
@@ -128,8 +152,8 @@ class MockBenchmark(BenchmarkAdapter):
             signals,
             None,
             terminated,
-            False,
-            True if terminated else None,
+            truncated,
+            success if terminal else None,
             request.timestamp_ns,
         )
 
@@ -164,7 +188,7 @@ class MockBenchmark(BenchmarkAdapter):
     def _signals(step_id: StepId, timestamp_ns: int, success: bool) -> tuple[SignalValue, ...]:
         return (
             SignalValue(
-                "success", success, timestamp_ns, "mock-benchmark", step_id,
+                "benchmark.task_success", success, timestamp_ns, "mock-benchmark", step_id,
                 access=SignalAccess.EVALUATION_ONLY,
             ),
             SignalValue(

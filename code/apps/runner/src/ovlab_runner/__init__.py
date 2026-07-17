@@ -2,6 +2,7 @@
 
 from .artifacts import FilesystemRunArtifactStore, InMemoryRunArtifactStore, RunArtifactStore, TraceCodec
 from .connection import ConnectionReport
+from .configuration import RunConfigurationSnapshot
 from .errors import (
     ArtifactError, ConnectionError, ExperimentExecutionError, RecorderError,
     RunnerError, RunnerLifecycleError,
@@ -21,6 +22,6 @@ __all__ = [
     "EpisodeRecorder", "ExperimentExecutionError", "ExperimentPlan", "ExperimentRunner",
     "FilesystemRunArtifactStore", "InMemoryRunArtifactStore", "MetricAvailabilityPolicy",
     "ProvenanceSnapshot", "RecorderError", "RecorderState", "RunArtifactStore", "RunnerError",
-    "RunnerLifecycleError", "RunnerState", "StaticProvenanceProvider", "SystemClock", "TraceCodec",
+    "RunConfigurationSnapshot", "RunnerLifecycleError", "RunnerState", "StaticProvenanceProvider", "SystemClock", "TraceCodec",
     "TraceRecordingPolicy",
 ]

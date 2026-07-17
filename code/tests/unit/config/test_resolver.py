@@ -11,7 +11,7 @@ from ovlab_metrics import ActionModificationMetricConfig, RepeatedNoOpMetricConf
 from ovlab_openvla_vanilla import ModelDType, OpenVlaVanillaSettings
 from ovlab_benchctl import (
     ConfigCompatibilityError, ConfigReferenceError, ConfigResolver, ConfigSchemaError,
-    ResolvedConfigWriteError, load,
+    MockBenchmarkSettings, MockPolicySettings, ResolvedConfigWriteError, load,
 )
 from ovlab_benchctl.schema import validate
 
@@ -58,14 +58,23 @@ def test_extends_resolves_all_libero_variants():
 
 def test_every_versioned_component_is_schema_valid():
     components = {
+        "benchmarks/mock/base.yaml": "benchmark",
+        "benchmarks/libero/spatial-smoke.yaml": "benchmark",
+        "policies/mock/base.yaml": "policy",
+        "policies/mock/libero-noop.yaml": "policy",
         "policies/openvla-vanilla/base.yaml": "policy",
+        "interfaces/actions/mock-delta-gripper-v1.yaml": "action_interface",
         "interfaces/actions/libero-osc-pose-v1.yaml": "action_interface",
         "metrics/action-safe-v1.yaml": "metric_set",
         "protocols/libero-standard-v1.yaml": "protocol",
         "protocols/libero-smoke-v1.yaml": "protocol",
+        "protocols/smoke-v1.yaml": "protocol",
         "artifacts/filesystem.yaml": "artifact_store",
         "resources/registry.yaml": "resource_registry",
         "experiments/libero-spatial-vanilla.yaml": "experiment",
+        "experiments/mock-e2e-smoke.yaml": "experiment",
+        "experiments/libero-mock-smoke.yaml": "experiment",
+        "experiments/libero-vanilla-smoke.yaml": "experiment",
     }
     for reference, kind in components.items():
         document = resolver().load_component(reference, kind)
@@ -93,6 +102,19 @@ def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
     assert isinstance(repeated, RepeatedNoOpMetricConfig) and repeated.minimum_consecutive_run_length == 5
     assert resolved.protocol_settings.rollouts_per_task == 50
     assert resolved.artifact_settings.root.endswith("machine-a/runs")
+
+
+def test_mock_smoke_resolves_to_typed_runtime_settings(tmp_path):
+    resolved = resolver().resolve(
+        "configs/experiments/mock-e2e-smoke.yaml", local_profile=profile(tmp_path)
+    )
+    assert isinstance(resolved.benchmark_settings, MockBenchmarkSettings)
+    assert isinstance(resolved.policy_settings, MockPolicySettings)
+    assert resolved.benchmark_settings.terminal_outcomes == ("success", "time_limit")
+    assert resolved.policy_settings.horizon == 1
+    assert resolved.scientific_config_hash == resolver().resolve(
+        "configs/experiments/mock-e2e-smoke.yaml", local_profile=profile(tmp_path, suffix="b")
+    ).scientific_config_hash
 
 
 def test_scientific_hash_excludes_local_profile_but_execution_hash_includes_it(tmp_path):
@@ -163,6 +185,6 @@ def test_cross_component_action_convention_mismatch_is_rejected(tmp_path):
     root = copied_configs(tmp_path)
     interface = root / "interfaces/actions/libero-osc-pose-v1.yaml"
     interface.write_text(interface.read_text().replace("closed_positive", "open_positive"), encoding="utf-8")
-    with pytest.raises(ConfigSchemaError, match="closed_positive"):
+    with pytest.raises(ConfigCompatibilityError, match="ActionSpec"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
             root / "experiments/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path))

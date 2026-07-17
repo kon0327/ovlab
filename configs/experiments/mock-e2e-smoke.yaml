@@ -1,0 +1,18 @@
+schema_version: "0.1.0"
+kind: experiment
+
+experiment:
+  id: mock-e2e-smoke
+  name: Dependency-light mock end-to-end smoke
+  tags: [mock, smoke, runner]
+
+components:
+  benchmark: benchmarks/mock/base.yaml
+  policy: policies/mock/base.yaml
+  metrics: metrics/action-safe-v1.yaml
+  protocol: protocols/smoke-v1.yaml
+  action_interface: interfaces/actions/mock-delta-gripper-v1.yaml
+  artifacts: artifacts/filesystem.yaml
+
+resources:
+  registry: resources/registry.yaml

@@ -31,7 +31,10 @@ from ovlab_runner import (
 )
 
 from .errors import ConfigCompatibilityError, ConfigReferenceError, ConfigSchemaError
-from .models import MetricSetSettings, ProtocolSettings, ResolvedExperimentConfig
+from .models import (
+    MetricSetSettings, MockBenchmarkSettings, MockPolicySettings, ProtocolSettings,
+    ResolvedExperimentConfig,
+)
 from .schema import SCHEMA_VERSION, validate
 from .strict_yaml import load
 
@@ -145,7 +148,7 @@ class ConfigResolver:
         resolved_checkpoints = {}
         for resource_id, entry in registry["checkpoints"].items():
             resolved_checkpoints[resource_id] = {
-                "path": str(self._under(paths["checkpoint_root"], entry["relative_path"], f"checkpoint {resource_id}")),
+                "source": entry["repo_id"],
                 "expected_revision": entry["expected_revision"], "expected_sha256": entry["expected_sha256"],
             }
         resolved_repositories = {}
@@ -167,7 +170,7 @@ class ConfigResolver:
             raise ConfigCompatibilityError("protocol requests raw policy output but the policy does not expose it")
         if not components["protocol"]["recording"]["predictions"]:
             raise ConfigCompatibilityError("OVLAB traces always require predictions; recording.predictions must be true")
-        if not components["benchmark"]["settings"]["privileged_signals"]["enabled"]:
+        if components["benchmark"]["type"] == "libero" and not components["benchmark"]["settings"]["privileged_signals"]["enabled"]:
             raise ConfigCompatibilityError("LiberoBenchmarkAdapter always exposes its declared privileged signal registry")
 
         scientific = {
@@ -188,12 +191,21 @@ class ConfigResolver:
             actual = self._root_reference(reference, f"{owner}.settings.action.interface_ref")
             if actual != expected:
                 raise ConfigCompatibilityError(f"{owner} action interface differs from the experiment interface")
-        if not action_specs_match(action_spec, libero_action_spec()):
+        if components["benchmark"]["type"] == "libero" and not action_specs_match(action_spec, libero_action_spec()):
             raise ConfigCompatibilityError("action interface differs from LiberoBenchmarkAdapter's verified ActionSpec")
         camera = components["policy"]["settings"]["input"]["camera"]
-        benchmark_camera = components["benchmark"]["settings"]["observation"]["cameras"]["primary"]["canonical_name"]
+        observation = components["benchmark"]["settings"]["observation"]
+        benchmark_camera = (
+            observation["cameras"]["primary"]["canonical_name"]
+            if components["benchmark"]["type"] == "libero"
+            else observation["camera"]
+        )
         if camera != benchmark_camera:
             raise ConfigCompatibilityError("policy input camera is not supplied by the benchmark observation interface")
+        if components["benchmark"]["type"] == "mock":
+            expected_proprio = components["policy"]["settings"]["input"]["proprioception"]
+            if expected_proprio is not None and expected_proprio != observation["proprioception"]:
+                raise ConfigCompatibilityError("policy proprioception is not supplied by the benchmark observation interface")
 
     @staticmethod
     def _action_spec(doc):
@@ -234,6 +246,14 @@ class ConfigResolver:
     @staticmethod
     def _benchmark(doc, protocol, devices):
         settings, obs = doc["settings"], doc["settings"]["observation"]
+        if doc["type"] == "mock":
+            if settings["maximum_episode_steps"] != protocol.maximum_episode_steps:
+                raise ConfigCompatibilityError("mock benchmark and protocol maximum_episode_steps must match")
+            return MockBenchmarkSettings(
+                settings["task_count"], settings["maximum_episode_steps"], settings["modify_actions"],
+                tuple(settings["terminal_outcomes"]), obs["camera"], (obs["height"], obs["width"], 3),
+                obs["proprioception"], settings["privileged_signals"]["enabled"],
+            )
         render = settings["rendering"]
         try: device = devices[render["gpu_resource"]]
         except KeyError as exc: raise ConfigReferenceError(f"unknown device resource: {render['gpu_resource']}") from exc
@@ -254,7 +274,13 @@ class ConfigResolver:
 
     @staticmethod
     def _policy(doc, benchmark_doc, action_spec, checkpoints, devices):
-        settings, runtime = doc["settings"], doc["settings"]["runtime"]
+        settings = doc["settings"]
+        if doc["type"] == "mock":
+            return MockPolicySettings(
+                settings["horizon"], settings["deterministic"], settings["input"]["camera"],
+                settings["input"]["proprioception"], action_spec, settings["raw_output"]["enabled"],
+            )
+        runtime = settings["runtime"]
         if not runtime["local_files_only"]:
             raise ConfigCompatibilityError("OpenVLA production configuration requires local_files_only: true")
         try: model, processor = checkpoints[settings["checkpoint_id"]], checkpoints[settings["processor_id"]]
@@ -262,7 +288,7 @@ class ConfigResolver:
         try: device = devices[runtime["device_resource"]]
         except KeyError as exc: raise ConfigReferenceError(f"unknown device resource: {runtime['device_resource']}") from exc
         obs = benchmark_doc["settings"]["observation"]
-        source = lambda item: OpenVlaModelSource(item["path"], item["expected_revision"], item["expected_sha256"])
+        source = lambda item: OpenVlaModelSource(item["source"], item["expected_revision"], item["expected_sha256"])
         return OpenVlaVanillaSettings(
             source(model), settings["unnorm_key"], processor=source(processor),
             canonical_camera_name=settings["input"]["camera"], input_image_shape=(obs["height"], obs["width"], 3),

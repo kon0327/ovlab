@@ -1,0 +1,17 @@
+schema_version: "0.1.0"
+kind: policy
+type: mock
+
+settings:
+  horizon: 1
+  deterministic: true
+
+  input:
+    camera: camera.primary.rgb
+    proprioception: null
+
+  action:
+    interface_ref: interfaces/actions/libero-osc-pose-v1.yaml
+
+  raw_output:
+    enabled: false

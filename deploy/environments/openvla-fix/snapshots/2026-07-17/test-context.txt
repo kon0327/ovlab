@@ -1,0 +1,7 @@
+component=
+conda_environment=openvla-fix
+seed=7
+instruction=pick up the red object
+checkpoint=/path/to/checkpoint
+MUJOCO_GL=unset
+CUDA_VISIBLE_DEVICES=unset

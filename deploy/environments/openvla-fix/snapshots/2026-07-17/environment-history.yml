@@ -1,0 +1,6 @@
+name: openvla-fix
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch-cuda=12.4
