@@ -9,3 +9,10 @@ paths:
 
 devices:
   primary_gpu: cuda:0
+
+# Optional machine-local override for the EGL device selected by a portable
+# execution profile. It does not select the renderer backend.
+execution:
+  libero:
+    renderer:
+      device_id: 0

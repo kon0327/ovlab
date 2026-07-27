@@ -4,12 +4,13 @@ from copy import deepcopy
 from pathlib import Path
 import hashlib
 import json
+import os
 from typing import Any
 
 import numpy as np
 
 from ovlab_benchmarks.libero import (
-    InitialStateSelection, LiberoAdapterSettings, LiberoObservationProfile, LiberoRenderMode,
+    InitialStateSelection, LiberoAdapterSettings, LiberoObservationProfile, resolve_renderer_settings,
 )
 from ovlab_benchmarks.libero.actions import libero_action_spec
 from ovlab_core.contracts import (
@@ -122,7 +123,14 @@ class ConfigResolver:
         if not resolved.is_relative_to(root): raise ConfigReferenceError(f"{label} escapes its resource root")
         return resolved
 
-    def resolve(self, experiment: str | Path, *, local_profile: str | Path) -> ResolvedExperimentConfig:
+    def resolve(
+        self,
+        experiment: str | Path,
+        *,
+        local_profile: str | Path,
+        execution_profile: str | Path | None = None,
+        environment=None,
+    ) -> ResolvedExperimentConfig:
         experiment_path = Path(experiment)
         if not experiment_path.is_absolute(): experiment_path = self.repository_root / experiment_path
         experiment_path = self._inside(experiment_path, self.config_root, "experiment")
@@ -159,10 +167,35 @@ class ConfigResolver:
             "devices": devices, "checkpoints": resolved_checkpoints, "repositories": resolved_repositories,
         }
 
+        execution_profile_doc = None
+        renderer = None
+        if components["benchmark"]["type"] == "libero":
+            reference = execution_profile or "profiles/libero-bench-egl.yaml"
+            execution_profile_path = Path(reference)
+            if execution_profile_path.is_absolute():
+                execution_profile_path = self._inside(execution_profile_path, self.config_root, "execution_profile")
+            else:
+                execution_profile_path = self._root_reference(str(execution_profile_path).removeprefix("configs/"), "execution_profile")
+            execution_profile_doc = self._load_composed(execution_profile_path, "execution_profile")
+            renderer_doc = execution_profile_doc["execution"]["libero"]["renderer"]
+            device_id = renderer_doc.get("device_id")
+            local_renderer = profile.get("execution", {}).get("libero", {}).get("renderer", {})
+            if "device_id" in local_renderer:
+                device_id = local_renderer["device_id"]
+            if device_id is None:
+                device = devices.get("primary_gpu")
+                if device is not None:
+                    if not device.startswith("cuda:") or not device.removeprefix("cuda:").isdigit():
+                        raise ConfigCompatibilityError("LIBERO EGL rendering requires primary_gpu: cuda:<index>")
+                    device_id = int(device.split(":", 1)[1])
+            renderer = resolve_renderer_settings(
+                renderer_doc["backend"], device_id, os.environ if environment is None else environment
+            )
+
         action_spec = self._action_spec(components["action_interface"])
         self._cross_validate_refs(experiment_doc, components, component_paths, action_spec)
         protocol = self._protocol(components["protocol"])
-        benchmark = self._benchmark(components["benchmark"], protocol, devices)
+        benchmark = self._benchmark(components["benchmark"], protocol, renderer)
         policy = self._policy(components["policy"], components["benchmark"], action_spec, resolved_checkpoints, devices)
         metrics = self._metrics(components["metrics"])
         artifact = self._artifacts(components["artifacts"], paths)
@@ -179,6 +212,9 @@ class ConfigResolver:
             "resource_registry": registry,
         }
         execution = {"scientific_config": scientific, "resolved_resources": resources}
+        if execution_profile_doc is not None:
+            execution["execution_profile"] = execution_profile_doc
+            execution["libero"] = {"renderer": renderer.as_dict()}
         return ResolvedExperimentConfig(
             experiment_doc["experiment"]["id"], benchmark, policy, action_spec, metrics, protocol, artifact,
             scientific, execution, _hash(scientific), _hash(execution),
@@ -244,7 +280,7 @@ class ConfigResolver:
         )
 
     @staticmethod
-    def _benchmark(doc, protocol, devices):
+    def _benchmark(doc, protocol, renderer):
         settings, obs = doc["settings"], doc["settings"]["observation"]
         if doc["type"] == "mock":
             if settings["maximum_episode_steps"] != protocol.maximum_episode_steps:
@@ -254,11 +290,8 @@ class ConfigResolver:
                 tuple(settings["terminal_outcomes"]), obs["camera"], (obs["height"], obs["width"], 3),
                 obs["proprioception"], settings["privileged_signals"]["enabled"],
             )
-        render = settings["rendering"]
-        try: device = devices[render["gpu_resource"]]
-        except KeyError as exc: raise ConfigReferenceError(f"unknown device resource: {render['gpu_resource']}") from exc
-        if not device.startswith("cuda:") or not device.removeprefix("cuda:").isdigit():
-            raise ConfigCompatibilityError("LIBERO headless rendering requires a cuda:<index> device resource")
+        if renderer is None:
+            raise ConfigCompatibilityError("LIBERO benchmark requires an execution renderer profile")
         suite = {"libero_spatial": "LIBERO-Spatial", "libero_object": "LIBERO-Object",
                  "libero_goal": "LIBERO-Goal", "libero_10": "LIBERO-10"}[settings["suite"]]
         task_indices = None if settings["task_indices"] == "all" else tuple(settings["task_indices"])
@@ -268,8 +301,7 @@ class ConfigResolver:
             observation_profile=LiberoObservationProfile(obs["profile"]), maximum_episode_steps=protocol.maximum_episode_steps,
             initialization_settling_steps=settings["initialization"]["settling_steps"],
             initial_state_selection=InitialStateSelection(settings["initialization"]["state_selection"]),
-            base_seed=protocol.base_seed, render_mode=LiberoRenderMode(render["mode"]),
-            render_gpu_device_id=int(device.split(":", 1)[1]),
+            base_seed=protocol.base_seed, renderer=renderer,
         )
 
     @staticmethod

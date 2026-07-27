@@ -14,10 +14,15 @@ merge; sequences and scalars replace their parent value.
 
 `ConfigResolver.resolve()` validates and composes all component documents,
 resolves logical checkpoint/device/artifact resources through an explicitly
-selected local profile, constructs the existing immutable owner settings, and
+selected local profile, composes a separately selected renderer execution
+profile for LIBERO, constructs the existing immutable owner settings, and
 checks the shared action and observation interfaces. It returns separate
-scientific and execution hashes. The scientific hash excludes the local
-profile and resolved machine paths/devices; the execution hash includes them.
+scientific and execution hashes. The scientific hash excludes the local and
+renderer profiles plus resolved machine paths/devices; the execution hash
+includes them. `profiles/libero-bench-egl.yaml` is the default LIBERO execution
+profile; callers may explicitly select `profiles/libero-playground-glfw.yaml`.
+Diagnostic `MUJOCO_GL` and `MUJOCO_EGL_DEVICE_ID` values override the selected
+profile and are reflected in the resolved execution configuration.
 
 `ResolvedExperimentConfig.write()` creates one deterministic
 `resolved_config.yaml` and refuses to overwrite an existing file. Runner CLI

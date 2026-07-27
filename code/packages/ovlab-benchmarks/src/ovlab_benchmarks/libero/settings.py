@@ -6,6 +6,7 @@ from enum import Enum
 from ovlab_core.contracts import Metadata, normalize_metadata
 
 from .errors import LiberoConfigurationError
+from .renderer import LiberoRendererSettings
 
 
 class LiberoObservationProfile(str, Enum):
@@ -17,10 +18,6 @@ class LiberoObservationProfile(str, Enum):
 class InitialStateSelection(str, Enum):
     ROLLOUT_INDEX = "rollout_index"
     SEEDED = "seeded"
-
-
-class LiberoRenderMode(str, Enum):
-    HEADLESS = "headless"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,8 +32,7 @@ class LiberoAdapterSettings:
     initialization_settling_steps: int = 10
     initial_state_selection: InitialStateSelection = InitialStateSelection.ROLLOUT_INDEX
     base_seed: int = 0
-    render_mode: LiberoRenderMode = LiberoRenderMode.HEADLESS
-    render_gpu_device_id: int | None = None
+    renderer: LiberoRendererSettings = field(default_factory=LiberoRendererSettings)
     controller_configuration_override: Metadata | None = None
     metadata: Metadata = field(default_factory=dict)
 
@@ -66,8 +62,8 @@ class LiberoAdapterSettings:
                 raise LiberoConfigurationError("task_indices must be non-negative integers")
             if len(indices) != len(set(indices)):
                 raise LiberoConfigurationError("task_indices must be unique")
-        if self.render_gpu_device_id is not None and not isinstance(self.render_gpu_device_id, int):
-            raise LiberoConfigurationError("render_gpu_device_id must be an integer or None")
+        if not isinstance(self.renderer, LiberoRendererSettings):
+            raise LiberoConfigurationError("renderer must be LiberoRendererSettings")
         override = None
         if self.controller_configuration_override is not None:
             override = normalize_metadata(self.controller_configuration_override, type(self).__name__)

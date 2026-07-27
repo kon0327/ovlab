@@ -14,6 +14,23 @@ The shared LIBERO action interface records the already verified
 resolve to that same interface, and the resolver compares it with the concrete
 LIBERO adapter contract. Canonical camera names are checked in the same way.
 
+## LIBERO renderer execution profiles
+
+Renderer selection is execution-only and is not part of a scientific
+experiment document. Select `profiles/libero-bench-egl.yaml` for headless
+benchmarking or `profiles/libero-playground-glfw.yaml` for an interactive
+playground. The selected profile and resolved renderer are included in the
+execution configuration hash; changing profiles leaves the scientific hash,
+tasks, seeds, observation/action contracts, and metrics unchanged.
+
+The EGL profile resolves its device from the local profile's optional
+`execution.libero.renderer.device_id`, falling back to the index in
+`devices.primary_gpu`. GLFW never emits an EGL device setting. Diagnostic
+process environment values have precedence: `MUJOCO_GL` selects `egl` or
+`glfw`, and `MUJOCO_EGL_DEVICE_ID` overrides the EGL device. Unsupported values
+fail during configuration resolution. No MuJoCo, Robosuite, or LIBERO import is
+performed by the resolver.
+
 Machine paths and devices belong in gitignored `local/*.yaml` profiles. The
 resolver produces a scientific hash without that profile and an execution hash
 including all resolved paths and devices. Its immutable output is one

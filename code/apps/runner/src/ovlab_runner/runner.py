@@ -55,6 +55,9 @@ class ExperimentRunner:
         if self.configuration_snapshot is not None:
             started["scientific_config_hash"] = self.configuration_snapshot.scientific_config_hash
             started["execution_config_hash"] = self.configuration_snapshot.execution_config_hash
+        runtime = _runtime_metadata(self.benchmark)
+        if runtime:
+            started["runtime"] = {"benchmark": runtime}
         try:
             self.store.create_run(self.plan.run_context.run_id, started)
             if self.configuration_snapshot is not None:
@@ -152,7 +155,9 @@ class ExperimentRunner:
         return tuple(aggregated)
 
     def _final_manifest(self, status, terminal_counts, episodes, metric_errors, failure_type=None):
-        return {"status": status, "end_wall_time_utc_ns": self.clock.wall_time_utc_ns(), "task_count": len(self.connection_report.selected_tasks), "episode_count": episodes, "episode_counts_by_terminal_status": dict(sorted(terminal_counts.items())), "metric_error_count": metric_errors, "artifact_schema_version": "1.0.0", "failure_type": failure_type, "metadata": {}}
+        runtime = _runtime_metadata(self.benchmark)
+        metadata = {} if not runtime else {"benchmark_runtime": runtime}
+        return {"status": status, "end_wall_time_utc_ns": self.clock.wall_time_utc_ns(), "task_count": len(self.connection_report.selected_tasks), "episode_count": episodes, "episode_counts_by_terminal_status": dict(sorted(terminal_counts.items())), "metric_error_count": metric_errors, "artifact_schema_version": "1.0.0", "failure_type": failure_type, "metadata": metadata}
 
     def _close_resources(self):
         if self._resources_closed: return
@@ -167,3 +172,13 @@ class ExperimentRunner:
 def _task_context(plan, task):
     from ovlab_core.contracts import TaskContext
     return TaskContext(plan.run_context.run_id, task.task_id, task.suite_name, task.task_name, task.task_index, task.metadata)
+
+
+def _runtime_metadata(component):
+    provider = getattr(component, "runtime_metadata", None)
+    if not callable(provider):
+        return {}
+    value = provider()
+    if not isinstance(value, dict):
+        raise TypeError("component runtime_metadata() must return a mapping")
+    return value

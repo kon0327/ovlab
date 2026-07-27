@@ -85,19 +85,36 @@ produces truncation. Native reward remains separate.
 
 ## Rendering and manual validation
 
-Rendering is headless and contained inside the integration. WSL/EGL variables
-such as `MUJOCO_GL=egl` and the desired visible GPU must be configured before
-Python starts. OVLAB does not overwrite them or silently select another GPU.
-An explicit `render_gpu_device_id` is forwarded only when configured.
+Rendering is selected by an execution profile, independently of the scientific
+experiment. `libero-bench-egl.yaml` configures headless EGL;
+`libero-playground-glfw.yaml` configures interactive GLFW. The adapter applies
+the resolved process environment before constructing the lazy native backend:
+
+- EGL sets `MUJOCO_GL=egl` and, when selected, `MUJOCO_EGL_DEVICE_ID`.
+- GLFW sets `MUJOCO_GL=glfw` and removes `MUJOCO_EGL_DEVICE_ID` for the adapter
+  lifetime.
+
+Previous process values are restored when the adapter closes; the global shell
+and Conda environment are never changed. Explicit diagnostic `MUJOCO_GL` and
+`MUJOCO_EGL_DEVICE_ID` values take precedence over configuration. If MuJoCo,
+Robosuite, or LIBERO was already imported under an incompatible or
+unverifiable graphics backend, initialization fails rather than switching
+silently. Requested/resolved backend, EGL device, and detected renderer strings
+are recorded in run manifests.
 
 Run dependency-light tests with `ovlab-tester`. Run the real smoke test only in
 the already verified LIBERO environment, with local assets available:
 
 ```bash
-OVLAB_RUN_LIBERO=1 MUJOCO_GL=egl \
-  conda run -n openvla deploy/scripts/test.sh \
+conda run -n openvla env \
+  MUJOCO_GL=egl MUJOCO_EGL_DEVICE_ID=0 OVLAB_RUN_LIBERO=1 \
+  deploy/scripts/test.sh \
   code/tests/integration/benchmarks/libero/test_real_libero.py -q -s
 ```
+
+Placing diagnostic overrides after `conda run ... env` is significant when a
+Conda environment declares its own `MUJOCO_GL`; Conda's declared value would
+otherwise replace an assignment made outside `conda run`.
 
 The real test performs one deterministic reset and one safe open-gripper no-op
 step. It does not load a policy, checkpoint, demonstration, or full suite.

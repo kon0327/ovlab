@@ -21,10 +21,6 @@ settings:
     state_selection: rollout_index
     settling_steps: 10
 
-  rendering:
-    mode: headless
-    gpu_resource: primary_gpu
-
   action:
     interface_ref: interfaces/actions/libero-osc-pose-v1.yaml
 

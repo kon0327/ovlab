@@ -1,6 +1,7 @@
 """Concrete synchronous benchmark adapter for pinned LIBERO."""
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 import numpy as np
 
@@ -20,6 +21,7 @@ from .actions import libero_action_spec, settling_action, validate_action, valid
 from .environment import PinnedLiberoBackend, native_action_spec
 from .errors import LiberoConfigurationError, LiberoEnvironmentError
 from .observations import map_observation, observation_spec
+from .renderer import LiberoRendererRuntime
 from .settings import LiberoAdapterSettings
 from .signals import map_signals, signal_registry
 from .tasks import LIBERO_PINNED_COMMIT, NativeTaskRecord, resolve_native_suite, select_initial_state_index
@@ -36,9 +38,22 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
         self._native_observation: Mapping[str, object] | None = None
         self._native_step_index = 0
         self._initial_state_index = 0
+        self._renderer_runtime = None
+        self._detected_renderer = None
 
     def _initialize(self, run_context: RunContext) -> BenchmarkCapabilities:
-        backend = self._backend or PinnedLiberoBackend()
+        if self._backend is None:
+            self._renderer_runtime = LiberoRendererRuntime(self.settings.renderer)
+            self._renderer_runtime.activate()
+            self.settings = replace(self.settings, renderer=self._renderer_runtime.effective_settings)
+            try:
+                backend = PinnedLiberoBackend()
+            except Exception:
+                self._renderer_runtime.close()
+                self._renderer_runtime = None
+                raise
+        else:
+            backend = self._backend
         records = []
         for suite_name in self.settings.suite_names:
             resolve_native_suite(suite_name)
@@ -72,6 +87,7 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
                 "libero_commit": LIBERO_PINNED_COMMIT,
                 "controller": "OSC_POSE",
                 "observation_profile": self.settings.observation_profile.value,
+                "renderer": self.settings.renderer.as_dict(),
             },
         )
 
@@ -99,6 +115,9 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
             raw = environment.set_init_state(task.initial_states[state_index])
             for _ in range(self.settings.initialization_settling_steps):
                 raw, _, _, _ = environment.step(settling_action())
+            detector = getattr(self._backend, "detect_renderer", None)
+            if callable(detector):
+                self._detected_renderer = detector(environment)
         except Exception:
             if "environment" in locals():
                 try:
@@ -213,7 +232,17 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
                 raise LiberoEnvironmentError("failed to close native LIBERO environment") from exc
 
     def _close(self) -> None:
-        self._release_environment()
+        try:
+            self._release_environment()
+        finally:
+            if self._renderer_runtime is not None:
+                self._renderer_runtime.close()
+                self._renderer_runtime = None
 
     def _abort_episode(self) -> None:
         self._release_environment()
+
+    def runtime_metadata(self) -> dict[str, object]:
+        renderer = self.settings.renderer.as_dict()
+        renderer["detected_renderer"] = self._detected_renderer
+        return {"libero_renderer": renderer}

@@ -10,3 +10,7 @@ different machines without changing versioned files.
 
 Local profiles may contain checkpoint, dataset, and run roots plus logical
 device mappings. They must not contain credentials or model settings.
+
+The optional `execution.libero.renderer.device_id` overrides the portable EGL
+profile's device selection for one machine. Renderer backend selection belongs
+to a reusable profile under `configs/profiles/`, not to the local profile.

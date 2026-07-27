@@ -105,7 +105,7 @@ def validate_benchmark(doc, path):
         return
     if doc["type"] != "libero": raise ConfigSchemaError(f"{path}.type supports only 'libero' or 'mock'")
     settings = mapping(doc["settings"], f"{path}.settings", required=(
-        "suite", "task_indices", "observation", "initialization", "rendering", "action", "privileged_signals"))
+        "suite", "task_indices", "observation", "initialization", "action", "privileged_signals"))
     enum(settings["suite"], ("libero_spatial", "libero_object", "libero_goal", "libero_10"), f"{path}.settings.suite")
     if settings["task_indices"] != "all":
         exact_type(settings["task_indices"], list, f"{path}.settings.task_indices")
@@ -126,9 +126,6 @@ def validate_benchmark(doc, path):
     enum(init["state_selection"], ("rollout_index", "seeded"), f"{path}.settings.initialization.state_selection")
     exact_type(init["settling_steps"], int, f"{path}.settings.initialization.settling_steps")
     if init["settling_steps"] < 0: raise ConfigSchemaError(f"{path}.settings.initialization.settling_steps must be non-negative")
-    rendering = mapping(settings["rendering"], f"{path}.settings.rendering", required=("mode", "gpu_resource"))
-    enum(rendering["mode"], ("headless",), f"{path}.settings.rendering.mode")
-    exact_type(rendering["gpu_resource"], str, f"{path}.settings.rendering.gpu_resource")
     action = mapping(settings["action"], f"{path}.settings.action", required=("interface_ref",))
     exact_type(action["interface_ref"], str, f"{path}.settings.action.interface_ref")
     signals = mapping(settings["privileged_signals"], f"{path}.settings.privileged_signals", required=("enabled",))
@@ -271,12 +268,36 @@ def validate_registry(doc, path):
 
 def validate_local_profile(doc, path):
     header(doc, path, "local_profile", identified=True)
-    mapping(doc, path, required=("schema_version", "kind", "id", "paths", "devices"))
+    mapping(doc, path, required=("schema_version", "kind", "id", "paths", "devices"), optional=("execution",))
     paths = mapping(doc["paths"], f"{path}.paths", required=("checkpoint_root", "dataset_root", "runs_root"))
     for key, value in paths.items(): exact_type(value, str, f"{path}.paths.{key}")
     if not isinstance(doc["devices"], dict) or not doc["devices"]:
         raise ConfigSchemaError(f"{path}.devices must be a non-empty mapping")
     for key, value in doc["devices"].items(): exact_type(value, str, f"{path}.devices.{key}")
+    if "execution" in doc:
+        execution = mapping(doc["execution"], f"{path}.execution", required=("libero",))
+        libero = mapping(execution["libero"], f"{path}.execution.libero", required=("renderer",))
+        renderer = mapping(libero["renderer"], f"{path}.execution.libero.renderer", required=("device_id",))
+        exact_type(renderer["device_id"], int, f"{path}.execution.libero.renderer.device_id")
+        if renderer["device_id"] < 0:
+            raise ConfigSchemaError(f"{path}.execution.libero.renderer.device_id must be non-negative")
+
+
+def validate_execution_profile(doc, path):
+    header(doc, path, "execution_profile", identified=True)
+    mapping(doc, path, required=("schema_version", "kind", "id", "execution"))
+    execution = mapping(doc["execution"], f"{path}.execution", required=("libero",))
+    libero = mapping(execution["libero"], f"{path}.execution.libero", required=("renderer",))
+    renderer = mapping(
+        libero["renderer"], f"{path}.execution.libero.renderer", required=("backend",), optional=("device_id",)
+    )
+    enum(renderer["backend"], ("egl", "glfw"), f"{path}.execution.libero.renderer.backend")
+    if "device_id" in renderer and renderer["device_id"] is not None:
+        exact_type(renderer["device_id"], int, f"{path}.execution.libero.renderer.device_id")
+        if renderer["device_id"] < 0:
+            raise ConfigSchemaError(f"{path}.execution.libero.renderer.device_id must be non-negative")
+    if renderer["backend"] == "glfw" and "device_id" in renderer:
+        raise ConfigSchemaError(f"{path}.execution.libero.renderer.device_id is applicable only to EGL")
 
 
 def validate_artifacts(doc, path):
@@ -290,7 +311,8 @@ def validate_artifacts(doc, path):
 VALIDATORS = {
     "experiment": validate_experiment, "benchmark": validate_benchmark, "policy": validate_policy,
     "action_interface": validate_action_interface, "metric_set": validate_metric_set, "protocol": validate_protocol,
-    "resource_registry": validate_registry, "local_profile": validate_local_profile, "artifact_store": validate_artifacts,
+    "resource_registry": validate_registry, "local_profile": validate_local_profile,
+    "execution_profile": validate_execution_profile, "artifact_store": validate_artifacts,
 }
 
 

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from ovlab_benchctl import ConfigResolver
-from ovlab_benchmarks.libero import LiberoBenchmarkAdapter
+from ovlab_benchmarks.libero import LiberoBenchmarkAdapter, LiberoRendererBackend
 from ovlab_core.contracts import PolicyObservation, RunContext, RunId, SignalAccess, TaskId
 from ovlab_metrics import EpisodeMetricPlugin, MetricEvaluator, MetricRegistry, MetricStatus
 from ovlab_openvla_vanilla import HuggingFaceOpenVlaRuntime, OpenVlaVanillaAdapter
@@ -58,8 +58,16 @@ def test_one_bounded_libero_rollout_records_recomputable_trace():
     if os.environ.get("OVLAB_RUN_LIBERO_INTEGRATION") != "1":
         pytest.skip("set OVLAB_RUN_LIBERO_INTEGRATION=1 for the real bounded rollout")
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "configs/experiments/libero-vanilla-smoke.yaml", local_profile=_profile()
+        "configs/experiments/libero-vanilla-smoke.yaml",
+        local_profile=_profile(),
+        execution_profile="profiles/libero-bench-egl.yaml",
     )
+    renderer = resolved.benchmark_settings.renderer
+    if renderer.resolved_backend is not LiberoRendererBackend.EGL:
+        pytest.fail(
+            "Gate C requires EGL, but a diagnostic MUJOCO_GL override resolved the renderer to "
+            f"{renderer.resolved_backend.value!r}; run through `conda run -n openvla env MUJOCO_GL=egl ...`"
+        )
     run = RunContext(
         RunId(os.environ.get("OVLAB_RUN_ID", "gate-c-libero-openvla-vanilla")), 1,
         "bounded LIBERO OpenVLA Vanilla integration reference", 42,
@@ -142,4 +150,8 @@ def test_one_bounded_libero_rollout_records_recomputable_trace():
     assert connection["metadata"]["policy_capabilities"]["action_codec"] == "openvla-to-libero@1.0.0"
     assert started["scientific_config_hash"] == resolved.scientific_config_hash
     assert started["execution_config_hash"] == resolved.execution_config_hash
+    assert started["runtime"]["benchmark"]["libero_renderer"]["resolved_backend"] == "egl"
+    completed_renderer = completed["metadata"]["benchmark_runtime"]["libero_renderer"]
+    assert completed_renderer["resolved_backend"] == "egl"
+    assert completed_renderer["detected_renderer"]["renderer"]
     assert completed["status"] == "completed" and completed["episode_count"] == 1

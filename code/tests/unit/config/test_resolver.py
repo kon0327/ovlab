@@ -5,9 +5,10 @@ import shutil
 
 import pytest
 
-from ovlab_benchmarks.libero import LiberoAdapterSettings
+from ovlab_benchmarks.libero import LiberoAdapterSettings, LiberoRendererBackend
 from ovlab_core.contracts import GripperConvention
 from ovlab_metrics import ActionModificationMetricConfig, RepeatedNoOpMetricConfig
+from ovlab_openvla_common import action_specs_match
 from ovlab_openvla_vanilla import ModelDType, OpenVlaVanillaSettings
 from ovlab_benchctl import (
     ConfigCompatibilityError, ConfigReferenceError, ConfigResolver, ConfigSchemaError,
@@ -69,6 +70,8 @@ def test_every_versioned_component_is_schema_valid():
         "protocols/libero-standard-v1.yaml": "protocol",
         "protocols/libero-smoke-v1.yaml": "protocol",
         "protocols/smoke-v1.yaml": "protocol",
+        "profiles/libero-bench-egl.yaml": "execution_profile",
+        "profiles/libero-playground-glfw.yaml": "execution_profile",
         "artifacts/filesystem.yaml": "artifact_store",
         "resources/registry.yaml": "resource_registry",
         "experiments/libero-spatial-vanilla.yaml": "experiment",
@@ -89,7 +92,9 @@ def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
     assert isinstance(resolved.policy_settings, OpenVlaVanillaSettings)
     assert resolved.benchmark_settings.suite_names == ("LIBERO-Spatial",)
     assert resolved.benchmark_settings.maximum_episode_steps == 300
-    assert resolved.benchmark_settings.render_gpu_device_id == 0
+    assert resolved.benchmark_settings.renderer.requested_backend is LiberoRendererBackend.EGL
+    assert resolved.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.EGL
+    assert resolved.benchmark_settings.renderer.device_id == 0
     assert resolved.policy_settings.model_dtype is ModelDType.BFLOAT16
     assert resolved.policy_settings.unnorm_key == "libero_10"
     assert resolved.policy_settings.canonical_camera_name == "camera.primary.rgb"
@@ -126,6 +131,51 @@ def test_scientific_hash_excludes_local_profile_but_execution_hash_includes_it(t
     assert "machine-a" not in scientific and "cuda:0" not in scientific
     execution = json.dumps(dict(first.execution_config), default=lambda value: dict(value))
     assert "machine-a" in execution and "cuda:0" in execution
+
+
+def test_renderer_profiles_are_execution_only_and_preserve_scientific_contracts(tmp_path):
+    egl = resolver().resolve(
+        EXPERIMENT,
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-bench-egl.yaml",
+        environment={},
+    )
+    glfw = resolver().resolve(
+        EXPERIMENT,
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-playground-glfw.yaml",
+        environment={},
+    )
+    assert egl.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.EGL
+    assert egl.benchmark_settings.renderer.device_id == 0
+    assert glfw.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.GLFW
+    assert glfw.benchmark_settings.renderer.device_id is None
+    assert egl.scientific_config_hash == glfw.scientific_config_hash
+    assert egl.execution_config_hash != glfw.execution_config_hash
+    assert egl.benchmark_settings.suite_names == glfw.benchmark_settings.suite_names
+    assert egl.benchmark_settings.task_indices == glfw.benchmark_settings.task_indices
+    assert egl.benchmark_settings.camera_names == glfw.benchmark_settings.camera_names
+    assert egl.benchmark_settings.base_seed == glfw.benchmark_settings.base_seed
+    assert action_specs_match(egl.action_spec, glfw.action_spec)
+    assert egl.metric_settings == glfw.metric_settings
+
+
+def test_unsupported_renderer_backend_is_rejected_without_native_imports(tmp_path):
+    import sys
+
+    root = copied_configs(tmp_path)
+    renderer = root / "profiles/libero-bench-egl.yaml"
+    renderer.write_text(renderer.read_text().replace("backend: egl", "backend: vulkan"), encoding="utf-8")
+    before = {name for name in sys.modules if name == "mujoco" or name == "robosuite" or name.startswith("libero.libero")}
+    with pytest.raises(ConfigSchemaError, match="egl, glfw"):
+        ConfigResolver(root, repository_root=tmp_path).resolve(
+            root / "experiments/libero-spatial-vanilla.yaml",
+            local_profile=profile(tmp_path),
+            execution_profile="profiles/libero-bench-egl.yaml",
+            environment={},
+        )
+    after = {name for name in sys.modules if name == "mujoco" or name == "robosuite" or name.startswith("libero.libero")}
+    assert after == before
 
 
 def test_resolved_config_is_deterministic_parseable_and_immutable(tmp_path):

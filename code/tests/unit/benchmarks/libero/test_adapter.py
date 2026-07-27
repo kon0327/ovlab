@@ -11,6 +11,7 @@ from ovlab_benchmarks.libero import (
     LiberoBenchmarkAdapter,
     LiberoConfigurationError,
     LiberoDependencyError,
+    LiberoEnvironmentError,
 )
 from ovlab_core.contracts import PredictionId
 
@@ -93,6 +94,47 @@ def test_time_limit_truncates_without_fabricating_success() -> None:
     result = benchmark.step(request(context))
     assert result.truncated and not result.terminated and result.success is False
     assert backend.environments[0].closed
+
+
+def test_reward_does_not_infer_authoritative_success() -> None:
+    backend = FakeLiberoBackend()
+    benchmark = adapter(backend=backend, maximum_episode_steps=2)
+    context = fake_libero_episode()
+    benchmark.initialize(make_run_context())
+    benchmark.reset_episode(context)
+    native = backend.environments[0]
+
+    def reward_only_step(action):
+        native.actions.append(np.asarray(action).copy())
+        native.steps += 1
+        return native.raw, 1.0, False, {}
+
+    native.step = reward_only_step
+    result = benchmark.step(request(context))
+    signals = {signal.name: signal.value for signal in result.evaluation_signals}
+    assert result.reward == 1.0
+    assert signals["benchmark.reward"] == 1.0
+    assert result.success is False
+    assert signals["benchmark.task_success"] is False
+
+
+def test_native_step_error_can_be_aborted_without_leaking_environment() -> None:
+    backend = FakeLiberoBackend()
+    benchmark = adapter(backend=backend)
+    context = fake_libero_episode()
+    benchmark.initialize(make_run_context())
+    benchmark.reset_episode(context)
+    native = backend.environments[0]
+
+    def failing_step(action):
+        del action
+        raise RuntimeError("native step failure")
+
+    native.step = failing_step
+    with pytest.raises(LiberoEnvironmentError, match="native LIBERO step failed"):
+        benchmark.step(request(context))
+    benchmark.abort_episode()
+    assert native.closed
 
 
 def test_close_releases_environment_and_is_idempotent() -> None:

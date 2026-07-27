@@ -106,7 +106,9 @@ The optional real test uses pinned LIBERO plus a deterministic no-checkpoint
 policy:
 
 ```bash
-OVLAB_RUN_LIBERO_RUNNER=1 OVLAB_LOCAL_PROFILE=/path/to/local-profile.yaml MUJOCO_GL=egl \
-  conda run -n openvla-oft deploy/scripts/test.sh \
+conda run -n openvla-oft env \
+  MUJOCO_GL=egl MUJOCO_EGL_DEVICE_ID=0 \
+  OVLAB_RUN_LIBERO_RUNNER=1 OVLAB_LOCAL_PROFILE=/path/to/local-profile.yaml \
+  deploy/scripts/test.sh \
   code/tests/integration/runner/test_libero_runner_manual.py -q -s
 ```

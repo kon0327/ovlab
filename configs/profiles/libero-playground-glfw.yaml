@@ -1,0 +1,8 @@
+schema_version: "0.1.0"
+kind: execution_profile
+id: libero-playground-glfw
+
+execution:
+  libero:
+    renderer:
+      backend: glfw

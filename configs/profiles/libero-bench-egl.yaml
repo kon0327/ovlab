@@ -1,0 +1,9 @@
+schema_version: "0.1.0"
+kind: execution_profile
+id: libero-bench-egl
+
+execution:
+  libero:
+    renderer:
+      backend: egl
+      device_id: null

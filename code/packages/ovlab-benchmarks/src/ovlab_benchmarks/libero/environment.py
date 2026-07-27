@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import LiberoConfigurationError, LiberoDependencyError, LiberoEnvironmentError
+from .renderer import LiberoRendererBackend, detect_renderer
 from .settings import LiberoAdapterSettings
 from .tasks import NativeTaskRecord, resolve_native_suite
 
@@ -57,8 +58,11 @@ class PinnedLiberoBackend:
             "camera_heights": settings.camera_height,
             "camera_widths": settings.camera_width,
         }
-        if settings.render_gpu_device_id is not None:
-            arguments["render_gpu_device_id"] = settings.render_gpu_device_id
+        if (
+            settings.renderer.resolved_backend is LiberoRendererBackend.EGL
+            and settings.renderer.device_id is not None
+        ):
+            arguments["render_gpu_device_id"] = settings.renderer.device_id
         if settings.controller_configuration_override is not None:
             raise LiberoConfigurationError(
                 "the pinned OffScreenRenderEnv wrapper fixes OSC_POSE and does not safely expose controller overrides"
@@ -69,6 +73,11 @@ class PinnedLiberoBackend:
             return environment
         except Exception as exc:
             raise LiberoEnvironmentError(f"failed to create LIBERO environment for {task.task_id}") from exc
+
+    @staticmethod
+    def detect_renderer(environment: object) -> dict[str, object]:
+        del environment
+        return detect_renderer()
 
 
 def native_action_spec(environment: object) -> object:

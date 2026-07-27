@@ -14,6 +14,28 @@ from ovlab_runner import (
 )
 
 
+class RuntimeMetadataBenchmark(TrackingBenchmark):
+    def __init__(self):
+        super().__init__()
+        self.detected_renderer = None
+
+    def runtime_metadata(self):
+        return {
+            "libero_renderer": {
+                "requested_backend": "egl",
+                "resolved_backend": "egl",
+                "device_id": 0,
+                "override_source": None,
+                "detected_renderer": self.detected_renderer,
+            }
+        }
+
+    def _step(self, request):
+        result = super()._step(request)
+        self.detected_renderer = {"renderer": "synthetic-egl"}
+        return result
+
+
 def test_plan_validation_hash_and_seed_schedule() -> None:
     plan = runner_plan()
     assert plan.hash == runner_plan().hash
@@ -58,3 +80,30 @@ def test_runner_lifecycle_and_close_are_explicit() -> None:
     runner.close()
     runner.close()
     assert runner.state is RunnerState.CLOSED and benchmark.closed and policy.closed
+
+
+def test_renderer_runtime_metadata_is_recorded_before_and_after_execution() -> None:
+    store = InMemoryRunArtifactStore()
+    runner = ExperimentRunner(
+        runner_plan(),
+        RuntimeMetadataBenchmark(),
+        TrackingPolicy(),
+        store,
+        clock=DeterministicClock(),
+    )
+    runner.connect()
+    started = store.runs["runner-test"]["started"]["runtime"]["benchmark"]["libero_renderer"]
+    assert started == {
+        "requested_backend": "egl",
+        "resolved_backend": "egl",
+        "device_id": 0,
+        "override_source": None,
+        "detected_renderer": None,
+    }
+
+    runner.run()
+    completed = store.runs["runner-test"]["completed"]["metadata"]["benchmark_runtime"]["libero_renderer"]
+    assert completed["requested_backend"] == "egl"
+    assert completed["resolved_backend"] == "egl"
+    assert completed["device_id"] == 0
+    assert completed["detected_renderer"] == {"renderer": "synthetic-egl"}
