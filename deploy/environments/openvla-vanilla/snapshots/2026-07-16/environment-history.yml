@@ -1,6 +1,0 @@
-name: openvla
-channels:
-  - defaults
-dependencies:
-  - python=3.10
-  - cuda-toolkit=12.1
