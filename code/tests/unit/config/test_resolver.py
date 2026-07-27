@@ -61,6 +61,7 @@ def test_every_versioned_component_is_schema_valid():
     components = {
         "benchmarks/mock/base.yaml": "benchmark",
         "benchmarks/libero/spatial-smoke.yaml": "benchmark",
+        "benchmarks/libero/libero10-smoke.yaml": "benchmark",
         "policies/mock/base.yaml": "policy",
         "policies/mock/libero-noop.yaml": "policy",
         "policies/openvla-vanilla/base.yaml": "policy",
@@ -78,6 +79,7 @@ def test_every_versioned_component_is_schema_valid():
         "experiments/mock-e2e-smoke.yaml": "experiment",
         "experiments/libero-mock-smoke.yaml": "experiment",
         "experiments/libero-vanilla-smoke.yaml": "experiment",
+        "experiments/libero10-vanilla-rpc-smoke.yaml": "experiment",
     }
     for reference, kind in components.items():
         document = resolver().load_component(reference, kind)
@@ -120,6 +122,23 @@ def test_mock_smoke_resolves_to_typed_runtime_settings(tmp_path):
     assert resolved.scientific_config_hash == resolver().resolve(
         "configs/experiments/mock-e2e-smoke.yaml", local_profile=profile(tmp_path, suffix="b")
     ).scientific_config_hash
+
+
+def test_rpc_smoke_is_aligned_to_libero10_full_weight_policy(tmp_path):
+    resolved = resolver().resolve(
+        "configs/experiments/libero10-vanilla-rpc-smoke.yaml",
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-bench-egl.yaml",
+        environment={},
+    )
+    assert resolved.benchmark_settings.suite_names == ("LIBERO-10",)
+    assert resolved.benchmark_settings.task_indices == (0,)
+    assert resolved.protocol_settings.maximum_episode_steps == 2
+    assert resolved.policy_settings.model.source == "openvla/openvla-7b-finetuned-libero-10"
+    assert resolved.policy_settings.model.revision == "80970322773f81baa2e22fe495d0487b93a05cfa"
+    assert resolved.policy_settings.unnorm_key == "libero_10"
+    assert resolved.policy_settings.model_dtype is ModelDType.BFLOAT16
+    assert resolved.policy_settings.attention_implementation == "flash_attention_2"
 
 
 def test_scientific_hash_excludes_local_profile_but_execution_hash_includes_it(tmp_path):

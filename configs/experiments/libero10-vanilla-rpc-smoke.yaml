@@ -2,12 +2,12 @@ schema_version: "0.1.0"
 kind: experiment
 
 experiment:
-  id: libero-openvla-vanilla-smoke
-  name: Cross-suite OpenVLA Vanilla diagnostic on LIBERO-Spatial
-  tags: [libero-spatial, vanilla, smoke, cross-suite-diagnostic]
+  id: libero10-openvla-vanilla-rpc-smoke
+  name: Full-weight suite-finetuned OpenVLA reference on LIBERO-10 through local RPC
+  tags: [libero-10, vanilla, full-weight, rpc, smoke, integration-reference]
 
 components:
-  benchmark: benchmarks/libero/spatial-smoke.yaml
+  benchmark: benchmarks/libero/libero10-smoke.yaml
   policy: policies/openvla-vanilla/base.yaml
   metrics: metrics/action-safe-v1.yaml
   protocol: protocols/libero-smoke-v1.yaml
@@ -16,3 +16,4 @@ components:
 
 resources:
   registry: resources/registry.yaml
+

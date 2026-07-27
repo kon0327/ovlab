@@ -55,9 +55,16 @@ class ExperimentRunner:
         if self.configuration_snapshot is not None:
             started["scientific_config_hash"] = self.configuration_snapshot.scientific_config_hash
             started["execution_config_hash"] = self.configuration_snapshot.execution_config_hash
-        runtime = _runtime_metadata(self.benchmark)
+        runtime = {
+            name: value
+            for name, value in (
+                ("benchmark", _runtime_metadata(self.benchmark)),
+                ("policy", _runtime_metadata(self.policy)),
+            )
+            if value
+        }
         if runtime:
-            started["runtime"] = {"benchmark": runtime}
+            started["runtime"] = runtime
         try:
             self.store.create_run(self.plan.run_context.run_id, started)
             if self.configuration_snapshot is not None:
@@ -155,8 +162,15 @@ class ExperimentRunner:
         return tuple(aggregated)
 
     def _final_manifest(self, status, terminal_counts, episodes, metric_errors, failure_type=None):
-        runtime = _runtime_metadata(self.benchmark)
-        metadata = {} if not runtime else {"benchmark_runtime": runtime}
+        runtime = {
+            name: value
+            for name, value in (
+                ("benchmark_runtime", _runtime_metadata(self.benchmark)),
+                ("policy_runtime", _runtime_metadata(self.policy)),
+            )
+            if value
+        }
+        metadata = runtime
         return {"status": status, "end_wall_time_utc_ns": self.clock.wall_time_utc_ns(), "task_count": len(self.connection_report.selected_tasks), "episode_count": episodes, "episode_counts_by_terminal_status": dict(sorted(terminal_counts.items())), "metric_error_count": metric_errors, "artifact_schema_version": "1.0.0", "failure_type": failure_type, "metadata": metadata}
 
     def _close_resources(self):

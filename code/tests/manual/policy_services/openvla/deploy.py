@@ -48,6 +48,8 @@ from fastapi.responses import JSONResponse
 from PIL import Image
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
+from legacy_statistics import load_local_dataset_statistics
+
 # === Utilities ===
 SYSTEM_PROMPT = (
     "A chat between a curious user and an artificial intelligence assistant. "
@@ -83,10 +85,10 @@ class OpenVLAServer:
             trust_remote_code=True
         ).to(self.device)
 
-        # [Hacky] Load Dataset Statistics from Disk (if passing a path to a fine-tuned model)
+        # Local training outputs may carry a sidecar. Official HF snapshots can
+        # instead provide norm_stats directly through the loaded model config.
         if os.path.isdir(self.openvla_path):
-            with open(Path(self.openvla_path) / "dataset_statistics.json", "r") as f:
-                self.vla.norm_stats = json.load(f)
+            load_local_dataset_statistics(self.vla, self.openvla_path)
 
     def predict_action(self, payload: Dict[str, Any]) -> str:
         try:

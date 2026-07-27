@@ -36,6 +36,16 @@ class RuntimeMetadataBenchmark(TrackingBenchmark):
         return result
 
 
+class RuntimeMetadataPolicy(TrackingPolicy):
+    def runtime_metadata(self):
+        return {
+            "remote_policy": {
+                "protocol_version": "ovlab-policy-rpc/1.0.0",
+                "model_identity": {"checkpoint": "test"},
+            }
+        }
+
+
 def test_plan_validation_hash_and_seed_schedule() -> None:
     plan = runner_plan()
     assert plan.hash == runner_plan().hash
@@ -87,7 +97,7 @@ def test_renderer_runtime_metadata_is_recorded_before_and_after_execution() -> N
     runner = ExperimentRunner(
         runner_plan(),
         RuntimeMetadataBenchmark(),
-        TrackingPolicy(),
+        RuntimeMetadataPolicy(),
         store,
         clock=DeterministicClock(),
     )
@@ -100,6 +110,12 @@ def test_renderer_runtime_metadata_is_recorded_before_and_after_execution() -> N
         "override_source": None,
         "detected_renderer": None,
     }
+    assert store.runs["runner-test"]["started"]["runtime"]["policy"] == {
+        "remote_policy": {
+            "protocol_version": "ovlab-policy-rpc/1.0.0",
+            "model_identity": {"checkpoint": "test"},
+        }
+    }
 
     runner.run()
     completed = store.runs["runner-test"]["completed"]["metadata"]["benchmark_runtime"]["libero_renderer"]
@@ -107,3 +123,9 @@ def test_renderer_runtime_metadata_is_recorded_before_and_after_execution() -> N
     assert completed["resolved_backend"] == "egl"
     assert completed["device_id"] == 0
     assert completed["detected_renderer"] == {"renderer": "synthetic-egl"}
+    assert store.runs["runner-test"]["completed"]["metadata"]["policy_runtime"] == {
+        "remote_policy": {
+            "protocol_version": "ovlab-policy-rpc/1.0.0",
+            "model_identity": {"checkpoint": "test"},
+        }
+    }

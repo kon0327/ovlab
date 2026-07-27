@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovlab-remote-policy"
+version = "0.1.0"
+description = "Versioned local RPC boundary for OVLAB policy adapters"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24,<3",
+  "ovlab-core",
+  "ovlab-policy-sdk",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
