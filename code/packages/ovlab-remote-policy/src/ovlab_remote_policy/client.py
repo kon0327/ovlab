@@ -71,6 +71,7 @@ class UnixPolicyClient:
                 "protocol_version", "capabilities", "model_identity", "normalization_identity",
                 "prompt_template_identity", "action_codec_identity", "runtime_versions",
             },
+            optional={"method_descriptor"},
             where="initialize response",
         )
         capabilities = capabilities_from_wire(payload["capabilities"])

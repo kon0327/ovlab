@@ -43,4 +43,5 @@ class OpenVlaCheckpointIdentity:
             "expected_checksum": self.expected_checksum,
             "settings_hash": self.settings_hash,
             "identity_strength": self.identity_strength,
+            "metadata": dict(self.metadata),
         }

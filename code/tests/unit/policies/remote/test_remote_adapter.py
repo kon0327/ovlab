@@ -46,6 +46,26 @@ def test_mock_remote_lifecycle_handshake_action_and_separate_timing(
     assert not socket_path.exists()
 
 
+def test_optional_method_descriptor_preserves_vanilla_protocol_compatibility(
+    running_method_service, contexts
+):
+    socket_path, thread = running_method_service
+    run, _ = contexts
+    policy = RemotePolicyAdapter(UnixPolicyClient(socket_path, request_timeout_s=2))
+    policy.initialize(run)
+    assert policy.handshake["protocol_version"] == "ovlab-policy-rpc/1.0.0"
+    assert policy.handshake["method_descriptor"] == {
+        "family": "lora",
+        "artifact_form": "merged_full_weights",
+        "merge_status": "merged",
+        "active_peft_adapter": False,
+        "qp_profile": None,
+    }
+    policy.close()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
 def _one_shot_server(socket_path, handler):
     def serve():
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

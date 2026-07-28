@@ -1,4 +1,4 @@
-"""OpenVLA Vanilla policy-service entry point for the isolated local RPC."""
+"""Offline service for the registered merged OpenVLA-LoRA reference."""
 
 from __future__ import annotations
 
@@ -7,30 +7,34 @@ import importlib.metadata
 import os
 import platform
 import sys
-from collections.abc import Mapping
+from pathlib import Path
 
 import numpy as np
 
-from ovlab_openvla_common import OpenVlaModelSource
+from ovlab_benchctl import ConfigResolver
+from ovlab_openvla_common import OpenVlaModelSource, OpenVlaRuntimeArtifact
+from ovlab_openvla_lora_merged import OpenVlaMergedLoraAdapter, method_descriptor_from_registry
 from ovlab_openvla_vanilla import (
     InferenceSynchronization,
     ModelDType,
-    OpenVlaVanillaAdapter,
     OpenVlaVanillaSettings,
 )
-
 from ovlab_remote_policy.service import PolicyService
 
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", required=True)
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--revision", required=True)
+    parser.add_argument("--registry", required=True)
+    parser.add_argument("--resource-id", required=True)
     parser.add_argument("--unnorm-key", required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--dtype", choices=("bfloat16",), default="bfloat16")
-    parser.add_argument("--attention-implementation", choices=("flash_attention_2",), default="flash_attention_2")
+    parser.add_argument(
+        "--attention-implementation",
+        choices=("flash_attention_2",),
+        default="flash_attention_2",
+    )
     return parser.parse_args()
 
 
@@ -41,9 +45,10 @@ def _version(distribution: str) -> str:
         return "source-tree"
 
 
-def _identity_provider(capabilities) -> Mapping[str, object]:
+def _identity_provider(capabilities):
     metadata = capabilities.metadata
     checkpoint = dict(metadata["checkpoint_identity"])
+    runtime = dict(metadata["runtime"])
     return {
         "model_identity": checkpoint,
         "normalization_identity": {
@@ -53,7 +58,7 @@ def _identity_provider(capabilities) -> Mapping[str, object]:
         "prompt_template_identity": metadata["prompt_template"],
         "action_codec_identity": {
             "identifier": metadata["action_codec"],
-            "conversion_owner": "OpenVlaVanillaAdapter",
+            "conversion_owner": metadata["action_codec_owner"],
             "application_count": 1,
             "output_gripper_convention": capabilities.output_action_spec.gripper_convention.value,
         },
@@ -63,9 +68,16 @@ def _identity_provider(capabilities) -> Mapping[str, object]:
             "torch": _version("torch"),
             "transformers": _version("transformers"),
             "flash_attn": _version("flash-attn"),
-            "ovlab_remote_policy": _version("ovlab-remote-policy"),
+            "peft": _version("peft"),
             "policy_component": f"{capabilities.component_name}@{capabilities.component_version}",
             "protocol_component": "ovlab-remote-policy@0.1.0",
+            "openvla_git_commit": checkpoint["openvla_git_commit"],
+        },
+        "method_descriptor": {
+            **dict(metadata["method_descriptor"]),
+            "total_runtime_parameter_count": runtime["total_parameter_count"],
+            "load_counts": dict(runtime["load_counts"]),
+            "runtime_parameter_trainability": runtime["inference_parameter_trainability"],
         },
     }
 
@@ -73,15 +85,22 @@ def _identity_provider(capabilities) -> Mapping[str, object]:
 def main() -> int:
     args = _arguments()
     if os.environ.get("HF_HUB_OFFLINE") != "1" or os.environ.get("TRANSFORMERS_OFFLINE") != "1":
-        raise RuntimeError("OpenVLA policy service requires HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1")
-    if args.checkpoint != "openvla/openvla-7b":
-        raise RuntimeError(
-            "the Vanilla service is reserved for openvla/openvla-7b; use the merged-LoRA "
-            "service for openvla/openvla-7b-finetuned-libero-10"
-        )
+        raise RuntimeError("merged LoRA service requires HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1")
+    registry_path = Path(args.registry).resolve()
+    config_root = registry_path.parent.parent
+    registry = ConfigResolver(config_root, repository_root=config_root.parent).load_component(
+        str(registry_path.relative_to(config_root)), "resource_registry"
+    )
+    try:
+        entry = registry["checkpoints"][args.resource_id]
+    except KeyError as exc:
+        raise RuntimeError(f"unknown merged LoRA resource: {args.resource_id}") from exc
+    artifact = OpenVlaRuntimeArtifact.from_registry_entry(args.resource_id, entry)
+    method = method_descriptor_from_registry(entry)
+    source = OpenVlaModelSource(entry["repo_id"], entry["expected_revision"], entry["expected_sha256"])
     settings = OpenVlaVanillaSettings(
-        model=OpenVlaModelSource(args.checkpoint, revision=args.revision),
-        processor=OpenVlaModelSource(args.checkpoint, revision=args.revision),
+        model=source,
+        processor=source,
         unnorm_key=args.unnorm_key,
         device=args.device,
         model_dtype=ModelDType.BFLOAT16,
@@ -91,14 +110,15 @@ def main() -> int:
         deterministic_inference=True,
         synchronization=InferenceSynchronization.IF_CUDA,
         record_raw_output=False,
-        metadata={"reference": "unadapted OpenVLA base model"},
+        method_descriptor=method,
+        runtime_artifact=artifact,
+        metadata={"reference": "official merged OpenVLA-LoRA LIBERO-10"},
     )
-    service = PolicyService(
+    PolicyService(
         args.socket,
-        OpenVlaVanillaAdapter(settings),
+        OpenVlaMergedLoraAdapter(settings),
         identity_provider=_identity_provider,
-    )
-    service.serve()
+    ).serve()
     return 0
 
 

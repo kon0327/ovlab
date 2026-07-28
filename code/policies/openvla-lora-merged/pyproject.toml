@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovlab-openvla-lora-merged"
+version = "0.1.0"
+description = "Merged OpenVLA-LoRA methodological reference adapter"
+requires-python = ">=3.10"
+dependencies = [
+  "ovlab-benchctl",
+  "ovlab-openvla-common",
+  "ovlab-openvla-vanilla",
+  "ovlab-remote-policy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

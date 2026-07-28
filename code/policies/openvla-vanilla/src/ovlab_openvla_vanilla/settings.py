@@ -11,10 +11,13 @@ import numpy as np
 from ovlab_core.contracts import ActionSpec, Metadata, normalize_metadata
 from ovlab_openvla_common import (
     LiberoActionCodecConfig,
+    OpenVlaMethodDescriptor,
     OpenVlaModelSource,
     OpenVlaPromptTemplate,
+    OpenVlaRuntimeArtifact,
     action_specs_match,
     libero_target_action_spec,
+    vanilla_base_method_descriptor,
 )
 
 
@@ -73,6 +76,8 @@ class OpenVlaVanillaSettings:
     action_codec: LiberoActionCodecConfig = field(default_factory=LiberoActionCodecConfig)
     synchronization: InferenceSynchronization = InferenceSynchronization.IF_CUDA
     record_raw_output: bool = False
+    method_descriptor: OpenVlaMethodDescriptor = field(default_factory=vanilla_base_method_descriptor)
+    runtime_artifact: OpenVlaRuntimeArtifact | None = None
     metadata: Metadata = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -106,6 +111,17 @@ class OpenVlaVanillaSettings:
             raise TypeError("target_action_spec must be an ActionSpec")
         if not isinstance(self.action_codec, LiberoActionCodecConfig):
             raise TypeError("action_codec must be LiberoActionCodecConfig")
+        if not isinstance(self.method_descriptor, OpenVlaMethodDescriptor):
+            raise TypeError("method_descriptor must be an OpenVlaMethodDescriptor")
+        if self.runtime_artifact is not None and not isinstance(self.runtime_artifact, OpenVlaRuntimeArtifact):
+            raise TypeError("runtime_artifact must be an OpenVlaRuntimeArtifact or None")
+        if self.runtime_artifact is not None:
+            if self.model.source != self.runtime_artifact.repository:
+                raise ValueError("runtime artifact repository differs from model source")
+            if self.model.revision != self.runtime_artifact.revision:
+                raise ValueError("runtime artifact revision differs from model revision")
+            if self.model.expected_checksum != self.runtime_artifact.aggregate_sha256:
+                raise ValueError("model expected checksum differs from runtime artifact aggregate")
         if not action_specs_match(self.target_action_spec, libero_target_action_spec()):
             raise ValueError("target_action_spec is incompatible with the verified LIBERO codec")
         object.__setattr__(self, "input_image_shape", shape)
@@ -129,6 +145,8 @@ class OpenVlaVanillaSettings:
             "action_codec": {"id": self.action_codec.codec_id, "version": self.action_codec.version,
                              "threshold": self.action_codec.threshold},
             "synchronization": self.synchronization.value, "record_raw_output": self.record_raw_output,
+            "method_descriptor": self.method_descriptor.canonical_dict(),
+            "runtime_artifact": None if self.runtime_artifact is None else self.runtime_artifact.as_metadata(),
             "metadata": _plain_metadata(self.metadata),
         }
 

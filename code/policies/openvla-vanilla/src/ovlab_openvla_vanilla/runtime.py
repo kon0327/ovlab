@@ -58,6 +58,10 @@ class HuggingFaceOpenVlaRuntime:
         self._model = None
         self._processor = None
         self._torch = None
+        self.load_count = 0
+        self.processor_load_count = 0
+        self.peft_adapter_load_count = 0
+        self._runtime_metadata = {}
 
     @staticmethod
     def _runtime_imports():
@@ -93,9 +97,17 @@ class HuggingFaceOpenVlaRuntime:
         return path.resolve()
 
     def load(self, settings: OpenVlaVanillaSettings) -> OpenVlaCheckpointIdentity:
+        if self._model is not None or self._processor is not None:
+            raise OpenVlaLoadError("OpenVLA runtime may load model and processor only once")
         torch, snapshot_download, Image, AutoModel, AutoProcessor = self._runtime_imports()
         model_path = self._resolve(settings.model, snapshot_download, settings.local_files_only)
         processor_path = self._resolve(settings.processor_source, snapshot_download, settings.local_files_only)
+        artifact_metadata = None
+        if settings.runtime_artifact is not None:
+            try:
+                artifact_metadata = settings.runtime_artifact.verify(model_path)
+            except ValueError as exc:
+                raise OpenVlaCheckpointError(str(exc)) from exc
         dtype = {
             ModelDType.BFLOAT16: torch.bfloat16,
             ModelDType.FLOAT16: torch.float16,
@@ -105,6 +117,7 @@ class HuggingFaceOpenVlaRuntime:
             processor = AutoProcessor.from_pretrained(
                 str(processor_path), trust_remote_code=settings.trust_remote_code, local_files_only=True
             )
+            self.processor_load_count += 1
             kwargs = {
                 "torch_dtype": dtype,
                 "low_cpu_mem_usage": True,
@@ -114,6 +127,7 @@ class HuggingFaceOpenVlaRuntime:
             if settings.attention_implementation is not None:
                 kwargs["attn_implementation"] = settings.attention_implementation
             model = AutoModel.from_pretrained(str(model_path), **kwargs)
+            self.load_count += 1
             stats_file = model_path / "dataset_statistics.json"
             if stats_file.is_file():
                 model.norm_stats = json.loads(stats_file.read_text(encoding="utf-8"))
@@ -125,6 +139,12 @@ class HuggingFaceOpenVlaRuntime:
                 )
             model.eval()
             model.to(settings.device)
+            peft_names = tuple(name for name, _ in model.named_parameters() if "lora_" in name.lower())
+            if peft_names:
+                raise OpenVlaCheckpointError("full-weight runtime unexpectedly contains active LoRA parameters")
+            if bool(getattr(model, "is_loaded_in_4bit", False)) or bool(getattr(model, "is_loaded_in_8bit", False)):
+                raise OpenVlaCheckpointError("Gate D full-weight runtime must not be quantized")
+            total_parameter_count = sum(parameter.numel() for parameter in model.parameters())
         except OpenVlaCheckpointError:
             raise
         except Exception as exc:
@@ -132,6 +152,24 @@ class HuggingFaceOpenVlaRuntime:
             raise OpenVlaLoadError(f"failed to load local OpenVLA checkpoint {model_path}") from exc
         self._settings, self._model, self._processor, self._torch = settings, model, processor, torch
         self._Image = Image
+        self._runtime_metadata = {
+            "load_counts": {
+                "model": self.load_count,
+                "processor": self.processor_load_count,
+                "peft_adapter": self.peft_adapter_load_count,
+            },
+            "total_parameter_count": total_parameter_count,
+            "active_peft_adapter": False,
+            "runtime_peft_modules": False,
+            "quantized": False,
+            "inference_parameter_trainability": "irrelevant",
+            "timing_method": (
+                "time.perf_counter_ns around predict_action with torch.cuda.synchronize "
+                "before and after the model call when using CUDA"
+            ),
+        }
+        if artifact_metadata is not None:
+            self._runtime_metadata["runtime_artifact"] = artifact_metadata
         selected_stats = norm_stats[settings.unnorm_key]
         stats_hash = hashlib.sha256(
             json.dumps(selected_stats, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -164,6 +202,7 @@ class HuggingFaceOpenVlaRuntime:
             expected_checksum=settings.model.expected_checksum,
             settings_hash=settings.settings_hash,
             identity_strength=strength,
+            metadata=self._runtime_metadata,
         )
 
     def _synchronize(self) -> None:
@@ -183,6 +222,23 @@ class HuggingFaceOpenVlaRuntime:
             inputs = self._processor(prompt, pil_image)
             if "input_ids" not in inputs or "pixel_values" not in inputs:
                 raise OpenVlaPreprocessingError("processor output lacks input_ids or pixel_values")
+            input_shapes = {
+                str(key): tuple(int(size) for size in value.shape)
+                for key, value in inputs.items()
+                if hasattr(value, "shape")
+            }
+            input_dtypes = {
+                str(key): str(value.dtype)
+                for key, value in inputs.items()
+                if hasattr(value, "dtype")
+            }
+            input_fingerprints = {
+                str(key): hashlib.sha256(
+                    value.detach().cpu().contiguous().numpy().tobytes()
+                ).hexdigest()
+                for key, value in inputs.items()
+                if hasattr(value, "detach")
+            }
             dtype = {
                 ModelDType.BFLOAT16: self._torch.bfloat16,
                 ModelDType.FLOAT16: self._torch.float16,
@@ -208,14 +264,13 @@ class HuggingFaceOpenVlaRuntime:
             raise
         except Exception as exc:
             raise OpenVlaInferenceError("OpenVLA predict_action failed") from exc
-        shapes = {
-            str(key): tuple(int(size) for size in value.shape)
-            for key, value in inputs.items()
-            if hasattr(value, "shape")
-        }
         return RuntimePrediction(
             decoded, preprocess_end - preprocess_start, model_end - model_start,
-            {"processor_input_shapes": shapes},
+            {
+                "processor_input_shapes": input_shapes,
+                "processor_input_dtypes": input_dtypes,
+                "processor_input_sha256": input_fingerprints,
+            },
         )
 
     def reset_episode(self, seed: int) -> None:
@@ -224,3 +279,7 @@ class HuggingFaceOpenVlaRuntime:
 
     def close(self) -> None:
         self._model = self._processor = self._settings = self._torch = None
+        self._Image = None
+
+    def runtime_metadata(self) -> dict[str, object]:
+        return dict(self._runtime_metadata)

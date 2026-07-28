@@ -26,6 +26,7 @@ from ovlab_openvla_common import (
     OpenVlaObservationError,
     OpenVlaPromptFormatter,
     select_canonical_rgb,
+    OpenVlaMethodFamily,
 )
 from ovlab_policy_sdk import PolicyAdapter
 
@@ -35,6 +36,10 @@ from .settings import OpenVlaVanillaSettings
 
 
 class OpenVlaVanillaAdapter(PolicyAdapter):
+    component_name = "ovlab-openvla-vanilla"
+    policy_family = "openvla-vanilla"
+    required_method_family = OpenVlaMethodFamily.VANILLA
+
     def __init__(
         self,
         settings: OpenVlaVanillaSettings,
@@ -55,8 +60,15 @@ class OpenVlaVanillaAdapter(PolicyAdapter):
         self._prediction_index = 0
         self._identity = None
 
+    def _validate_method(self) -> None:
+        if self.settings.method_descriptor.family is not self.required_method_family:
+            raise ValueError(
+                f"{type(self).__name__} requires method family {self.required_method_family.value!r}"
+            )
+
     def _initialize(self, run_context: RunContext) -> PolicyCapabilities:
         del run_context
+        self._validate_method()
         self._identity = self._runtime.load(self.settings)
         image_spec = ImageObservationSpec(
             name=self.settings.canonical_camera_name,
@@ -66,15 +78,18 @@ class OpenVlaVanillaAdapter(PolicyAdapter):
             color_spaces=(ColorSpace.RGB,),
         )
         metadata = {
-            "policy_family": "openvla-vanilla",
+            "policy_family": self.policy_family,
+            "method_descriptor": self.settings.method_descriptor.as_metadata(),
             "prompt_template": self._formatter.identifier,
             "action_codec": self.settings.action_codec.identifier,
+            "action_codec_owner": type(self).__name__,
             "checkpoint_identity": self._identity.as_metadata(),
+            "runtime": self._runtime.runtime_metadata() if hasattr(self._runtime, "runtime_metadata") else {},
             "timing": "local preprocessing + model execution + target codec",
             "determinism": "greedy evaluation; bitwise GPU determinism is not claimed",
         }
         return PolicyCapabilities(
-            component_name="ovlab-openvla-vanilla",
+            component_name=self.component_name,
             component_version="0.1.0",
             contract_version=OVLAB_CONTRACT_VERSION,
             observation_requirements=ObservationRequirements(

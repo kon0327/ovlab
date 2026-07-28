@@ -4,7 +4,7 @@ kind: experiment
 experiment:
   id: libero10-openvla-lora-merged-rpc-smoke
   name: Merged OpenVLA-LoRA methodological reference on LIBERO-10 through local RPC
-  tags: [libero-10, lora, merged-full-weights, rpc, smoke, deprecated-alias]
+  tags: [libero-10, lora, merged-full-weights, rpc, smoke, methodological-reference]
 
 components:
   benchmark: benchmarks/libero/libero10-smoke.yaml

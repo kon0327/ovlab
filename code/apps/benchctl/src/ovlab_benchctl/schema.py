@@ -150,7 +150,10 @@ def validate_policy(doc, path):
         raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
         exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
         return
-    if doc["type"] != "openvla_vanilla": raise ConfigSchemaError(f"{path}.type supports only 'openvla_vanilla' or 'mock'")
+    if doc["type"] not in ("openvla_vanilla", "openvla_lora_merged"):
+        raise ConfigSchemaError(
+            f"{path}.type supports only 'openvla_vanilla', 'openvla_lora_merged', or 'mock'"
+        )
     settings = mapping(doc["settings"], f"{path}.settings", required=(
         "checkpoint_id", "processor_id", "unnorm_key", "input", "runtime", "action", "raw_output"))
     for key in ("checkpoint_id", "processor_id", "unnorm_key"):
@@ -257,10 +260,102 @@ def validate_registry(doc, path):
     if not isinstance(doc["repositories"], dict) or not doc["repositories"]:
         raise ConfigSchemaError(f"{path}.repositories must be a non-empty mapping")
     for resource_id, entry in doc["checkpoints"].items():
-        mapping(entry, f"{path}.checkpoints.{resource_id}", required=("repo_id", "expected_revision", "expected_sha256"))
-        non_empty_string(entry["repo_id"], f"{path}.checkpoints.{resource_id}.repo_id")
+        entry_path = f"{path}.checkpoints.{resource_id}"
+        mapping(
+            entry,
+            entry_path,
+            required=("repo_id", "expected_revision", "expected_sha256"),
+            optional=("artifact", "method"),
+        )
+        non_empty_string(entry["repo_id"], f"{entry_path}.repo_id")
         for key in ("expected_revision", "expected_sha256"):
-            if entry[key] is not None: exact_type(entry[key], str, f"{path}.checkpoints.{resource_id}.{key}")
+            if entry[key] is not None: exact_type(entry[key], str, f"{entry_path}.{key}")
+        if ("artifact" in entry) != ("method" in entry):
+            raise ConfigSchemaError(f"{entry_path}.artifact and method must be declared together")
+        if "artifact" not in entry:
+            continue
+        for key in ("expected_revision", "expected_sha256"):
+            non_empty_string(entry[key], f"{entry_path}.{key}")
+        if len(entry["expected_sha256"]) != 64 or any(
+            character not in "0123456789abcdef" for character in entry["expected_sha256"]
+        ):
+            raise ConfigSchemaError(f"{entry_path}.expected_sha256 must be a SHA-256 digest")
+        artifact = mapping(
+            entry["artifact"],
+            f"{entry_path}.artifact",
+            required=(
+                "form", "merge_status", "active_peft_adapter", "runtime_peft_modules",
+                "adapter_config", "adapter_recoverability", "files",
+            ),
+        )
+        enum(artifact["form"], ("merged_full_weights",), f"{entry_path}.artifact.form")
+        enum(artifact["merge_status"], ("merged",), f"{entry_path}.artifact.merge_status")
+        for key in ("active_peft_adapter", "runtime_peft_modules"):
+            exact_type(artifact[key], bool, f"{entry_path}.artifact.{key}")
+            if artifact[key]:
+                raise ConfigSchemaError(f"{entry_path}.artifact.{key} must be false for merged weights")
+        enum(
+            artifact["adapter_config"],
+            ("not_present_in_published_artifact",),
+            f"{entry_path}.artifact.adapter_config",
+        )
+        enum(
+            artifact["adapter_recoverability"],
+            ("not_recoverable_from_published_artifact",),
+            f"{entry_path}.artifact.adapter_recoverability",
+        )
+        exact_type(artifact["files"], dict, f"{entry_path}.artifact.files")
+        if not artifact["files"]:
+            raise ConfigSchemaError(f"{entry_path}.artifact.files must not be empty")
+        for name, item in artifact["files"].items():
+            file_path = f"{entry_path}.artifact.files.{name}"
+            non_empty_string(name, f"{file_path}.name")
+            mapping(item, file_path, required=("size", "sha256"))
+            exact_type(item["size"], int, f"{file_path}.size")
+            if item["size"] <= 0:
+                raise ConfigSchemaError(f"{file_path}.size must be positive")
+            non_empty_string(item["sha256"], f"{file_path}.sha256")
+            if len(item["sha256"]) != 64 or any(
+                character not in "0123456789abcdef" for character in item["sha256"]
+            ):
+                raise ConfigSchemaError(f"{file_path}.sha256 must be a SHA-256 digest")
+        method = mapping(
+            entry["method"],
+            f"{entry_path}.method",
+            required=(
+                "id", "version", "family", "declared_base_model", "declared_base_revision",
+                "adaptation_suite", "quantization", "lora", "training_provenance",
+            ),
+        )
+        for key in ("id", "version", "declared_base_model"):
+            non_empty_string(method[key], f"{entry_path}.method.{key}")
+        if method["declared_base_revision"] is not None:
+            non_empty_string(method["declared_base_revision"], f"{entry_path}.method.declared_base_revision")
+        enum(method["family"], ("lora",), f"{entry_path}.method.family")
+        enum(method["adaptation_suite"], ("LIBERO-10",), f"{entry_path}.method.adaptation_suite")
+        enum(method["quantization"], ("none",), f"{entry_path}.method.quantization")
+        lora = mapping(
+            method["lora"],
+            f"{entry_path}.method.lora",
+            required=(
+                "rank", "alpha", "scaling", "dropout", "bias", "target_policy",
+                "modules_to_save", "merge_procedure",
+            ),
+        )
+        for key in ("rank", "alpha"):
+            exact_type(lora[key], int, f"{entry_path}.method.lora.{key}")
+        for key in ("scaling", "dropout"):
+            number(lora[key], f"{entry_path}.method.lora.{key}")
+        enum(lora["bias"], ("none",), f"{entry_path}.method.lora.bias")
+        enum(lora["target_policy"], ("all-linear",), f"{entry_path}.method.lora.target_policy")
+        if lora["modules_to_save"] is not None:
+            raise ConfigSchemaError(f"{entry_path}.method.lora.modules_to_save must be null")
+        enum(
+            lora["merge_procedure"],
+            ("merge_and_unload()+save_pretrained()",),
+            f"{entry_path}.method.lora.merge_procedure",
+        )
+        exact_type(method["training_provenance"], dict, f"{entry_path}.method.training_provenance")
     for resource_id, entry in doc["repositories"].items():
         mapping(entry, f"{path}.repositories.{resource_id}", required=("path",))
         exact_type(entry["path"], str, f"{path}.repositories.{resource_id}.path")

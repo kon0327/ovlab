@@ -21,7 +21,8 @@ from ovlab_metrics import (
     GripperFlickerMetricConfig, RepeatedNoOpMetricConfig, SuccessRateMetricConfig,
 )
 from ovlab_openvla_common import (
-    LiberoActionCodecConfig, OpenVlaModelSource, action_specs_match,
+    LiberoActionCodecConfig, OpenVlaModelSource, OpenVlaRuntimeArtifact, action_specs_match,
+    method_descriptor_from_registry,
 )
 from ovlab_openvla_vanilla import (
     InferenceSynchronization, ModelDType, OpenVlaVanillaSettings,
@@ -155,10 +156,15 @@ class ConfigResolver:
         devices = dict(profile["devices"])
         resolved_checkpoints = {}
         for resource_id, entry in registry["checkpoints"].items():
-            resolved_checkpoints[resource_id] = {
+            resolved = {
                 "source": entry["repo_id"],
                 "expected_revision": entry["expected_revision"], "expected_sha256": entry["expected_sha256"],
             }
+            if "artifact" in entry:
+                resolved["artifact"] = deepcopy(entry["artifact"])
+                resolved["method"] = deepcopy(entry["method"])
+                resolved["repo_id"] = entry["repo_id"]
+            resolved_checkpoints[resource_id] = resolved
         resolved_repositories = {}
         for resource_id, entry in registry["repositories"].items():
             resolved_repositories[resource_id] = str(self._under(self.repository_root, entry["path"], f"repository {resource_id}"))
@@ -321,6 +327,34 @@ class ConfigResolver:
         except KeyError as exc: raise ConfigReferenceError(f"unknown device resource: {runtime['device_resource']}") from exc
         obs = benchmark_doc["settings"]["observation"]
         source = lambda item: OpenVlaModelSource(item["source"], item["expected_revision"], item["expected_sha256"])
+        method_descriptor = None
+        runtime_artifact = None
+        if doc["type"] == "openvla_lora_merged":
+            if settings["checkpoint_id"] != settings["processor_id"]:
+                raise ConfigCompatibilityError("merged LoRA model and processor resources must be identical")
+            if "artifact" not in model or "method" not in model:
+                raise ConfigCompatibilityError("merged LoRA policy requires registered artifact and method identity")
+            registry_entry = {
+                "repo_id": model["source"],
+                "expected_revision": model["expected_revision"],
+                "expected_sha256": model["expected_sha256"],
+                "artifact": model["artifact"],
+                "method": model["method"],
+            }
+            method_descriptor = method_descriptor_from_registry(registry_entry)
+            runtime_artifact = OpenVlaRuntimeArtifact.from_registry_entry(
+                settings["checkpoint_id"], registry_entry
+            )
+            if settings["unnorm_key"] != "libero_10":
+                raise ConfigCompatibilityError("official merged LoRA reference requires unnorm_key=libero_10")
+            if benchmark_doc["settings"]["suite"] != "libero_10":
+                raise ConfigCompatibilityError("merged LIBERO-10 LoRA is not a cross-suite acceptance policy")
+        elif "artifact" in model or "method" in model:
+            raise ConfigCompatibilityError("merged LoRA full weights cannot be classified as OpenVLA Vanilla")
+        kwargs = {}
+        if method_descriptor is not None:
+            kwargs["method_descriptor"] = method_descriptor
+            kwargs["runtime_artifact"] = runtime_artifact
         return OpenVlaVanillaSettings(
             source(model), settings["unnorm_key"], processor=source(processor),
             canonical_camera_name=settings["input"]["camera"], input_image_shape=(obs["height"], obs["width"], 3),
@@ -330,6 +364,7 @@ class ConfigResolver:
             target_action_spec=action_spec, action_codec=LiberoActionCodecConfig(),
             synchronization=InferenceSynchronization.IF_CUDA if runtime["synchronize_inference"] else InferenceSynchronization.NONE,
             record_raw_output=settings["raw_output"]["enabled"],
+            **kwargs,
         )
 
     @staticmethod

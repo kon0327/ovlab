@@ -127,3 +127,28 @@ def running_service(tmp_path):
     yield socket_path, thread
     thread.join(timeout=2)
 
+
+@pytest.fixture
+def running_method_service(tmp_path):
+    socket_path = tmp_path / "method.sock"
+
+    def with_method(capabilities):
+        identity = identity_provider(capabilities)
+        identity["method_descriptor"] = {
+            "family": "lora",
+            "artifact_form": "merged_full_weights",
+            "merge_status": "merged",
+            "active_peft_adapter": False,
+            "qp_profile": None,
+        }
+        return identity
+
+    service = PolicyService(socket_path, SevenDPolicy(), identity_provider=with_method)
+    thread = threading.Thread(target=service.serve, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while not socket_path.exists() and thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert socket_path.is_socket()
+    yield socket_path, thread
+    thread.join(timeout=2)

@@ -7,16 +7,26 @@ from .actions import (
     action_specs_match,
     libero_target_action_spec,
 )
+from .artifact import CheckpointFileIdentity, OpenVlaRuntimeArtifact
 from .errors import OpenVlaActionCodecError, OpenVlaCommonError, OpenVlaObservationError
 from .metadata import OpenVlaCheckpointIdentity
+from .method import (
+    OpenVlaArtifactForm,
+    OpenVlaMergeStatus,
+    OpenVlaMethodDescriptor,
+    OpenVlaMethodFamily,
+    method_descriptor_from_registry,
+    vanilla_base_method_descriptor,
+)
 from .observations import select_canonical_rgb
 from .prompt import OpenVlaPromptFormatter, OpenVlaPromptTemplate
 from .settings import OpenVlaModelSource
 
 __all__ = [
-    "LiberoActionCodec", "LiberoActionCodecConfig", "OpenVlaActionCodecError",
+    "CheckpointFileIdentity", "LiberoActionCodec", "LiberoActionCodecConfig", "OpenVlaActionCodecError",
+    "OpenVlaArtifactForm", "OpenVlaMergeStatus", "OpenVlaMethodDescriptor", "OpenVlaMethodFamily",
     "OpenVlaCheckpointIdentity", "OpenVlaCommonError", "OpenVlaDecodedAction",
-    "OpenVlaModelSource", "OpenVlaObservationError", "OpenVlaPromptFormatter",
+    "OpenVlaModelSource", "OpenVlaObservationError", "OpenVlaPromptFormatter", "OpenVlaRuntimeArtifact",
     "OpenVlaPromptTemplate", "action_specs_match", "libero_target_action_spec",
-    "select_canonical_rgb",
+    "method_descriptor_from_registry", "select_canonical_rgb", "vanilla_base_method_descriptor",
 ]

@@ -8,7 +8,7 @@ import pytest
 from ovlab_benchmarks.libero import LiberoAdapterSettings, LiberoRendererBackend
 from ovlab_core.contracts import GripperConvention
 from ovlab_metrics import ActionModificationMetricConfig, RepeatedNoOpMetricConfig
-from ovlab_openvla_common import action_specs_match
+from ovlab_openvla_common import OpenVlaArtifactForm, OpenVlaMethodFamily, action_specs_match
 from ovlab_openvla_vanilla import ModelDType, OpenVlaVanillaSettings
 from ovlab_benchctl import (
     ConfigCompatibilityError, ConfigReferenceError, ConfigResolver, ConfigSchemaError,
@@ -65,6 +65,7 @@ def test_every_versioned_component_is_schema_valid():
         "policies/mock/base.yaml": "policy",
         "policies/mock/libero-noop.yaml": "policy",
         "policies/openvla-vanilla/base.yaml": "policy",
+        "policies/openvla-lora/merged-libero10.yaml": "policy",
         "interfaces/actions/mock-delta-gripper-v1.yaml": "action_interface",
         "interfaces/actions/libero-osc-pose-v1.yaml": "action_interface",
         "metrics/action-safe-v1.yaml": "metric_set",
@@ -80,6 +81,7 @@ def test_every_versioned_component_is_schema_valid():
         "experiments/libero-mock-smoke.yaml": "experiment",
         "experiments/libero-vanilla-smoke.yaml": "experiment",
         "experiments/libero10-vanilla-rpc-smoke.yaml": "experiment",
+        "experiments/libero10-lora-merged-rpc-smoke.yaml": "experiment",
     }
     for reference, kind in components.items():
         document = resolver().load_component(reference, kind)
@@ -98,7 +100,9 @@ def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
     assert resolved.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.EGL
     assert resolved.benchmark_settings.renderer.device_id == 0
     assert resolved.policy_settings.model_dtype is ModelDType.BFLOAT16
-    assert resolved.policy_settings.unnorm_key == "libero_10"
+    assert resolved.policy_settings.unnorm_key == "bridge_orig"
+    assert resolved.policy_settings.model.source == "openvla/openvla-7b"
+    assert resolved.policy_settings.method_descriptor.family is OpenVlaMethodFamily.VANILLA
     assert resolved.policy_settings.canonical_camera_name == "camera.primary.rgb"
     assert resolved.action_spec.gripper_convention is GripperConvention.CLOSED_POSITIVE
     assert resolved.action_spec.units == ("normalized_command",) * 7
@@ -124,9 +128,9 @@ def test_mock_smoke_resolves_to_typed_runtime_settings(tmp_path):
     ).scientific_config_hash
 
 
-def test_rpc_smoke_is_aligned_to_libero10_full_weight_policy(tmp_path):
+def test_rpc_smoke_is_aligned_to_libero10_merged_lora_method(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/libero10-vanilla-rpc-smoke.yaml",
+        "configs/experiments/libero10-lora-merged-rpc-smoke.yaml",
         local_profile=profile(tmp_path),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},
@@ -139,6 +143,96 @@ def test_rpc_smoke_is_aligned_to_libero10_full_weight_policy(tmp_path):
     assert resolved.policy_settings.unnorm_key == "libero_10"
     assert resolved.policy_settings.model_dtype is ModelDType.BFLOAT16
     assert resolved.policy_settings.attention_implementation == "flash_attention_2"
+    method = resolved.policy_settings.method_descriptor
+    assert method.family is OpenVlaMethodFamily.LORA
+    assert method.artifact_form is OpenVlaArtifactForm.MERGED_FULL_WEIGHTS
+    assert method.merge_status.value == "merged"
+    assert not method.active_peft_adapter and not method.runtime_peft_modules
+    assert method.quantization == "none"
+    assert method.as_metadata()["qp_profile"] is None
+    assert resolved.policy_settings.runtime_artifact is not None
+
+
+def test_merged_lora_policy_rejects_cross_suite_acceptance(tmp_path):
+    root = copied_configs(tmp_path)
+    experiment = root / "experiments/libero10-lora-merged-rpc-smoke.yaml"
+    experiment.write_text(
+        experiment.read_text().replace(
+            "benchmarks/libero/libero10-smoke.yaml", "benchmarks/libero/spatial-smoke.yaml"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigCompatibilityError, match="cross-suite"):
+        ConfigResolver(root, repository_root=tmp_path).resolve(
+            experiment, local_profile=profile(tmp_path), environment={}
+        )
+
+
+def test_merged_weights_cannot_be_configured_as_vanilla(tmp_path):
+    root = copied_configs(tmp_path)
+    policy = root / "policies/openvla-lora/merged-libero10.yaml"
+    policy.write_text(policy.read_text().replace("openvla_lora_merged", "openvla_vanilla"), encoding="utf-8")
+    with pytest.raises(ConfigCompatibilityError, match="cannot be classified.*Vanilla"):
+        ConfigResolver(root, repository_root=tmp_path).resolve(
+            root / "experiments/libero10-lora-merged-rpc-smoke.yaml",
+            local_profile=profile(tmp_path),
+            environment={},
+        )
+
+
+@pytest.mark.parametrize("false_family", ["oft", "quic"])
+def test_merged_lora_registry_rejects_other_method_families(tmp_path, false_family):
+    root = copied_configs(tmp_path)
+    registry = root / "resources/registry.yaml"
+    registry.write_text(
+        registry.read_text().replace("family: lora", f"family: {false_family}"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigSchemaError, match="must be one of: lora"):
+        ConfigResolver(root, repository_root=tmp_path).load_component(
+            "resources/registry.yaml", "resource_registry"
+        )
+
+
+def test_merged_lora_registry_rejects_non_digest_checkpoint_identity(tmp_path):
+    root = copied_configs(tmp_path)
+    registry = root / "resources/registry.yaml"
+    registry.write_text(
+        registry.read_text().replace(
+            "33abee128d94d3bf54660b48c233c525f7969608924c58152602acca1b190eed",
+            "z" * 64,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigSchemaError, match="SHA-256"):
+        ConfigResolver(root, repository_root=tmp_path).load_component(
+            "resources/registry.yaml", "resource_registry"
+        )
+
+
+def test_method_identity_changes_scientific_hash_without_machine_path_leakage(tmp_path):
+    baseline = resolver().resolve(
+        "configs/experiments/libero10-lora-merged-rpc-smoke.yaml",
+        local_profile=profile(tmp_path),
+        environment={},
+    )
+    root = copied_configs(tmp_path)
+    registry = root / "resources/registry.yaml"
+    registry.write_text(
+        registry.read_text().replace('version: "1.0.0"', 'version: "1.0.1"', 1),
+        encoding="utf-8",
+    )
+    changed = ConfigResolver(root, repository_root=tmp_path).resolve(
+        root / "experiments/libero10-lora-merged-rpc-smoke.yaml",
+        local_profile=profile(tmp_path, suffix="b"),
+        environment={},
+    )
+    assert baseline.scientific_config_hash != changed.scientific_config_hash
+    baseline_scientific = json.dumps(
+        dict(baseline.scientific_config), default=lambda value: dict(value)
+    )
+    assert "machine-a" not in baseline_scientific
+    assert str(tmp_path) not in baseline_scientific
 
 
 def test_scientific_hash_excludes_local_profile_but_execution_hash_includes_it(tmp_path):

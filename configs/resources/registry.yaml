@@ -9,7 +9,65 @@ checkpoints:
   openvla-7b-finetuned-libero-10:
     repo_id: openvla/openvla-7b-finetuned-libero-10
     expected_revision: "80970322773f81baa2e22fe495d0487b93a05cfa"
-    expected_sha256: null
+    expected_sha256: "33abee128d94d3bf54660b48c233c525f7969608924c58152602acca1b190eed"
+    artifact:
+      form: merged_full_weights
+      merge_status: merged
+      active_peft_adapter: false
+      runtime_peft_modules: false
+      adapter_config: not_present_in_published_artifact
+      adapter_recoverability: not_recoverable_from_published_artifact
+      files:
+        config.json:
+          size: 3528
+          sha256: "f1119b0e0d6c93f10fbd0ad1996c3bff5a7bbb18040d8b2b828c69d302eacd4d"
+        model.safetensors.index.json:
+          size: 94764
+          sha256: "ca8b53fed8133ee2afcd2fc483de8febf7f5bb0f6bcb09f91189772e59e8f659"
+        model-00001-of-00004.safetensors:
+          size: 4925122448
+          sha256: "72f7196d8768c104073d7e9104ad8023cb27727191de1a490612886428b18c51"
+        model-00002-of-00004.safetensors:
+          size: 4947392496
+          sha256: "92a60a88c7dad2ba1fccc4acbebef98fc7a894891bc49f2e21cfbf1600daf413"
+        model-00003-of-00004.safetensors:
+          size: 4947417456
+          sha256: "12b45ae85535565148907e379d6f35bcba83b9497006ff3b66658fa412ffac85"
+        model-00004-of-00004.safetensors:
+          size: 262668432
+          sha256: "d3b8e759db56b86709c56f8d156952415dd64e101feccfd01e701487041dd8c1"
+    method:
+      id: openvla-lora-merged-libero10
+      version: "1.0.0"
+      family: lora
+      declared_base_model: openvla/openvla-7b
+      declared_base_revision: null
+      adaptation_suite: LIBERO-10
+      quantization: none
+      lora:
+        rank: 32
+        alpha: 16
+        scaling: 0.5
+        dropout: 0.0
+        bias: none
+        target_policy: all-linear
+        modules_to_save: null
+        merge_procedure: merge_and_unload()+save_pretrained()
+      training_provenance:
+        source_script: external/openvla/vla-scripts/finetune.py
+        source_commit: c8f03f48af692657d3060c19588038c7220e9af9
+        evidence: Pinned implementation plus official published artifact classification
+        suite: LIBERO-10
+        dataset_identity: unavailable
+        training_seed: unavailable
+        training_steps: unavailable
+        epochs: unavailable
+        batch_size: unavailable
+        gradient_accumulation_steps: unavailable
+        optimizer: AdamW implementation default; actual run setting unavailable
+        learning_rate_schedule: Constant implementation default; actual run setting unavailable
+        learning_rate: unavailable
+        precision: bfloat16
 
 repositories:
   libero:

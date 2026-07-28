@@ -1,4 +1,4 @@
-"""Gate C2-C5: real LIBERO-10 runner and isolated OpenVLA Vanilla service."""
+"""Gate D4-D5: LIBERO-10 runner and isolated merged OpenVLA-LoRA service."""
 
 from __future__ import annotations
 
@@ -28,13 +28,15 @@ from ovlab_metrics import EpisodeMetricPlugin, MetricEvaluator, MetricRegistry, 
 from ovlab_openvla_common import action_specs_match
 from ovlab_remote_policy import OwnedPolicyServiceProcess, RemotePolicyAdapter, UnixPolicyClient
 from ovlab_runner import (
-    ExperimentRunner,
+    ArtifactError, ExperimentRunner,
     FilesystemRunArtifactStore,
     ProvenanceSnapshot,
     StaticProvenanceProvider,
 )
 
-pytestmark = [pytest.mark.openvla, pytest.mark.libero, pytest.mark.gpu, pytest.mark.manual]
+pytestmark = [
+    pytest.mark.openvla, pytest.mark.libero, pytest.mark.lora, pytest.mark.gpu, pytest.mark.manual,
+]
 
 REPOSITORY = Path(__file__).resolve().parents[5]
 LIBERO_COMMIT = "8f1084e3132a39270c3a13ebe37270a43ece2a01"
@@ -48,7 +50,7 @@ TASK_ID = TaskId("libero/10/0")
 def _profile() -> Path:
     value = os.environ.get("OVLAB_LOCAL_PROFILE")
     if not value:
-        pytest.fail("Gate C requires OVLAB_LOCAL_PROFILE with local LIBERO and artifact paths")
+        pytest.fail("Gate D requires OVLAB_LOCAL_PROFILE with local LIBERO and artifact paths")
     path = Path(value).expanduser().resolve()
     if not path.is_file():
         pytest.fail(f"OVLAB_LOCAL_PROFILE does not exist: {path}")
@@ -67,13 +69,13 @@ def _service_process(socket_path: Path, log_path: Path) -> OwnedPolicyServicePro
         "openvla",
         "python",
         "-m",
-        "ovlab_remote_policy.openvla_service",
+        "ovlab_openvla_lora_merged.service",
         "--socket",
         str(socket_path),
-        "--checkpoint",
-        CHECKPOINT,
-        "--revision",
-        CHECKPOINT_REVISION,
+        "--registry",
+        str(REPOSITORY / "configs/resources/registry.yaml"),
+        "--resource-id",
+        "openvla-7b-finetuned-libero-10",
         "--unnorm-key",
         UNNORM_KEY,
         "--device",
@@ -88,18 +90,18 @@ def _service_process(socket_path: Path, log_path: Path) -> OwnedPolicyServicePro
         socket_path,
         log_path,
         environment={"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"},
-        startup_timeout_s=30,
+        startup_timeout_s=60,
         shutdown_timeout_s=15,
     )
 
 
 def test_one_bounded_libero10_rollout_over_isolated_rpc():
     if os.environ.get("OVLAB_RUN_LIBERO_INTEGRATION") != "1":
-        pytest.fail("Gate C is an explicit real test; set OVLAB_RUN_LIBERO_INTEGRATION=1")
+        pytest.fail("Gate D is an explicit real test; set OVLAB_RUN_LIBERO_INTEGRATION=1")
     assert os.environ.get("CONDA_DEFAULT_ENV") == "openvla-oft"
     assert "ovlab_openvla_oft" not in sys.modules
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "configs/experiments/libero10-vanilla-rpc-smoke.yaml",
+        "configs/experiments/libero10-lora-merged-rpc-smoke.yaml",
         local_profile=_profile(),
         execution_profile="profiles/libero-bench-egl.yaml",
     )
@@ -110,7 +112,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     assert os.environ.get("MUJOCO_EGL_DEVICE_ID") == str(renderer.device_id)
 
     unique = uuid.uuid4().hex
-    run_id = f"gate-c-rpc-{unique}"
+    run_id = f"gate-d-lora-merged-rpc-{unique}"
     service_root = Path(tempfile.mkdtemp(prefix=f"ovlab-{run_id}-", dir="/tmp"))
     os.chmod(service_root, 0o700)
     socket_path = service_root / "policy.sock"
@@ -132,7 +134,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     run = RunContext(
         RunId(run_id),
         1,
-        "bounded LIBERO-10 full-weight suite-finetuned OpenVLA RPC reference",
+        "bounded LIBERO-10 merged OpenVLA-LoRA methodological RPC reference",
         42,
     )
     plan = resolved.create_plan(run, (TASK_ID,))
@@ -159,7 +161,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
         report = runner.connect()
         assert report.compatibility_report.compatible
         assert report.compatibility_report.issues == ()
-        assert report.policy_name == "ovlab-openvla-vanilla"
+        assert report.policy_name == "ovlab-openvla-lora-merged"
         assert policy.capabilities.minimum_action_horizon == policy.capabilities.maximum_action_horizon == 1
         requirements = policy.capabilities.observation_requirements
         assert requirements.proprioception == ()
@@ -184,16 +186,34 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
         assert handshake["model_identity"]["configured_source"] == CHECKPOINT
         assert handshake["model_identity"]["snapshot_revision"] == CHECKPOINT_REVISION
         assert handshake["model_identity"]["openvla_git_commit"] == OPENVLA_COMMIT
+        assert handshake["model_identity"]["expected_checksum"] == (
+            "33abee128d94d3bf54660b48c233c525f7969608924c58152602acca1b190eed"
+        )
         assert handshake["normalization_identity"]["unnorm_key"] == UNNORM_KEY
         assert handshake["normalization_identity"]["action_statistics_identity"].startswith("sha256:")
         assert handshake["prompt_template_identity"] == "openvla-v1@1.0.0"
         codec = handshake["action_codec_identity"]
-        assert codec["conversion_owner"] == "OpenVlaVanillaAdapter"
+        assert codec["conversion_owner"] == "OpenVlaMergedLoraAdapter"
         assert codec["application_count"] == 1
         assert codec["output_gripper_convention"] == "closed_positive"
         assert handshake["runtime_versions"]["torch"] == "2.2.0"
         assert handshake["runtime_versions"]["transformers"] == "4.40.1"
         assert handshake["runtime_versions"]["flash_attn"] == "2.5.5"
+        method = handshake["method_descriptor"]
+        assert method["family"] == "lora"
+        assert method["artifact_form"] == "merged_full_weights"
+        assert method["merge_status"] == "merged"
+        assert method["active_peft_adapter"] is False
+        assert method["runtime_peft_modules"] is False
+        assert method["quantization"] == "none"
+        assert method["qp_profile"] is None
+        assert method["load_counts"] == {"model": 1, "processor": 1, "peft_adapter": 0}
+        assert method["total_runtime_parameter_count"] > 0
+        assert method["runtime_parameter_trainability"] == "irrelevant"
+        assert method["lora_configuration"]["rank"] == 32
+        assert method["lora_configuration"]["alpha"] == 16
+        assert method["lora_configuration"]["scaling"] == 0.5
+        assert method["lora_configuration"]["target_policy"] == "all-linear"
         runner.run()
     finally:
         runner.close()
@@ -236,6 +256,12 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
         for action in trace.executed_actions
     )
     assert all(action.metadata["closed_loop_step_duration_ns"] > 0 for action in trace.executed_actions)
+    assert all(observation.metadata == {} for observation in trace.observations)
+    assert all(observation.proprioception == () for observation in trace.observations)
+    assert all(
+        observation.images[0].metadata["transform"] == "rotate_180"
+        for observation in trace.observations
+    )
     success_signals = tuple(
         signal for signal in trace.evaluation_signals if signal.name == "benchmark.task_success"
     )
@@ -255,6 +281,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     assert remote_manifest["model_identity"]["snapshot_revision"] == CHECKPOINT_REVISION
     assert remote_manifest["normalization_identity"]["unnorm_key"] == UNNORM_KEY
     assert remote_manifest["transport"]["service_log"] == str(log_path)
+    assert remote_manifest["method_descriptor"] == handshake["method_descriptor"]
     assert started["scientific_config_hash"] == resolved.scientific_config_hash
     assert started["execution_config_hash"] == resolved.execution_config_hash
     assert started["runtime"]["benchmark"]["libero_renderer"]["resolved_backend"] == "egl"
@@ -264,3 +291,5 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     assert completed_renderer["detected_renderer"]["renderer"]
     assert completed["metadata"]["policy_runtime"]["remote_policy"]["model_identity"]["snapshot_revision"] == CHECKPOINT_REVISION
     assert completed["status"] == "completed" and completed["episode_count"] == 1
+    with pytest.raises(ArtifactError, match="already exists"):
+        store.write_episode_trace(run.run_id, trace)

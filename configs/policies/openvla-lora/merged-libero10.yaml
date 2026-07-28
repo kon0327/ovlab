@@ -1,11 +1,11 @@
 schema_version: "0.1.0"
 kind: policy
-type: openvla_vanilla
+type: openvla_lora_merged
 
 settings:
-  checkpoint_id: openvla-7b
-  processor_id: openvla-7b
-  unnorm_key: bridge_orig
+  checkpoint_id: openvla-7b-finetuned-libero-10
+  processor_id: openvla-7b-finetuned-libero-10
+  unnorm_key: libero_10
 
   input:
     camera: camera.primary.rgb

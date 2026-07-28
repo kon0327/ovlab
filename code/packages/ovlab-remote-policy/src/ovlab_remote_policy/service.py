@@ -105,7 +105,8 @@ class PolicyService:
                 "action_codec_identity", "runtime_versions",
             }
             missing = required_identity - set(identity)
-            unexpected = set(identity) - required_identity
+            optional_identity = {"method_descriptor"}
+            unexpected = set(identity) - required_identity - optional_identity
             if missing or unexpected:
                 raise RemotePolicyProtocolError(
                     f"service identity mismatch: missing={sorted(missing)}, unexpected={sorted(unexpected)}"
