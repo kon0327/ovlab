@@ -1,0 +1,69 @@
+schema_version: "0.1.0"
+kind: external_source_intake
+id: compound-peft-user-supplied-b024ba61
+
+source_path: external/compound-peft
+source_origin: user_supplied_archive
+source_revision_kind: content_hash
+upstream_git_revision: unavailable
+official_implementation_status: unverified
+relation_to_paper: claimed_by_readme_unverified
+scientific_oracle_status: false
+
+archive:
+  filename: compound-peft.tar.gz
+  sha256: b024ba61b852d83beec631b724489b3bc3055c4a883f2df0c05b6c9857103e9a
+  verification: user_supplied_identity_archive_not_available_for_local_recomputation
+  byte_size: unavailable
+  safety_inspection: unavailable_archive_already_extracted_by_user
+
+extracted_tree:
+  manifest_path: external/compound-peft.manifest.sha256
+  manifest_sha256: 8084213849149a47f9bf84dd0c9220b319faf7df8dba39cdef3894e85e00f845
+  manifest_format: sha256sum_sorted_dot_relative_paths
+  file_count: 130
+  generated_files_excluded:
+    - __pycache__
+    - "*.pyc"
+  links: absent
+  special_files: absent
+  git_metadata: absent
+  supplied_automated_tests: absent
+  divergence_classification: none_manifest_matches
+
+package:
+  name: peft
+  version: 0.12.1.dev0
+  license: Apache-2.0
+  license_path: external/compound-peft/peft/LICENSE
+  compound_tuner_lines: 721
+
+paper_identity:
+  title: "QuIC: Quantum-Inspired Compound Adapters for Parameter Efficient Fine-Tuning"
+  authors:
+    - Snehal Raj
+    - Brian Coyle
+  arxiv: "2502.06916"
+
+readme_citation:
+  title: "QuIC: Quantum-Inspired Compound Adapters with Dynamical Lie Algebra"
+  authors:
+    - Snehal Raj
+    - Luka Music
+    - Elham Kashefi
+  agrees_with_paper_identity: false
+
+validation:
+  static_python_compilation: passed
+  static_compilation_scope: syntax_only
+  cpu_characterization: deferred_missing_torch_peft_transformers_in_ovlab_tester
+  paper_equivalence: unvalidated
+  openvla_compatibility: unvalidated
+
+ownership:
+  snapshot_owner: OVLAB_root_repository
+  snapshot_git_state: root_worktree_untracked_content_snapshot_without_nested_git_metadata
+  backend_bridge_repository: external/openvla-quic
+  backend_bridge_base_revision: deab81fbe4035c3de2c2da3d63db966fe3361f82
+  backend_bridge_git_state: modified_uncommitted_gate_f_addendum
+  backend_bridge_python_content_sha256: 5068a544cf918bf19bceec6d879d56409eb602ec1c0d2c38f47b398988bc92ba

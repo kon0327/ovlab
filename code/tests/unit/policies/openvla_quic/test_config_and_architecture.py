@@ -45,6 +45,8 @@ def test_portable_descriptor_only_configuration_validates_without_external_impor
     assert document["descriptor_mode"] is True
     assert document["implementation_status"] == "skeleton"
     assert document["runtime_validated"] is False
+    assert document["training_validated"] is False
+    assert document["libero_validated"] is False
     assert document["compression_verified"] is False
     assert all(
         not (isinstance(value, str) and Path(value).is_absolute())
@@ -57,11 +59,25 @@ def test_portable_descriptor_only_configuration_validates_without_external_impor
 @pytest.mark.parametrize("variant", list(QuICVariant))
 def test_skeleton_configuration_rejects_runtime_or_compression_claims(variant):
     document = load(CONFIG_ROOT / CONFIGS[variant])
-    for field in ("runtime_validated", "compression_verified"):
+    for field in (
+        "runtime_validated", "training_validated", "libero_validated", "compression_verified"
+    ):
         mutation = deepcopy(document)
         mutation[field] = True
         with pytest.raises(ConfigSchemaError, match="cannot claim"):
             validate(mutation, "test", "quic_policy_descriptor")
+
+
+def test_source_availability_and_dense_materialization_cannot_cross_modes():
+    peft = load(CONFIG_ROOT / CONFIGS[QuICVariant.PEFT])
+    peft["source_import_status"] = "absent"
+    with pytest.raises(ConfigSchemaError, match="source_import_status"):
+        validate(peft, "test", "quic_policy_descriptor")
+
+    wc = load(CONFIG_ROOT / CONFIGS[QuICVariant.WC])
+    wc["semantics"]["dense_adapter_materialization_allowed"] = True
+    with pytest.raises(ConfigSchemaError, match="misclassifies QuIC-WC"):
+        validate(wc, "test", "quic_policy_descriptor")
 
 
 def test_configurations_cannot_alias_or_swap_peft_and_wc_semantics():
@@ -104,7 +120,7 @@ def test_quic_package_contains_only_wrapper_contract_layers():
     production_files = {path.name for path in (PACKAGE_ROOT / "src/ovlab_openvla_quic").glob("*.py")}
     assert production_files == {
         "__init__.py", "adapter.py", "config.py", "descriptors.py", "errors.py",
-        "provider.py", "registration.py", "service.py",
+        "provider.py", "registration.py", "service.py", "source.py",
     }
     source = "\n".join(
         path.read_text(encoding="utf-8")
@@ -134,4 +150,3 @@ def test_no_runnable_quic_experiment_was_added():
     )
     assert "quic-peft" not in experiment_text
     assert "quic-wc" not in experiment_text
-

@@ -45,6 +45,13 @@ def _implemented(variant: QuICVariant, profile: QuICProfileId = QuICProfileId.QP
     return replace(
         descriptor,
         implementation_status=QuICImplementationStatus.IMPLEMENTED,
+        source_import_status="present",
+        openvla_integration_status="implemented",
+        source_identity=(
+            descriptor.source_identity
+            if variant is QuICVariant.PEFT
+            else _available("wc-source@test")
+        ),
         profile=(
             QuICProfileDefinition(profile)
             if profile is QuICProfileId.QP0
@@ -79,7 +86,14 @@ def test_peft_is_published_adapter_efficiency_not_weight_compression():
     assert metadata["deployment_replaces_base_weights"] is False
     assert metadata["adaptation_type"] == "multiplicative_adapter"
     assert metadata["weight_compression"] is False
+    assert metadata["source_import_status"] == "present"
+    assert metadata["generic_compound_backend_status"] == "legacy_reference_available"
+    assert metadata["openvla_integration_status"] == "skeleton"
+    assert metadata["dense_adapter_materialization"] is True
+    assert metadata["complete_base_model_required"] is True
     assert metadata["runtime_validated"] is False
+    assert metadata["training_validated"] is False
+    assert metadata["libero_validated"] is False
     assert metadata["compression_verified"] is False
 
 
@@ -92,6 +106,9 @@ def test_wc_is_an_unvalidated_proposed_weight_compression_extension():
     assert metadata["deployment_replaces_selected_weights"] is True
     assert metadata["dense_runtime_reconstruction_allowed"] is False
     assert metadata["weight_compression"] is True
+    assert metadata["source_import_status"] == "absent"
+    assert metadata["generic_compound_backend_status"] == "not_applicable"
+    assert metadata["dense_adapter_materialization_allowed"] is False
     assert metadata["runtime_validated"] is False
     assert metadata["compression_verified"] is False
 

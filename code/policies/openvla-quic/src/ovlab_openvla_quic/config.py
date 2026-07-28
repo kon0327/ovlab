@@ -16,6 +16,9 @@ def descriptor_from_document(document: Mapping[str, object]):
     expected = descriptor.canonical_dict()
     checks = {
         "implementation_status": expected["implementation_status"],
+        "source_import_status": expected["source_import_status"],
+        "generic_compound_backend_status": expected["generic_compound_backend_status"],
+        "openvla_integration_status": expected["openvla_integration_status"],
         "published_method_relation": expected["published_method_relation"],
         "weight_compression": expected["weight_compression"],
     }
@@ -25,6 +28,8 @@ def descriptor_from_document(document: Mapping[str, object]):
     provider = document["external_provider"]
     if provider["source_commit"] != EXTERNAL_QUIC_COMMIT:
         raise QuICDescriptorError("external provider commit differs from pinned submodule")
-    if document["runtime_validated"] is not False or document["compression_verified"] is not False:
+    if any(document[name] is not False for name in (
+        "runtime_validated", "training_validated", "libero_validated", "compression_verified",
+    )):
         raise QuICDescriptorError("skeleton configuration cannot claim validation")
     return descriptor

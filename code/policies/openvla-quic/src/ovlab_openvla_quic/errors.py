@@ -34,3 +34,29 @@ class QuICImplementationUnavailableError(QuICError):
             f"from {source!r}; "
             f"status={status}; next implementation gate={next_gate}"
         )
+
+
+class QuICPEFTIntegrationIncompleteError(QuICImplementationUnavailableError):
+    """The legacy compound source exists, but no validated OpenVLA bridge exists."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "quic-peft",
+            "openvla_quic.ovlab_provider",
+            "legacy_reference_available_openvla_integration_skeleton",
+            "I",
+            "external/openvla-quic -> external/compound-peft",
+        )
+
+
+class QuICWCImplementationIncompleteError(QuICImplementationUnavailableError):
+    """QuIC-WC has neither a source backend nor a runtime implementation."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "quic-wc",
+            "openvla_quic.ovlab_provider",
+            "source_absent_implementation_skeleton",
+            "J",
+            "external/openvla-quic",
+        )

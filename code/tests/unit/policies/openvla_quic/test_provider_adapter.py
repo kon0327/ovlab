@@ -26,12 +26,14 @@ from ovlab_openvla_quic import (
     OpenVLAQuICWCAdapter,
     QuICImplementationStatus,
     QuICImplementationUnavailableError,
+    QuICPEFTIntegrationIncompleteError,
     QuICProfileDefinition,
     QuICProfileId,
     QuICProviderContractError,
     QuICProviderLoader,
     QuICProviderSpec,
     QuICVariant,
+    QuICWCImplementationIncompleteError,
     create_runtime_adapter,
     skeleton_descriptor,
 )
@@ -64,6 +66,13 @@ def _runtime_descriptor(variant: QuICVariant):
     return replace(
         skeleton_descriptor(variant),
         implementation_status=QuICImplementationStatus.IMPLEMENTED,
+        source_import_status="present",
+        openvla_integration_status="implemented",
+        source_identity=(
+            skeleton_descriptor(variant).source_identity
+            if variant is QuICVariant.PEFT
+            else _available("wc-source@test")
+        ),
         profile=QuICProfileDefinition(QuICProfileId.QP0),
         base_model_identity=_available("base@test"),
         artifact_identity=artifact,
@@ -279,25 +288,35 @@ class ExplodingTestLoader:
 
 
 @pytest.mark.parametrize(
-    ("variant", "adapter_type", "next_gate"),
+    ("variant", "adapter_type", "next_gate", "error_type", "status", "source"),
     (
-        (QuICVariant.PEFT, OpenVLAQuICPEFTAdapter, "I"),
-        (QuICVariant.WC, OpenVLAQuICWCAdapter, "J"),
+        (
+            QuICVariant.PEFT, OpenVLAQuICPEFTAdapter, "I",
+            QuICPEFTIntegrationIncompleteError,
+            "legacy_reference_available_openvla_integration_skeleton",
+            "external/openvla-quic -> external/compound-peft",
+        ),
+        (
+            QuICVariant.WC, OpenVLAQuICWCAdapter, "J",
+            QuICWCImplementationIncompleteError,
+            "source_absent_implementation_skeleton",
+            "external/openvla-quic",
+        ),
     ),
 )
 def test_skeleton_fails_typed_before_discovery_cuda_model_checkpoint_socket_or_trace(
-    tmp_path, variant, adapter_type, next_gate
+    tmp_path, variant, adapter_type, next_gate, error_type, status, source
 ):
     loader = ExplodingTestLoader()
     adapter = adapter_type(skeleton_descriptor(variant), provider_loader=loader)
     torch_before = {name for name in sys.modules if name == "torch" or name.startswith("torch.")}
     socket_path = tmp_path / "must-not-exist.sock"
-    with pytest.raises(QuICImplementationUnavailableError) as failure:
+    with pytest.raises(error_type) as failure:
         adapter.initialize(make_run_context())
     assert failure.value.variant == variant.value
     assert failure.value.expected_package == "openvla_quic.ovlab_provider"
-    assert failure.value.expected_source == "external/openvla-quic"
-    assert failure.value.implementation_status == "skeleton"
+    assert failure.value.expected_source == source
+    assert failure.value.implementation_status == status
     assert failure.value.next_implementation_gate == next_gate
     assert loader.calls == 0
     assert adapter.state is AdapterState.CREATED
@@ -306,7 +325,7 @@ def test_skeleton_fails_typed_before_discovery_cuda_model_checkpoint_socket_or_t
         name for name in sys.modules if name == "torch" or name.startswith("torch.")
     }
 
-    with pytest.raises(QuICImplementationUnavailableError):
+    with pytest.raises(error_type):
         create_runtime_adapter(skeleton_descriptor(variant))
 
 

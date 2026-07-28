@@ -6,7 +6,12 @@ mode: peft
 family: openvla_quic
 descriptor_mode: true
 implementation_status: skeleton
+source_import_status: present
+generic_compound_backend_status: legacy_reference_available
+openvla_integration_status: skeleton
 runtime_validated: false
+training_validated: false
+libero_validated: false
 compression_verified: false
 published_method_relation: direct
 weight_compression: false
@@ -29,6 +34,22 @@ external_provider:
   api_version: "1.0.0"
   source_repository: external/openvla-quic
   source_commit: deab81fbe4035c3de2c2da3d63db966fe3361f82
+
+source:
+  availability: available
+  path: external/compound-peft
+  source_origin: user_supplied_archive
+  source_revision_kind: content_hash
+  archive_sha256: b024ba61b852d83beec631b724489b3bc3055c4a883f2df0c05b6c9857103e9a
+  archive_verification: user_supplied_archive_not_locally_available
+  extracted_manifest_sha256: 8084213849149a47f9bf84dd0c9220b319faf7df8dba39cdef3894e85e00f845
+  file_count: 130
+  upstream_git_revision: unavailable
+  official_implementation_status: unverified
+  relation_to_paper: claimed_by_readme_unverified
+  scientific_oracle_status: false
+  package_version: 0.12.1.dev0
+  license: Apache-2.0
 
 base_model:
   availability: unavailable
@@ -77,3 +98,5 @@ semantics:
   adaptation_type: multiplicative_adapter
   published_adapter_efficiency_only: true
   standalone_weight_compression: false
+  dense_adapter_materialization: true
+  complete_base_model_required: true

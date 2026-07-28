@@ -18,8 +18,8 @@ Production dependency direction is strictly:
 OVLAB wrapper -> openvla_quic.ovlab_provider -> external QuIC implementation
 ```
 
-`external/openvla-quic` must never import OVLAB internals. Its future public
-provider returns JSON-compatible descriptions and NumPy action arrays through
+`external/openvla-quic` never imports OVLAB internals. Its public provider bones
+return JSON-compatible descriptions and will eventually return NumPy actions through
 these operations:
 
 - `api_version()`
@@ -49,6 +49,60 @@ reconstruction. Provenance remains separate from artifact identity. All model
 layers, compound matrices, factorization, injection, conversion, kernels,
 training, and inference stay external.
 
+The two external paths are deliberately separate:
+
+```text
+QuIC-PEFT provider -> compound_peft_bridge -> external/compound-peft
+QuIC-WC provider   -> independent WC skeleton
+```
+
+The WC module does not import the compound-PEFT bridge and cannot inherit its
+dense adapter forward path.
+
+## User-supplied compound-PEFT source
+
+`external/compound-peft` is an immutable user-supplied snapshot, not official
+author-published code and not a scientific oracle. It has no Git revision. Its
+identity is the extracted manifest SHA-256
+`8084213849149a47f9bf84dd0c9220b319faf7df8dba39cdef3894e85e00f845`;
+the user-declared archive SHA-256 is
+`b024ba61b852d83beec631b724489b3bc3055c4a883f2df0c05b6c9857103e9a`.
+The archive itself was not available locally, so its byte size and safety
+inspection remain unavailable rather than guessed.
+
+The 130-file Apache-2.0 snapshot contains PEFT `0.12.1.dev0`,
+`PeftType.COMPOUND`, `CompoundConfig`, `CompoundModel`, and Linear/Conv2d
+wrappers. It supplied no automated tests. Static in-memory compilation proves
+syntax only. The dependency-light tester contains no Torch, Transformers, or
+PEFT, so numerical CPU characterization is deferred to Gate I without changing
+an accepted environment.
+
+The source README citation differs from the paper identity used by OVLAB. OVLAB
+records *QuIC: Quantum-Inspired Compound Adapters for Parameter Efficient
+Fine-Tuning*, Snehal Raj and Brian Coyle, arXiv:2502.06916. It does not copy the
+README BibTeX as scientific provenance.
+
+## Legacy configuration translation
+
+Raw source fields are preserved beside canonical fields. In particular,
+legacy `r` maps to `canonical.num_blocks`; it is not a LoRA rank. The block
+dimension is derived from `target_output_dimension / num_blocks`, and no direct
+equivalence between `r` and the paper's `b` is asserted. `comp_1`, `comp_2`, and
+`comp_3` are the only supported orders.
+
+The bridge also records mappings for compound operation, block sharing,
+orthogonality enforcement, adapter-chain length/composition, learnable scaling,
+and offset blocks. Permanent/max/average operations, multi-adapter chaining,
+additive composition, learnable scaling, and offset blocks remain implementation
+extensions unless separately validated against the paper.
+
+Known limitations are explicit: the paper formulation assumes square matrices;
+rectangular OpenVLA projections and target placement are unverified; the legacy
+forward constructs a dense adapter; determinants are promoted to float32; and
+merge/unmerge, checkpoint round-trip, and paper/forward/merged numerical
+equivalence are implemented or claimed but unvalidated. Dense materialization is
+permitted only for the PEFT reference and is forbidden for WC.
+
 ## QP profiles
 
 QP0 means no active QuIC transformation. QP1 through QP4 denote increasing
@@ -61,9 +115,12 @@ It is unrelated to OpenVLA-OFT, where OFT means **Optimized Fine-Tuning**.
 
 ## Gate boundary
 
-Gate F proves descriptor, validation, hashing, capability, lifecycle, and failure
-contracts only. Both variants report `implementation_status: skeleton`,
-`runtime_validated: false`, and `compression_verified: false`. Loading fails with
-`QuICImplementationUnavailableError` before provider discovery, CUDA, checkpoints,
-socket readiness, or trace creation. It provides no evidence of correctness,
-compression, latency, throughput, memory savings, or benchmark performance.
+Gate F proves source intake, descriptor, validation, hashing, capability,
+lifecycle, and failure contracts only. QuIC-PEFT reports source present and a
+legacy reference backend available, but its OpenVLA integration remains a
+skeleton. It raises `QuICPEFTIntegrationIncompleteError`. QuIC-WC has no source
+and raises `QuICWCImplementationIncompleteError`. Both fail before provider
+discovery, CUDA, checkpoints, socket readiness, or trace creation, and report
+runtime/compression validation as false. Gate F provides no evidence of paper
+equivalence, OpenVLA correctness, compression, latency, throughput, memory
+savings, or benchmark performance.

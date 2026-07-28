@@ -11,7 +11,13 @@ import re
 
 from ovlab_core.contracts import Metadata, normalize_metadata
 
-from .errors import QuICDescriptorError, QuICImplementationUnavailableError
+from .errors import (
+    QuICDescriptorError,
+    QuICImplementationUnavailableError,
+    QuICPEFTIntegrationIncompleteError,
+    QuICWCImplementationIncompleteError,
+)
+from .source import compound_peft_source_identity
 
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _GIT_REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -287,8 +293,16 @@ class QuICMethodDescriptor:
     profile: QuICProfileDefinition
     placement: QuICPlacementManifest
     provider: QuICProviderSpec = field(default_factory=QuICProviderSpec)
+    source_import_status: str = "absent"
+    generic_compound_backend_status: str = "not_applicable"
+    openvla_integration_status: str = "skeleton"
     runtime_validated: bool = False
+    training_validated: bool = False
+    libero_validated: bool = False
     compression_verified: bool = False
+    source_identity: Metadata = field(default_factory=lambda: {
+        "availability": "unavailable", "reason": "no external source backend is registered"
+    })
     base_model_identity: Metadata = field(default_factory=lambda: {
         "availability": "unavailable", "reason": "not selected in Gate F"
     })
@@ -320,11 +334,24 @@ class QuICMethodDescriptor:
             raise QuICDescriptorError("variant and implementation status must be typed enums")
         if not isinstance(self.display_name, str) or not self.display_name.strip():
             raise QuICDescriptorError("display name must be non-empty")
-        if type(self.runtime_validated) is not bool or type(self.compression_verified) is not bool:
-            raise QuICDescriptorError("runtime/compression validation flags must be boolean")
+        for name in ("runtime_validated", "training_validated", "libero_validated", "compression_verified"):
+            if type(getattr(self, name)) is not bool:
+                raise QuICDescriptorError(f"{name} must be boolean")
         if self.implementation_status is QuICImplementationStatus.SKELETON:
-            if self.runtime_validated or self.compression_verified:
-                raise QuICDescriptorError("skeleton methods cannot claim runtime or compression validation")
+            if any((self.runtime_validated, self.training_validated, self.libero_validated, self.compression_verified)):
+                raise QuICDescriptorError("skeleton methods cannot claim validation or verified compression")
+        if self.source_import_status not in {"present", "absent"}:
+            raise QuICDescriptorError("source_import_status must be present or absent")
+        if self.openvla_integration_status not in {"skeleton", "implemented"}:
+            raise QuICDescriptorError("OpenVLA integration status must be skeleton or implemented")
+        if self.variant is QuICVariant.PEFT:
+            if self.source_import_status != "present":
+                raise QuICDescriptorError("QuIC-PEFT requires the registered legacy source intake")
+            if self.generic_compound_backend_status != "legacy_reference_available":
+                raise QuICDescriptorError("QuIC-PEFT generic backend must be a legacy reference")
+        elif self.implementation_status is QuICImplementationStatus.SKELETON:
+            if self.source_import_status != "absent" or self.generic_compound_backend_status != "not_applicable":
+                raise QuICDescriptorError("Gate F QuIC-WC must not reuse the compound-PEFT source")
         unavailable = tuple(self.unavailable_fields)
         if not unavailable or len(unavailable) != len(set(unavailable)):
             raise QuICDescriptorError("unavailable_fields must explicitly list unique unavailable evidence")
@@ -336,7 +363,7 @@ class QuICMethodDescriptor:
         if self.variant is QuICVariant.PEFT and self.compression_verified:
             raise QuICDescriptorError("QuIC-PEFT must not claim complete-model weight compression")
         for name in (
-            "base_model_identity", "artifact_identity", "provenance_identity",
+            "source_identity", "base_model_identity", "artifact_identity", "provenance_identity",
             "deployment_state", "capability_identity", "normalization_identity", "parameterization",
         ):
             value = dict(getattr(self, name))
@@ -400,6 +427,10 @@ class QuICMethodDescriptor:
         return "direct" if self.variant is QuICVariant.PEFT else "proposed_extension"
 
     def require_runtime_ready(self) -> None:
+        if self.variant is QuICVariant.PEFT and self.openvla_integration_status != "implemented":
+            raise QuICPEFTIntegrationIncompleteError()
+        if self.variant is QuICVariant.WC and self.implementation_status is not QuICImplementationStatus.IMPLEMENTED:
+            raise QuICWCImplementationIncompleteError()
         if self.implementation_status is not QuICImplementationStatus.IMPLEMENTED:
             raise QuICImplementationUnavailableError(
                 self.variant.value, self.provider.package,
@@ -408,7 +439,7 @@ class QuICMethodDescriptor:
             )
         self.profile.require_runtime_ready(self.variant)
         required = (
-            self.base_model_identity, self.artifact_identity, self.provenance_identity,
+            self.source_identity, self.base_model_identity, self.artifact_identity, self.provenance_identity,
             self.deployment_state, self.capability_identity, self.normalization_identity,
             self.parameterization,
         )
@@ -425,12 +456,18 @@ class QuICMethodDescriptor:
             "mode": self.variant.mode,
             "display_name": self.display_name,
             "implementation_status": self.implementation_status.value,
+            "source_import_status": self.source_import_status,
+            "generic_compound_backend_status": self.generic_compound_backend_status,
+            "openvla_integration_status": self.openvla_integration_status,
             "runtime_validated": self.runtime_validated,
+            "training_validated": self.training_validated,
+            "libero_validated": self.libero_validated,
             "compression_verified": self.compression_verified,
             "published_method_relation": self.published_method_relation,
             "provider": self.provider.as_metadata(),
             "profile": self.profile.as_metadata(),
             "placement_manifest": self.placement.as_metadata(),
+            "source_identity": self.source_identity,
             "base_model_identity": self.base_model_identity,
             "artifact_identity": self.artifact_identity,
             "artifact_form": self.artifact_identity.get("form", "unavailable"),
@@ -453,6 +490,8 @@ class QuICMethodDescriptor:
                 "deployment_replaces_base_weights": False,
                 "adaptation_type": "multiplicative_adapter",
                 "weight_compression": False,
+                "dense_adapter_materialization": True,
+                "complete_base_model_required": True,
             })
         else:
             common.update({
@@ -461,6 +500,7 @@ class QuICMethodDescriptor:
                 "deployment_replaces_selected_weights": True,
                 "weight_compression": True,
                 "dense_runtime_reconstruction_allowed": False,
+                "dense_adapter_materialization_allowed": False,
             })
         return _plain(common)
 
@@ -499,6 +539,16 @@ def skeleton_descriptor(variant: QuICVariant, profile: QuICProfileId = QuICProfi
         variant=variant,
         display_name="QuIC-PEFT" if variant is QuICVariant.PEFT else "QuIC-WC",
         implementation_status=QuICImplementationStatus.SKELETON,
+        source_import_status="present" if variant is QuICVariant.PEFT else "absent",
+        generic_compound_backend_status=(
+            "legacy_reference_available" if variant is QuICVariant.PEFT else "not_applicable"
+        ),
+        openvla_integration_status="skeleton",
+        source_identity=(
+            compound_peft_source_identity()
+            if variant is QuICVariant.PEFT
+            else {"availability": "unavailable", "reason": "QuIC-WC source is absent in Gate F"}
+        ),
         profile=QuICProfileDefinition(profile),
         placement=QuICPlacementManifest("unresolved"),
         accounting=QuICPEFTAccounting() if variant is QuICVariant.PEFT else QuICWCAccounting(),

@@ -6,7 +6,12 @@ mode: wc
 family: openvla_quic
 descriptor_mode: true
 implementation_status: skeleton
+source_import_status: absent
+generic_compound_backend_status: not_applicable
+openvla_integration_status: skeleton
 runtime_validated: false
+training_validated: false
+libero_validated: false
 compression_verified: false
 published_method_relation: proposed_extension
 weight_compression: true
@@ -29,6 +34,10 @@ external_provider:
   api_version: "1.0.0"
   source_repository: external/openvla-quic
   source_commit: deab81fbe4035c3de2c2da3d63db966fe3361f82
+
+source:
+  availability: unavailable
+  reason: QuIC-WC has no source backend or artifact in Gate F
 
 base_model:
   availability: unavailable
@@ -76,4 +85,5 @@ semantics:
   requires_replaced_dense_weights_at_deployment: false
   deployment_replaces_selected_weights: true
   dense_runtime_reconstruction_allowed: false
+  dense_adapter_materialization_allowed: false
   factorization_family: unselected
