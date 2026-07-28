@@ -1,0 +1,79 @@
+schema_version: "0.1.0"
+kind: quic_policy_descriptor
+id: quic-wc
+variant: quic-wc
+mode: wc
+family: openvla_quic
+descriptor_mode: true
+implementation_status: skeleton
+runtime_validated: false
+compression_verified: false
+published_method_relation: proposed_extension
+weight_compression: true
+
+profile:
+  id: QP0
+  definition_availability: not_applicable
+  definition_version: null
+  definition_hash: null
+
+placement_manifest:
+  availability: unresolved
+  version: null
+  hash: null
+  entries: []
+
+external_provider:
+  package: openvla_quic.ovlab_provider
+  api_name: ovlab-quic-provider
+  api_version: "1.0.0"
+  source_repository: external/openvla-quic
+  source_commit: deab81fbe4035c3de2c2da3d63db966fe3361f82
+
+base_model:
+  availability: unavailable
+  reason: source dense OpenVLA identity is not selected in Gate F
+artifact:
+  availability: unavailable
+  reason: no compact QuIC-WC artifact exists in Gate F
+provenance:
+  availability: unavailable
+  reason: no dense-to-factor conversion run or source configuration exists in Gate F
+deployment_state:
+  availability: unavailable
+  reason: no replacement artifact exists and dense-source absence has not been verified
+capabilities:
+  availability: unavailable
+  reason: the future external provider must declare concrete observation and action capabilities
+normalization:
+  availability: unavailable
+  reason: no concrete policy or training suite is selected
+parameterization:
+  availability: unavailable
+  reason: Householder, Givens, Kronecker and tensor-train alternatives remain unselected
+accounting:
+  availability: unavailable
+  reason: replaced dense, compact factor, remainder and deployed totals have not been measured
+
+unavailable_fields:
+  - base_model_revision
+  - artifact_revision
+  - artifact_hash
+  - provenance
+  - deployment_state
+  - profile_definition
+  - placement_manifest
+  - capabilities
+  - normalization
+  - parameter_counts
+  - artifact_bytes
+  - runtime_kernel
+  - measured_latency
+  - measured_compression
+
+semantics:
+  requires_dense_source_for_conversion: configurable
+  requires_replaced_dense_weights_at_deployment: false
+  deployment_replaces_selected_weights: true
+  dense_runtime_reconstruction_allowed: false
+  factorization_family: unselected

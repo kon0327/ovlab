@@ -36,7 +36,7 @@ def test_artifact_verification_accepts_huggingface_style_blob_symlinks(tmp_path:
         "parallel_decoding": True, "action_representation": "continuous", "objective": "l1_regression",
         "action_chunk_size": 8, "action_dimension": 7, "normalization": "bounds_q99",
         "image_inputs": 2, "proprioception_dimension": 8, "film": False, "diffusion": False,
-        "quantization": "none", "qp_classification": "absent", "adaptation_suite": "LIBERO-10",
+        "quantization": "none", "adaptation_suite": "LIBERO-10",
         "dataset_identity": "libero_10_no_noops",
     }
     artifact = OpenVlaOftArtifact(

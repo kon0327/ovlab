@@ -1,0 +1,79 @@
+schema_version: "0.1.0"
+kind: quic_policy_descriptor
+id: quic-peft
+variant: quic-peft
+mode: peft
+family: openvla_quic
+descriptor_mode: true
+implementation_status: skeleton
+runtime_validated: false
+compression_verified: false
+published_method_relation: direct
+weight_compression: false
+
+profile:
+  id: QP0
+  definition_availability: not_applicable
+  definition_version: null
+  definition_hash: null
+
+placement_manifest:
+  availability: unresolved
+  version: null
+  hash: null
+  entries: []
+
+external_provider:
+  package: openvla_quic.ovlab_provider
+  api_name: ovlab-quic-provider
+  api_version: "1.0.0"
+  source_repository: external/openvla-quic
+  source_commit: deab81fbe4035c3de2c2da3d63db966fe3361f82
+
+base_model:
+  availability: unavailable
+  reason: immutable base OpenVLA identity is not selected in Gate F
+artifact:
+  availability: unavailable
+  reason: no QuIC adapter artifact exists in Gate F
+provenance:
+  availability: unavailable
+  reason: no QuIC-PEFT training run or source configuration exists in Gate F
+deployment_state:
+  availability: unavailable
+  reason: no active adapter or merge state exists before a runtime artifact is implemented
+capabilities:
+  availability: unavailable
+  reason: the future external provider must declare concrete observation and action capabilities
+normalization:
+  availability: unavailable
+  reason: no concrete policy or training suite is selected
+parameterization:
+  availability: unavailable
+  reason: no compound order, block size, targets or placement are selected
+accounting:
+  availability: unavailable
+  reason: base, adapter, trainable and runtime totals have not been measured
+
+unavailable_fields:
+  - base_model_revision
+  - artifact_revision
+  - artifact_hash
+  - provenance
+  - deployment_state
+  - profile_definition
+  - placement_manifest
+  - capabilities
+  - normalization
+  - parameter_counts
+  - artifact_bytes
+  - runtime_kernel
+  - measured_latency
+  - measured_compression
+
+semantics:
+  requires_base_model: true
+  deployment_replaces_base_weights: false
+  adaptation_type: multiplicative_adapter
+  published_adapter_efficiency_only: true
+  standalone_weight_compression: false

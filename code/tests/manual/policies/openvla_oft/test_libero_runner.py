@@ -204,7 +204,7 @@ def test_one_native_open_loop_chunk_rollout_over_isolated_rpc():
         assert method["family"] == "openvla_oft" and method["acronym_expansion"] == "optimized_fine_tuning"
         assert method["runtime_active_adapter"] is False and method["backbone_merge_status"] == "merged"
         assert method["film"] is method["diffusion"] is False and method["quantization"] == "none"
-        assert method["qp_classification"] == "absent"
+        assert not any(key.lower().startswith("qp") for key in method)
         assert method["load_counts"] == {
             "backbone": 1, "processor": 1, "published_peft_adapter": 0,
             "action_head": 1, "proprio_projector": 1,

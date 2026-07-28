@@ -57,7 +57,7 @@ def test_registered_identity_is_merged_lora_not_vanilla_or_qp():
     assert metadata["active_peft_adapter"] is False
     assert metadata["runtime_peft_modules"] is False
     assert metadata["quantization"] == "none"
-    assert metadata["qp_profile"] is None
+    assert not any(key.lower().startswith("qp") for key in metadata)
     assert metadata["lora_configuration"] == {
         "alpha": 16,
         "bias": "none",

@@ -98,7 +98,10 @@ def test_merged_lora_matches_accepted_autoclass_inference_path():
         assert runtime.runtime_metadata()["quantized"] is False
         assert capabilities.metadata["method_descriptor"]["family"] == "lora"
         assert capabilities.metadata["method_descriptor"]["merge_status"] == "merged"
-        assert capabilities.metadata["method_descriptor"]["qp_profile"] is None
+        assert not any(
+            key.lower().startswith("qp")
+            for key in capabilities.metadata["method_descriptor"]
+        )
 
         prompt = OpenVlaPromptFormatter().format(observation.instruction.text)
         assert prompt == f"In: What action should the robot take to {instruction.lower()}?\nOut:"

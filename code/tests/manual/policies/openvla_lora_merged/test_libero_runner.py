@@ -206,7 +206,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
         assert method["active_peft_adapter"] is False
         assert method["runtime_peft_modules"] is False
         assert method["quantization"] == "none"
-        assert method["qp_profile"] is None
+        assert not any(key.lower().startswith("qp") for key in method)
         assert method["load_counts"] == {"model": 1, "processor": 1, "peft_adapter": 0}
         assert method["total_runtime_parameter_count"] > 0
         assert method["runtime_parameter_trainability"] == "irrelevant"

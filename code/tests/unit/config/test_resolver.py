@@ -149,7 +149,7 @@ def test_rpc_smoke_is_aligned_to_libero10_merged_lora_method(tmp_path):
     assert method.merge_status.value == "merged"
     assert not method.active_peft_adapter and not method.runtime_peft_modules
     assert method.quantization == "none"
-    assert method.as_metadata()["qp_profile"] is None
+    assert not any(key.lower().startswith("qp") for key in method.as_metadata())
     assert resolved.policy_settings.runtime_artifact is not None
 
 

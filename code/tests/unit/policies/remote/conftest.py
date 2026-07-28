@@ -139,7 +139,6 @@ def running_method_service(tmp_path):
             "artifact_form": "merged_full_weights",
             "merge_status": "merged",
             "active_peft_adapter": False,
-            "qp_profile": None,
         }
         return identity
 

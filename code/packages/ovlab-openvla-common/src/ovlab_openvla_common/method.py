@@ -143,7 +143,6 @@ class OpenVlaMethodDescriptor:
     def as_metadata(self) -> dict[str, object]:
         result = self.canonical_dict()
         result["identity_hash"] = self.identity_hash
-        result["qp_profile"] = None
         return result
 
 

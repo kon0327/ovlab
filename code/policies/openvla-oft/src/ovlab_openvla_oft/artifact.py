@@ -123,12 +123,13 @@ def validate_oft_method(method: dict[str, object]) -> None:
         "parallel_decoding": True, "action_representation": "continuous",
         "objective": "l1_regression", "action_chunk_size": 8, "action_dimension": 7,
         "normalization": "bounds_q99", "image_inputs": 2, "proprioception_dimension": 8,
-        "film": False, "diffusion": False, "quantization": "none", "qp_classification": "absent",
+        "film": False, "diffusion": False, "quantization": "none",
         "adaptation_suite": "LIBERO-10", "dataset_identity": "libero_10_no_noops",
     }
     mismatches = {key: (method.get(key), value) for key, value in expected.items() if method.get(key) != value}
     if mismatches:
         raise ValueError(f"invalid OpenVLA-OFT methodological classification: {mismatches}")
-    forbidden = {"plain_lora", "oft_plus", "quic", "qp_profile"} & set(method)
+    forbidden = {"plain_lora", "oft_plus", "quic"} & set(method)
+    forbidden |= {key for key in method if key.lower().startswith("qp")}
     if forbidden:
         raise ValueError(f"OFT method contains forbidden classifications: {sorted(forbidden)}")

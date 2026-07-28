@@ -190,7 +190,6 @@ checkpoints:
       film: false
       diffusion: false
       quantization: none
-      qp_classification: absent
       adaptation_suite: LIBERO-10
       dataset_identity: libero_10_no_noops
       training_step: 150000

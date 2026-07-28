@@ -332,7 +332,7 @@ def validate_registry(doc, path):
                 "declared_base_model", "declared_base_revision", "artifact_form", "backbone_merge_status",
                 "runtime_active_adapter", "parallel_decoding", "action_representation", "objective",
                 "action_chunk_size", "action_dimension", "normalization", "image_inputs",
-                "proprioception_dimension", "film", "diffusion", "quantization", "qp_classification",
+                "proprioception_dimension", "film", "diffusion", "quantization",
                 "adaptation_suite", "dataset_identity", "training_step", "lora", "training_provenance",
             ))
             enum(method["acronym_expansion"], ("optimized_fine_tuning",), f"{entry_path}.method.acronym_expansion")
@@ -465,11 +465,104 @@ def validate_artifacts(doc, path):
     exact_type(settings["root_resource"], str, f"{path}.settings.root_resource")
 
 
+def validate_quic_policy_descriptor(doc, path):
+    header(doc, path, "quic_policy_descriptor", identified=True)
+    common = (
+        "schema_version", "kind", "id", "variant", "mode", "family", "descriptor_mode",
+        "implementation_status", "runtime_validated", "compression_verified",
+        "published_method_relation", "weight_compression", "profile", "placement_manifest",
+        "external_provider", "base_model", "artifact", "provenance", "deployment_state",
+        "capabilities", "normalization", "parameterization", "accounting",
+        "unavailable_fields", "semantics",
+    )
+    mapping(doc, path, required=common)
+    enum(doc["variant"], ("quic-peft", "quic-wc"), f"{path}.variant")
+    expected_mode = "peft" if doc["variant"] == "quic-peft" else "wc"
+    expected_relation = "direct" if expected_mode == "peft" else "proposed_extension"
+    if doc["id"] != doc["variant"]:
+        raise ConfigSchemaError(f"{path}.id must equal its unambiguous variant ID")
+    enum(doc["mode"], (expected_mode,), f"{path}.mode")
+    enum(doc["family"], ("openvla_quic",), f"{path}.family")
+    if doc["descriptor_mode"] is not True:
+        raise ConfigSchemaError(f"{path}.descriptor_mode must be true in Gate F")
+    enum(doc["implementation_status"], ("skeleton",), f"{path}.implementation_status")
+    if doc["runtime_validated"] is not False or doc["compression_verified"] is not False:
+        raise ConfigSchemaError(f"{path} skeleton cannot claim runtime or compression validation")
+    enum(doc["published_method_relation"], (expected_relation,), f"{path}.published_method_relation")
+    expected_compression = expected_mode == "wc"
+    if doc["weight_compression"] is not expected_compression:
+        raise ConfigSchemaError(f"{path}.weight_compression misclassifies the variant")
+    profile = mapping(doc["profile"], f"{path}.profile", required=(
+        "id", "definition_availability", "definition_version", "definition_hash",
+    ))
+    enum(profile["id"], ("QP0", "QP1", "QP2", "QP3", "QP4"), f"{path}.profile.id")
+    expected_profile_availability = "not_applicable" if profile["id"] == "QP0" else "unresolved"
+    enum(profile["definition_availability"], (expected_profile_availability,), f"{path}.profile.definition_availability")
+    if profile["definition_version"] is not None or profile["definition_hash"] is not None:
+        raise ConfigSchemaError(f"{path}.profile must not invent a Gate F definition")
+    placement = mapping(doc["placement_manifest"], f"{path}.placement_manifest", required=(
+        "availability", "version", "hash", "entries",
+    ))
+    enum(placement["availability"], ("unresolved",), f"{path}.placement_manifest.availability")
+    if placement["version"] is not None or placement["hash"] is not None or placement["entries"] != []:
+        raise ConfigSchemaError(f"{path}.placement_manifest must remain unresolved and empty")
+    provider = mapping(doc["external_provider"], f"{path}.external_provider", required=(
+        "package", "api_name", "api_version", "source_repository", "source_commit",
+    ))
+    expected_provider = {
+        "package": "openvla_quic.ovlab_provider", "api_name": "ovlab-quic-provider",
+        "api_version": "1.0.0", "source_repository": "external/openvla-quic",
+        "source_commit": "deab81fbe4035c3de2c2da3d63db966fe3361f82",
+    }
+    if provider != expected_provider:
+        raise ConfigSchemaError(f"{path}.external_provider must identify the pinned public API boundary")
+    for name in (
+        "base_model", "artifact", "provenance", "deployment_state", "capabilities",
+        "normalization", "parameterization", "accounting",
+    ):
+        item = mapping(doc[name], f"{path}.{name}", required=("availability", "reason"))
+        enum(item["availability"], ("unavailable",), f"{path}.{name}.availability")
+        non_empty_string(item["reason"], f"{path}.{name}.reason")
+    exact_type(doc["unavailable_fields"], list, f"{path}.unavailable_fields")
+    if not doc["unavailable_fields"] or len(doc["unavailable_fields"]) != len(set(doc["unavailable_fields"])):
+        raise ConfigSchemaError(f"{path}.unavailable_fields must list unique unavailable evidence")
+    if any(not isinstance(item, str) or not item for item in doc["unavailable_fields"]):
+        raise ConfigSchemaError(f"{path}.unavailable_fields must contain non-empty strings")
+    if expected_mode == "peft":
+        semantics = mapping(doc["semantics"], f"{path}.semantics", required=(
+            "requires_base_model", "deployment_replaces_base_weights", "adaptation_type",
+            "published_adapter_efficiency_only", "standalone_weight_compression",
+        ))
+        if semantics != {
+            "requires_base_model": True,
+            "deployment_replaces_base_weights": False,
+            "adaptation_type": "multiplicative_adapter",
+            "published_adapter_efficiency_only": True,
+            "standalone_weight_compression": False,
+        }:
+            raise ConfigSchemaError(f"{path}.semantics misclassifies QuIC-PEFT")
+    else:
+        semantics = mapping(doc["semantics"], f"{path}.semantics", required=(
+            "requires_dense_source_for_conversion", "requires_replaced_dense_weights_at_deployment",
+            "deployment_replaces_selected_weights", "dense_runtime_reconstruction_allowed",
+            "factorization_family",
+        ))
+        if semantics != {
+            "requires_dense_source_for_conversion": "configurable",
+            "requires_replaced_dense_weights_at_deployment": False,
+            "deployment_replaces_selected_weights": True,
+            "dense_runtime_reconstruction_allowed": False,
+            "factorization_family": "unselected",
+        }:
+            raise ConfigSchemaError(f"{path}.semantics misclassifies QuIC-WC")
+
+
 VALIDATORS = {
     "experiment": validate_experiment, "benchmark": validate_benchmark, "policy": validate_policy,
     "action_interface": validate_action_interface, "metric_set": validate_metric_set, "protocol": validate_protocol,
     "resource_registry": validate_registry, "local_profile": validate_local_profile,
     "execution_profile": validate_execution_profile, "artifact_store": validate_artifacts,
+    "quic_policy_descriptor": validate_quic_policy_descriptor,
 }
 
 

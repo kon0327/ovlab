@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovlab-openvla-quic"
+version = "0.1.0"
+description = "Contract-only QuIC-PEFT and QuIC-WC OVLAB wrappers"
+requires-python = ">=3.10"
+dependencies = [
+  "ovlab-core",
+  "ovlab-policy-sdk",
+  "ovlab-remote-policy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

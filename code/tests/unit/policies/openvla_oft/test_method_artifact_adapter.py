@@ -60,7 +60,8 @@ def test_registered_method_is_strict_native_oft_and_accounts_all_adaptation_comp
     assert method["acronym_expansion"] == "optimized_fine_tuning"
     assert method["family"] == "openvla_oft"
     assert method["film"] is method["diffusion"] is False
-    assert method["quantization"] == "none" and method["qp_classification"] == "absent"
+    assert method["quantization"] == "none"
+    assert not any(key.lower().startswith("qp") for key in method)
     counts = _resolved().scientific_config["resource_registry"]["checkpoints"][
         "openvla-oft-7b-finetuned-libero-10"
     ]["artifact"]["parameter_counts"]
