@@ -68,6 +68,190 @@ checkpoints:
         learning_rate_schedule: Constant implementation default; actual run setting unavailable
         learning_rate: unavailable
         precision: bfloat16
+  openvla-oft-7b-finetuned-libero-10:
+    repo_id: moojink/openvla-7b-oft-finetuned-libero-10
+    expected_revision: "95220f9a3421a7ff12d4218e73d09ade830fa9a3"
+    expected_sha256: "c08526071fc0303069532386493ed95483c466f4cdd07848482e2758e7f33c61"
+    artifact:
+      form: merged_backbone_with_auxiliary_components
+      merge_status: merged
+      active_peft_adapter: false
+      runtime_peft_modules: false
+      published_unmerged_adapter: true
+      files:
+        .gitattributes:
+          size: 675
+          sha256: "3f3ec6282c3addd4c8990503019846fd2c87b87619fc0a2bdab690f9351ddc3a"
+        README.md:
+          size: 2918
+          sha256: "087c24a884ddad16f302b097d0548ddb24fe1002302abd5d466617ede77710ee"
+        action_head--150000_checkpoint.pt:
+          size: 302242674
+          sha256: "f0135fd1b8f9e3b40c00ee8564c2a76af2fe291a79597885100996b98a70e4bd"
+        added_tokens.json:
+          size: 21
+          sha256: "ab43123267b190cb7990bc9f2ae4ad32dcb7ed029fb0fccb1b4e062c6f54a2a1"
+        config.json:
+          size: 60712
+          sha256: "edd5c5cf6d7927e07465cf086ebe41f7b3ec8f3b128a51f71d6db14dad7ad8b1"
+        configuration_prismatic.py:
+          size: 5865
+          sha256: "68cc5ae34f1b46af3168d8d479cb81bb776965653453fd904aa8eefb6c8f9f68"
+        dataset_statistics.json:
+          size: 2975
+          sha256: "dbe516987e8124416af39c32d3f39ce2137ccb4e282adc590bb4bcede09fb5e1"
+        generation_config.json:
+          size: 136
+          sha256: "67fbe17b12e8beb5be98eb911483971cc78589e51a37ac0cce9cd499d06a8bf1"
+        lora_adapter/README.md:
+          size: 5034
+          sha256: "1acb533904cd9931276014499b51c98c0fc8e3eab8962de7b971547116068383"
+        lora_adapter/adapter_config.json:
+          size: 813
+          sha256: "c850e90d75021750ecf6bb1a8c6d293194aab63417607f8ae4af7032256f038a"
+        lora_adapter/adapter_model.safetensors:
+          size: 484458600
+          sha256: "18736bd4c8c6a23e42d94e96f25cf16587ccae53c9f2cee9e016094b72284dae"
+        model-00001-of-00004.safetensors:
+          size: 4925122448
+          sha256: "099772b16c1ba077c5bcff25a62e35595d2704b66f2f680af4dcf21cea03e9d4"
+        model-00002-of-00004.safetensors:
+          size: 4947392496
+          sha256: "31540314f94a71c9388b4b6b6c9d64162932174e2f3b92ea666bb73560891354"
+        model-00003-of-00004.safetensors:
+          size: 4947417456
+          sha256: "d5d817a597b121e25f7f77ac0743fed3e49e627d039e5df57af6102064f3e9a9"
+        model-00004-of-00004.safetensors:
+          size: 262668432
+          sha256: "a877e3fece1feafb80f59f91585ce04379ee39e2bf9a25cb7b4acf237e896e60"
+        model.safetensors.index.json:
+          size: 94764
+          sha256: "ca8b53fed8133ee2afcd2fc483de8febf7f5bb0f6bcb09f91189772e59e8f659"
+        modeling_prismatic.py:
+          size: 49029
+          sha256: "f40ee7883e16aab1a2d89b6e8f31cc81f6b8055120b1fefe169e05c7031098fa"
+        preprocessor_config.json:
+          size: 1650
+          sha256: "bd024783fb785cbdfe35b710b621c5e8678d4c157a9ba625675e67d40d1757da"
+        processing_prismatic.py:
+          size: 12718
+          sha256: "06563586bbc73d36501a14a231a3174904ede830d33174d0c625ece8e931ef1e"
+        processor_config.json:
+          size: 130
+          sha256: "167e026d8121f6cb0bf5c18310b97ba8139152f970822bb3824213bd37dc7a76"
+        proprio_projector--150000_checkpoint.pt:
+          size: 67275256
+          sha256: "7ea18c370d8aa1625cc6c10f0d95c4bc101805a8cc843690022fd675e89296c3"
+        special_tokens_map.json:
+          size: 552
+          sha256: "cb90ee5cf5793aa444039af9795b00db59d3fef8942e7eca9cf1990bab370d61"
+        tokenizer.json:
+          size: 1842976
+          sha256: "8f5e2869e1807b8bb3c7717a294539c37e9de5d728ad60e31ef57e83cc5ea527"
+        tokenizer.model:
+          size: 499723
+          sha256: "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+        tokenizer_config.json:
+          size: 1192
+          sha256: "f5f1d3ed015ebb71cf11686ff00bc8e0c25957bbf3952f95312cecc9b168fbea"
+      parameter_counts:
+        merged_backbone: 7541237184
+        lora_trainable: 110828288
+        lora_file_tensors: 242162432
+        action_head: 151117831
+        proprio_projector: 16818176
+        auxiliary: 167936007
+        complete_adaptation: 278764295
+        total_runtime: 7709173191
+      byte_counts:
+        merged_backbone_weights: 15082600832
+        lora_file: 484458600
+        auxiliary: 369517930
+        complete_adaptation: 853976530
+    method:
+      id: openvla-oft-libero10-native
+      version: "1.0.0"
+      family: openvla_oft
+      acronym_expansion: optimized_fine_tuning
+      backbone_adaptation: lora
+      declared_base_model: openvla/openvla-7b
+      declared_base_revision: null
+      artifact_form: merged_backbone_with_auxiliary_components
+      backbone_merge_status: merged
+      runtime_active_adapter: false
+      parallel_decoding: true
+      action_representation: continuous
+      objective: l1_regression
+      action_chunk_size: 8
+      action_dimension: 7
+      normalization: bounds_q99
+      image_inputs: 2
+      proprioception_dimension: 8
+      film: false
+      diffusion: false
+      quantization: none
+      qp_classification: absent
+      adaptation_suite: LIBERO-10
+      dataset_identity: libero_10_no_noops
+      training_step: 150000
+      lora:
+        peft_type: LORA
+        rank: 32
+        alpha: 16
+        scaling: 0.5
+        dropout: 0.0
+        bias: none
+        target_modules: [up_proj, fc2, q, down_proj, q_proj, k_proj, lm_head, o_proj, kv, fc1, gate_proj, fc3, proj, v_proj, qkv]
+        modules_to_save: null
+        inference_mode: true
+        merge_compatible: true
+        published_tensor_count: 879
+        trainable_tensor_count: 878
+        trainable_parameter_count: 110828288
+        published_file_parameter_count: 242162432
+        published_non_lora_tensor: language_model.lm_head.base_layer.weight
+        tensor_dtype_counts:
+          BF16: 879
+        tensor_shape_counts:
+          32x3x14x14: 2
+          32x1024: 72
+          32x1152: 85
+          32x2176: 1
+          32x4096: 218
+          32x4304: 28
+          32x8704: 1
+          32x11008: 32
+          1024x32: 48
+          1024x32x1x1: 1
+          1152x32: 57
+          1152x32x1x1: 1
+          2304x32: 1
+          3072x32: 24
+          3456x32: 27
+          4096x32: 186
+          4304x32: 28
+          8704x32: 1
+          11008x32: 64
+          32064x32: 1
+          32064x4096: 1
+      training_provenance:
+        source_script: external/openvla-oft/vla-scripts/finetune.py
+        source_commit: e4287e94541f459edc4feabc4e181f537cd569a8
+        documented_command: external/openvla-oft/LIBERO.md
+        dataset: libero_10_no_noops
+        batch_size_per_gpu: 8
+        documented_gpu_count: 8
+        documented_global_batch_size: 64
+        gradient_accumulation_steps: 1
+        optimizer: AdamW
+        learning_rate: 0.0005
+        warmup_steps: 0
+        decay_step: 100000
+        max_steps: 150005
+        published_checkpoint_step: 150000
+        image_augmentation: true
+        precision: bfloat16
+        training_seed: unavailable
 
 repositories:
   libero:

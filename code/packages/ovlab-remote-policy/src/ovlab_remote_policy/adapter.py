@@ -68,11 +68,11 @@ class RemotePolicyAdapter(PolicyAdapter):
         return ActionPrediction(
             prediction_id=parsed["prediction_id"],
             step_id=parsed["step_id"],
-            actions=np.asarray(parsed["action"], dtype=np.float32)[np.newaxis, :],
+            actions=np.asarray(parsed["actions"], dtype=np.float32),
             action_spec=parsed["action_spec"],
             timestamp_ns=parsed["timestamp_ns"],
             inference_duration_ns=parsed["inference_duration_ns"],
-            horizon=1,
+            horizon=parsed["horizon"],
             validity=parsed["validity"],
             confidence=parsed["confidence"],
             metadata=metadata,

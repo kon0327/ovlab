@@ -29,6 +29,8 @@ from ovlab_core.contracts import (
     ObservationRequirements,
     PolicyCapabilities,
     PolicyObservation,
+    ProprioceptiveObservation,
+    ProprioceptiveObservationSpec,
     PredictionId,
     PredictionValidity,
     RunContext,
@@ -43,6 +45,7 @@ PROTOCOL_VERSION = "ovlab-policy-rpc/1.0.0"
 HEADER_SIZE = 4
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 MAX_IMAGE_BYTES = 1024 * 1024
+MAX_PROPRIO_BYTES = 64 * 1024
 PRIMARY_RGB_NAME = "camera.primary.rgb"
 
 OPERATIONS = frozenset(
@@ -307,6 +310,34 @@ def image_spec_from_wire(value: Any) -> ImageObservationSpec:
     )
 
 
+def proprio_spec_to_wire(spec: ProprioceptiveObservationSpec) -> dict[str, Any]:
+    return {
+        "name": spec.name,
+        "shapes": [list(shape) for shape in spec.shapes],
+        "dtype": spec.dtype,
+        "units": list(spec.units),
+        "required": spec.required,
+        "metadata": _plain(spec.metadata),
+    }
+
+
+def proprio_spec_from_wire(value: Any) -> ProprioceptiveObservationSpec:
+    data = dict(_require_mapping(value, "proprioception_spec"))
+    require_exact_keys(
+        data,
+        required={"name", "shapes", "dtype", "units", "required", "metadata"},
+        where="proprioception_spec",
+    )
+    return ProprioceptiveObservationSpec(
+        name=data["name"],
+        shapes=tuple(tuple(shape) for shape in data["shapes"]),
+        dtype=data["dtype"],
+        units=tuple(data["units"]),
+        required=data["required"],
+        metadata=data["metadata"],
+    )
+
+
 def capabilities_to_wire(capabilities: PolicyCapabilities) -> dict[str, Any]:
     requirements = capabilities.observation_requirements
     return {
@@ -315,7 +346,7 @@ def capabilities_to_wire(capabilities: PolicyCapabilities) -> dict[str, Any]:
         "contract_version": capabilities.contract_version,
         "observation_requirements": {
             "images": [image_spec_to_wire(spec) for spec in requirements.images],
-            "proprioception": [],
+            "proprioception": [proprio_spec_to_wire(spec) for spec in requirements.proprioception],
             "minimum_image_count": requirements.minimum_image_count,
             "maximum_image_count": requirements.maximum_image_count,
             "minimum_proprioception_count": requirements.minimum_proprioception_count,
@@ -354,15 +385,13 @@ def capabilities_from_wire(value: Any) -> PolicyCapabilities:
         },
         where="observation_requirements",
     )
-    if requirements["proprioception"]:
-        raise RemotePolicyProtocolError("remote policy capability cannot require proprioception")
     return PolicyCapabilities(
         component_name=data["component_name"],
         component_version=data["component_version"],
         contract_version=data["contract_version"],
         observation_requirements=ObservationRequirements(
             images=tuple(image_spec_from_wire(item) for item in requirements["images"]),
-            proprioception=(),
+            proprioception=tuple(proprio_spec_from_wire(item) for item in requirements["proprioception"]),
             minimum_image_count=requirements["minimum_image_count"],
             maximum_image_count=requirements["maximum_image_count"],
             minimum_proprioception_count=requirements["minimum_proprioception_count"],
@@ -419,54 +448,135 @@ def observation_to_predict_payload(
     *,
     episode_id: str,
 ) -> dict[str, Any]:
-    if observation.proprioception:
-        raise RemotePolicyProtocolError("proprioception is forbidden by the remote prediction schema")
     if observation.metadata:
         raise RemotePolicyProtocolError("observation metadata is forbidden by the remote prediction schema")
     images = {image.name: image for image in observation.images}
-    if set(images) != {PRIMARY_RGB_NAME}:
-        raise RemotePolicyProtocolError(
-            f"remote prediction requires only {PRIMARY_RGB_NAME!r}; received {sorted(images)}"
-        )
-    image = images[PRIMARY_RGB_NAME]
-    array = image.data
-    if image.encoding is not ImageEncoding.RAW:
-        raise RemotePolicyProtocolError("camera.primary.rgb encoding must be raw")
-    if array.dtype != np.uint8:
-        raise RemotePolicyProtocolError("camera.primary.rgb dtype must be uint8")
-    if array.ndim != 3 or array.shape[2] != 3:
-        raise RemotePolicyProtocolError("camera.primary.rgb must have shape [height, width, 3]")
-    raw = array.tobytes(order="C")
-    if len(raw) > MAX_IMAGE_BYTES:
-        raise RemotePolicyProtocolError(f"RGB image is {len(raw)} bytes; limit is {MAX_IMAGE_BYTES}")
+    if set(images) == {PRIMARY_RGB_NAME} and not observation.proprioception:
+        image = images[PRIMARY_RGB_NAME]
+        encoded = _image_to_wire(image)
+        # Preserve the Gate C/D payload byte-for-byte at the schema level.
+        return {
+            "episode_id": episode_id,
+            "step_id": str(observation.step_id),
+            "instruction": instruction_to_wire(observation.instruction),
+            "image": {key: encoded[key] for key in ("shape", "layout", "dtype", "data_b64")},
+        }
+    if PRIMARY_RGB_NAME not in images:
+        raise RemotePolicyProtocolError(f"remote prediction requires {PRIMARY_RGB_NAME!r}")
+    if len(images) != len(observation.images):
+        raise RemotePolicyProtocolError("remote prediction image names must be unique")
+    proprioception = {item.name: item for item in observation.proprioception}
+    if len(proprioception) != len(observation.proprioception):
+        raise RemotePolicyProtocolError("remote prediction proprioception names must be unique")
     return {
         "episode_id": episode_id,
         "step_id": str(observation.step_id),
         "instruction": instruction_to_wire(observation.instruction),
-        "image": {
-            "shape": list(array.shape),
-            "layout": "HWC",
-            "dtype": "uint8",
-            "data_b64": base64.b64encode(raw).decode("ascii"),
-        },
+        "images": [_image_to_wire(images[name], include_identity=True) for name in sorted(images)],
+        "proprioception": [
+            _proprioception_to_wire(proprioception[name]) for name in sorted(proprioception)
+        ],
+    }
+
+
+def _image_to_wire(image: ImageObservation, *, include_identity: bool = False) -> dict[str, Any]:
+    array = image.data
+    if image.encoding is not ImageEncoding.RAW:
+        raise RemotePolicyProtocolError(f"{image.name} encoding must be raw")
+    if array.dtype != np.uint8:
+        raise RemotePolicyProtocolError(f"{image.name} dtype must be uint8")
+    if array.ndim != 3 or array.shape[2] != 3:
+        raise RemotePolicyProtocolError(f"{image.name} must have shape [height, width, 3]")
+    raw = array.tobytes(order="C")
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise RemotePolicyProtocolError(f"RGB image is {len(raw)} bytes; limit is {MAX_IMAGE_BYTES}")
+    result = {
+        "shape": list(array.shape), "layout": "HWC", "dtype": "uint8",
+        "data_b64": base64.b64encode(raw).decode("ascii"),
+    }
+    if include_identity:
+        result.update({"name": image.name, "encoding": "raw", "color_space": "rgb"})
+    return result
+
+
+def _proprioception_to_wire(item: ProprioceptiveObservation) -> dict[str, Any]:
+    array = np.asarray(item.values)
+    if array.dtype != np.float32 or array.ndim != 1:
+        raise RemotePolicyProtocolError(f"{item.name} must be a float32 vector")
+    raw = array.tobytes(order="C")
+    if len(raw) > MAX_PROPRIO_BYTES:
+        raise RemotePolicyProtocolError(
+            f"proprioception is {len(raw)} bytes; limit is {MAX_PROPRIO_BYTES}"
+        )
+    return {
+        "name": item.name, "shape": list(array.shape), "dtype": "float32",
+        "units": list(item.units), "data_b64": base64.b64encode(raw).decode("ascii"),
     }
 
 
 def predict_payload_to_observation(value: Any) -> tuple[str, PolicyObservation]:
     data = dict(_require_mapping(value, "predict payload"))
+    common = {"episode_id", "step_id", "instruction"}
+    if "image" in data:
+        require_exact_keys(data, required=common | {"image"}, where="predict payload")
+        return _legacy_predict_payload_to_observation(data)
     require_exact_keys(
         data,
-        required={"episode_id", "step_id", "instruction", "image"},
+        required=common | {"images", "proprioception"},
         where="predict payload",
     )
     if not isinstance(data["episode_id"], str) or not data["episode_id"]:
         raise RemotePolicyProtocolError("episode_id must be a non-empty string")
-    image = dict(_require_mapping(data["image"], "predict payload image"))
+    if not isinstance(data["images"], list) or not data["images"]:
+        raise RemotePolicyProtocolError("predict payload images must be a non-empty list")
+    if not isinstance(data["proprioception"], list):
+        raise RemotePolicyProtocolError("predict payload proprioception must be a list")
+    instruction = instruction_from_wire(data["instruction"])
+    images = tuple(_image_from_wire(item, instruction.timestamp_ns, extended=True) for item in data["images"])
+    proprioception = tuple(
+        _proprioception_from_wire(item, instruction.timestamp_ns) for item in data["proprioception"]
+    )
+    names = [item.name for item in images + proprioception]
+    if len(names) != len(set(names)):
+        raise RemotePolicyProtocolError("predict payload observation names must be unique")
+    if PRIMARY_RGB_NAME not in names:
+        raise RemotePolicyProtocolError(f"predict payload requires {PRIMARY_RGB_NAME!r}")
+    observation = PolicyObservation(
+        StepId(data["step_id"]), instruction.timestamp_ns, instruction, images, proprioception,
+    )
+    return data["episode_id"], observation
+
+
+def _decode_array(data_b64: Any, *, shape: tuple[int, ...], dtype: np.dtype, limit: int, where: str) -> np.ndarray:
+    expected_bytes = int(np.prod(shape, dtype=np.int64)) * dtype.itemsize
+    if expected_bytes > limit:
+        raise RemotePolicyProtocolError(f"{where} declares {expected_bytes} bytes; limit is {limit}")
+    if not isinstance(data_b64, str):
+        raise RemotePolicyProtocolError(f"{where} data_b64 must be a string")
+    try:
+        raw = base64.b64decode(data_b64, validate=True)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise RemotePolicyProtocolError(f"{where} data_b64 is not valid base64") from exc
+    if len(raw) != expected_bytes:
+        raise RemotePolicyProtocolError(
+            f"{where} byte length {len(raw)} does not match declared shape {list(shape)} ({expected_bytes} bytes)"
+        )
+    return np.frombuffer(raw, dtype=dtype).reshape(shape).copy()
+
+
+def _image_from_wire(value: Any, timestamp_ns: int, *, extended: bool) -> ImageObservation:
+    image = dict(_require_mapping(value, "predict payload image"))
+    identity = {"name", "encoding", "color_space"} if extended else set()
     require_exact_keys(
         image,
-        required={"shape", "layout", "dtype", "data_b64"},
+        required={"shape", "layout", "dtype", "data_b64"} | identity,
         where="predict payload image",
     )
+    if extended:
+        if image["encoding"] != "raw" or image["color_space"] != "rgb":
+            raise RemotePolicyProtocolError("RGB metadata must specify raw encoding and RGB color space")
+        if not isinstance(image["name"], str) or not image["name"]:
+            raise RemotePolicyProtocolError("RGB name must be a non-empty string")
     if image["layout"] != "HWC" or image["dtype"] != "uint8":
         raise RemotePolicyProtocolError("RGB metadata must specify HWC and uint8")
     shape = image["shape"]
@@ -478,35 +588,46 @@ def predict_payload_to_observation(value: Any) -> tuple[str, PolicyObservation]:
         or shape[2] != 3
     ):
         raise RemotePolicyProtocolError("RGB shape must be three positive integers ending in 3")
-    expected_bytes = int(np.prod(shape, dtype=np.int64))
-    if expected_bytes > MAX_IMAGE_BYTES:
-        raise RemotePolicyProtocolError(f"RGB image declares {expected_bytes} bytes; limit is {MAX_IMAGE_BYTES}")
-    if not isinstance(image["data_b64"], str):
-        raise RemotePolicyProtocolError("RGB data_b64 must be a string")
-    try:
-        raw = base64.b64decode(image["data_b64"], validate=True)
-    except (ValueError, base64.binascii.Error) as exc:
-        raise RemotePolicyProtocolError("RGB data_b64 is not valid base64") from exc
-    if len(raw) != expected_bytes:
-        raise RemotePolicyProtocolError(
-            f"RGB byte length {len(raw)} does not match declared shape {list(shape)} ({expected_bytes} bytes)"
-        )
-    array = np.frombuffer(raw, dtype=np.uint8).reshape(tuple(shape)).copy()
+    array = _decode_array(
+        image["data_b64"], shape=tuple(shape), dtype=np.dtype("uint8"),
+        limit=MAX_IMAGE_BYTES, where="RGB image",
+    )
+    name = image["name"] if extended else PRIMARY_RGB_NAME
+    return ImageObservation(
+        name=name, data=array, encoding=ImageEncoding.RAW, color_space=ColorSpace.RGB,
+        camera_name=name.removesuffix(".rgb"), timestamp_ns=timestamp_ns,
+    )
+
+
+def _proprioception_from_wire(value: Any, timestamp_ns: int) -> ProprioceptiveObservation:
+    item = dict(_require_mapping(value, "predict payload proprioception"))
+    require_exact_keys(
+        item, required={"name", "shape", "dtype", "units", "data_b64"},
+        where="predict payload proprioception",
+    )
+    if item["dtype"] != "float32":
+        raise RemotePolicyProtocolError("proprioception dtype must be float32")
+    shape = item["shape"]
+    if not isinstance(shape, list) or len(shape) != 1 or type(shape[0]) is not int or shape[0] <= 0:
+        raise RemotePolicyProtocolError("proprioception shape must be one positive integer")
+    if not isinstance(item["units"], list) or len(item["units"]) != shape[0]:
+        raise RemotePolicyProtocolError("proprioception units must match its shape")
+    values = _decode_array(
+        item["data_b64"], shape=tuple(shape), dtype=np.dtype("float32"),
+        limit=MAX_PROPRIO_BYTES, where="proprioception",
+    )
+    return ProprioceptiveObservation(item["name"], values, timestamp_ns, tuple(item["units"]))
+
+
+def _legacy_predict_payload_to_observation(data: Mapping[str, Any]) -> tuple[str, PolicyObservation]:
+    if not isinstance(data["episode_id"], str) or not data["episode_id"]:
+        raise RemotePolicyProtocolError("episode_id must be a non-empty string")
     instruction = instruction_from_wire(data["instruction"])
     observation = PolicyObservation(
         step_id=StepId(data["step_id"]),
         timestamp_ns=instruction.timestamp_ns,
         instruction=instruction,
-        images=(
-            ImageObservation(
-                name=PRIMARY_RGB_NAME,
-                data=array,
-                encoding=ImageEncoding.RAW,
-                color_space=ColorSpace.RGB,
-                camera_name="camera.primary",
-                timestamp_ns=instruction.timestamp_ns,
-            ),
-        ),
+        images=(_image_from_wire(data["image"], instruction.timestamp_ns, extended=False),),
     )
     return data["episode_id"], observation
 
@@ -575,18 +696,16 @@ def episode_context_from_wire(value: Any) -> EpisodeContext:
 
 def prediction_to_wire(prediction: Any) -> dict[str, Any]:
     actions = np.asarray(prediction.actions)
-    if actions.dtype != np.float32 or actions.shape != (1, 7):
+    if actions.dtype != np.float32 or actions.ndim != 2 or actions.shape[1] != 7:
         raise RemotePolicyProtocolError(
-            f"remote policy must return canonical float32 action shape (1, 7), got {actions.dtype} {actions.shape}"
+            f"remote policy must return canonical float32 action shape [H, 7], got {actions.dtype} {actions.shape}"
         )
     if prediction.action_spec.gripper_convention is not GripperConvention.CLOSED_POSITIVE:
         raise RemotePolicyProtocolError("remote action must use CLOSED_POSITIVE gripper convention")
-    return {
+    common = {
         "prediction_id": str(prediction.prediction_id),
         "step_id": str(prediction.step_id),
-        "action": actions[0].tolist(),
         "dtype": "float32",
-        "shape": [7],
         "action_spec": action_spec_to_wire(prediction.action_spec),
         "timestamp_ns": prediction.timestamp_ns,
         "inference_duration_ns": prediction.inference_duration_ns,
@@ -594,29 +713,42 @@ def prediction_to_wire(prediction: Any) -> dict[str, Any]:
         "confidence": prediction.confidence,
         "metadata": _plain(prediction.metadata),
     }
+    if actions.shape[0] == 1:
+        return {**common, "action": actions[0].tolist(), "shape": [7]}
+    return {**common, "actions": actions.tolist(), "shape": list(actions.shape), "horizon": actions.shape[0]}
 
 
 def prediction_from_wire(value: Any) -> dict[str, Any]:
     data = dict(_require_mapping(value, "prediction"))
-    require_exact_keys(
-        data,
-        required={
-            "prediction_id", "step_id", "action", "dtype", "shape", "action_spec", "timestamp_ns",
-            "inference_duration_ns", "validity", "confidence", "metadata",
-        },
-        where="prediction",
-    )
-    if data["dtype"] != "float32" or data["shape"] != [7]:
-        raise RemotePolicyProtocolError("prediction must declare one float32 [7] action")
-    action = np.asarray(data["action"], dtype=np.float32)
-    if action.shape != (7,) or not np.all(np.isfinite(action)):
-        raise RemotePolicyProtocolError("prediction action must contain seven finite values")
+    common = {
+        "prediction_id", "step_id", "dtype", "shape", "action_spec", "timestamp_ns",
+        "inference_duration_ns", "validity", "confidence", "metadata",
+    }
+    if "action" in data:
+        require_exact_keys(data, required=common | {"action"}, where="prediction")
+        if data["dtype"] != "float32" or data["shape"] != [7]:
+            raise RemotePolicyProtocolError("prediction must declare one float32 [7] action")
+        actions = np.asarray(data["action"], dtype=np.float32)
+        if actions.shape != (7,):
+            raise RemotePolicyProtocolError("prediction action must contain seven values")
+        actions = actions[np.newaxis, :]
+    else:
+        require_exact_keys(data, required=common | {"actions", "horizon"}, where="prediction")
+        horizon = data["horizon"]
+        if type(horizon) is not int or horizon <= 1 or data["shape"] != [horizon, 7] or data["dtype"] != "float32":
+            raise RemotePolicyProtocolError("chunk prediction must declare float32 [H, 7] with H > 1")
+        actions = np.asarray(data["actions"], dtype=np.float32)
+        if actions.shape != (horizon, 7):
+            raise RemotePolicyProtocolError("chunk prediction values do not match declared shape")
+    if not np.all(np.isfinite(actions)):
+        raise RemotePolicyProtocolError("prediction actions must contain only finite values")
     action_spec = action_spec_from_wire(data["action_spec"])
     if action_spec.dimension != 7 or action_spec.dtype != "float32":
         raise RemotePolicyProtocolError("prediction ActionSpec must describe float32 [7]")
     if action_spec.gripper_convention is not GripperConvention.CLOSED_POSITIVE:
         raise RemotePolicyProtocolError("prediction ActionSpec must use CLOSED_POSITIVE")
-    data["action"] = action
+    data["actions"] = actions
+    data["horizon"] = actions.shape[0]
     data["action_spec"] = action_spec
     data["prediction_id"] = PredictionId(data["prediction_id"])
     data["step_id"] = StepId(data["step_id"])

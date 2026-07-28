@@ -78,7 +78,9 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
                 },
             )
             failure_domain = "benchmark"
+            action_application_started_ns = clock.monotonic_ns()
             result = benchmark.step(request)
+            action_application_finished_ns = clock.monotonic_ns()
             failure_domain = "runner"
             closed_loop_finished_ns = clock.monotonic_ns()
             if closed_loop_finished_ns < closed_loop_started_ns:
@@ -88,6 +90,9 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
                 "closed_loop_started_ns": closed_loop_started_ns,
                 "closed_loop_finished_ns": closed_loop_finished_ns,
                 "closed_loop_step_duration_ns": closed_loop_finished_ns - closed_loop_started_ns,
+                "action_application_started_ns": action_application_started_ns,
+                "action_application_finished_ns": action_application_finished_ns,
+                "action_application_duration_ns": action_application_finished_ns - action_application_started_ns,
             })
             result = replace(
                 result,

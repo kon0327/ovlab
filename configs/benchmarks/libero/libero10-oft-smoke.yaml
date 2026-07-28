@@ -1,0 +1,19 @@
+schema_version: "0.1.0"
+kind: benchmark
+type: libero
+extends: libero10-smoke.yaml
+
+settings:
+  observation:
+    profile: native_oft
+    cameras:
+      primary:
+        native_name: agentview
+        canonical_name: camera.primary.rgb
+      wrist:
+        native_name: robot0_eye_in_hand
+        canonical_name: camera.wrist.rgb
+    width: 256
+    height: 256
+    color_space: rgb
+    dtype: uint8

@@ -51,6 +51,31 @@ def test_dual_camera_and_proprioception_profiles() -> None:
     ]
 
 
+def test_native_oft_profile_maps_two_rotated_images_and_exact_eight_dimensional_state() -> None:
+    episode = make_episode_context()
+    raw = fake_raw_observation()
+    raw["robot0_eef_pos"] = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+    raw["robot0_eef_quat"] = np.asarray([0.0, 0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)], dtype=np.float64)
+    raw["robot0_gripper_qpos"] = np.asarray([0.1, -0.2], dtype=np.float64)
+    settings = LiberoAdapterSettings(
+        observation_profile=LiberoObservationProfile.NATIVE_OFT,
+        camera_names=("agentview", "robot0_eye_in_hand"),
+        camera_height=4,
+        camera_width=5,
+    )
+    observation = map_observation(raw, settings, StepId("oft"), episode.initial_instruction, 4)
+    assert [item.name for item in observation.images] == ["camera.primary.rgb", "camera.wrist.rgb"]
+    np.testing.assert_array_equal(observation.images[0].data, raw["agentview_image"][::-1, ::-1])
+    np.testing.assert_array_equal(observation.images[1].data, raw["robot0_eye_in_hand_image"][::-1, ::-1])
+    assert observation.proprioception[0].name == "robot.proprioception"
+    assert observation.proprioception[0].values.dtype == np.float32
+    np.testing.assert_allclose(
+        observation.proprioception[0].values,
+        np.asarray([1, 2, 3, 0, 0, np.pi / 2, 0.1, -0.2], dtype=np.float32),
+        rtol=1e-6, atol=1e-6,
+    )
+
+
 def test_missing_key_wrong_shape_and_dtype_fail_clearly() -> None:
     episode = make_episode_context()
     raw = fake_raw_observation()

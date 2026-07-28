@@ -51,6 +51,22 @@ class OpenVlaDecodedAction:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenVlaDecodedActionChunk:
+    """Typed pre-codec OFT action chunk; its two-dimensional shape prevents flattening."""
+
+    value: np.ndarray
+
+    def __post_init__(self) -> None:
+        try:
+            value = immutable_numeric_array(self.value, type(self).__name__, "value", ndim=2)
+        except Exception as exc:
+            raise OpenVlaActionCodecError("decoded OpenVLA chunk must be a finite numeric matrix") from exc
+        if value.shape[1:] != (7,) or value.shape[0] <= 1:
+            raise OpenVlaActionCodecError(f"decoded OpenVLA chunk must have shape (H, 7), got {value.shape}")
+        object.__setattr__(self, "value", value)
+
+
+@dataclass(frozen=True, slots=True)
 class LiberoActionCodecConfig:
     codec_id: str = "openvla-decoded-to-libero-osc-pose"
     version: str = "1.0.0"
@@ -87,6 +103,28 @@ class LiberoActionCodec:
         result = np.asarray(source, dtype=np.float32).copy()
         result[6] = -np.sign(2.0 * gripper - 1.0)
         return immutable_numeric_array(result, type(self).__name__, "action", ndim=1)
+
+
+class LiberoActionChunkCodec:
+    """Apply the verified OpenVLA-to-LIBERO conversion once to every chunk row."""
+
+    def __init__(self, config: LiberoActionCodecConfig = LiberoActionCodecConfig()) -> None:
+        self.config = config
+
+    def encode(self, decoded: OpenVlaDecodedActionChunk) -> np.ndarray:
+        if not isinstance(decoded, OpenVlaDecodedActionChunk):
+            raise OpenVlaActionCodecError(
+                "chunk codec accepts only OpenVlaDecodedActionChunk (prevents double conversion)"
+            )
+        source = decoded.value
+        if np.any(source[:, :6] < -1.0) or np.any(source[:, :6] > 1.0):
+            raise OpenVlaActionCodecError("decoded chunk pose is outside normalized [-1, 1] bounds")
+        result = np.asarray(source, dtype=np.float32).copy()
+        # The L1 head is unconstrained and can slightly overshoot the training
+        # gripper range. Match the official normalize-then-invert sign rule
+        # without clipping or applying a second conversion.
+        result[:, 6] = -np.sign(2.0 * result[:, 6] - 1.0)
+        return immutable_numeric_array(result, type(self).__name__, "actions", ndim=2)
 
 
 def action_specs_match(first: ActionSpec, second: ActionSpec) -> bool:

@@ -95,6 +95,31 @@ class EpisodeRecorder:
         if end < self.start_timestamp_ns:
             raise RecorderError("clock moved backwards")
         self.metadata.update(metadata or {})
+        chunk_audit = []
+        for prediction in self.predictions:
+            executed_offsets = sorted(
+                action.selected_chunk_index
+                for action in self.executed_actions
+                if action.prediction_id == prediction.prediction_id
+            )
+            unused_offsets = [index for index in range(prediction.horizon) if index not in executed_offsets]
+            generation_ns = prediction.metadata.get("model_duration_ns")
+            chunk_audit.append({
+                "prediction_id": str(prediction.prediction_id),
+                "generated_horizon": prediction.horizon,
+                "executed_offsets": executed_offsets,
+                "discarded_unexecuted_offsets": unused_offsets,
+                "executed_action_count": len(executed_offsets),
+                "discarded_action_count": len(unused_offsets),
+                "generation_duration_ns": generation_ns,
+                "amortized_generation_per_predicted_action_ns": (
+                    None if generation_ns is None else generation_ns // prediction.horizon
+                ),
+                "amortized_generation_per_executed_action_ns": (
+                    None if generation_ns is None or not executed_offsets else generation_ns // len(executed_offsets)
+                ),
+            })
+        self.metadata["action_chunk_audit"] = chunk_audit
         self._trace = EpisodeTrace(
             self.context,
             tuple(self.step_contexts),

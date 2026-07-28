@@ -113,10 +113,14 @@ def validate_benchmark(doc, path):
             raise ConfigSchemaError(f"{path}.settings.task_indices must be 'all' or non-negative integers")
     obs = mapping(settings["observation"], f"{path}.settings.observation", required=(
         "profile", "cameras", "width", "height", "color_space", "dtype"))
-    enum(obs["profile"], ("primary_rgb",), f"{path}.settings.observation.profile")
-    cameras = mapping(obs["cameras"], f"{path}.settings.observation.cameras", required=("primary",))
+    enum(obs["profile"], ("primary_rgb", "native_oft"), f"{path}.settings.observation.profile")
+    camera_keys = ("primary", "wrist") if obs["profile"] == "native_oft" else ("primary",)
+    cameras = mapping(obs["cameras"], f"{path}.settings.observation.cameras", required=camera_keys)
     primary = mapping(cameras["primary"], f"{path}.settings.observation.cameras.primary", required=("native_name", "canonical_name"))
     for key in primary: exact_type(primary[key], str, f"{path}.settings.observation.cameras.primary.{key}")
+    if "wrist" in cameras:
+        wrist = mapping(cameras["wrist"], f"{path}.settings.observation.cameras.wrist", required=("native_name", "canonical_name"))
+        for key in wrist: exact_type(wrist[key], str, f"{path}.settings.observation.cameras.wrist.{key}")
     for key in ("width", "height"):
         exact_type(obs[key], int, f"{path}.settings.observation.{key}")
         if obs[key] <= 0: raise ConfigSchemaError(f"{path}.settings.observation.{key} must be positive")
@@ -150,16 +154,22 @@ def validate_policy(doc, path):
         raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
         exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
         return
-    if doc["type"] not in ("openvla_vanilla", "openvla_lora_merged"):
+    if doc["type"] not in ("openvla_vanilla", "openvla_lora_merged", "openvla_oft"):
         raise ConfigSchemaError(
-            f"{path}.type supports only 'openvla_vanilla', 'openvla_lora_merged', or 'mock'"
+            f"{path}.type supports only 'openvla_vanilla', 'openvla_lora_merged', 'openvla_oft', or 'mock'"
         )
     settings = mapping(doc["settings"], f"{path}.settings", required=(
         "checkpoint_id", "processor_id", "unnorm_key", "input", "runtime", "action", "raw_output"))
     for key in ("checkpoint_id", "processor_id", "unnorm_key"):
         exact_type(settings[key], str, f"{path}.settings.{key}")
-    input_ = mapping(settings["input"], f"{path}.settings.input", required=("camera",))
-    exact_type(input_["camera"], str, f"{path}.settings.input.camera")
+    if doc["type"] == "openvla_oft":
+        input_ = mapping(settings["input"], f"{path}.settings.input", required=("cameras", "proprioception"))
+        cameras = mapping(input_["cameras"], f"{path}.settings.input.cameras", required=("primary", "wrist"))
+        for key, value in cameras.items(): non_empty_string(value, f"{path}.settings.input.cameras.{key}")
+        non_empty_string(input_["proprioception"], f"{path}.settings.input.proprioception")
+    else:
+        input_ = mapping(settings["input"], f"{path}.settings.input", required=("camera",))
+        exact_type(input_["camera"], str, f"{path}.settings.input.camera")
     runtime = mapping(settings["runtime"], f"{path}.settings.runtime", required=(
         "device_resource", "dtype", "attention_implementation", "local_files_only", "trust_remote_code",
         "deterministic", "synchronize_inference"))
@@ -280,6 +290,58 @@ def validate_registry(doc, path):
             character not in "0123456789abcdef" for character in entry["expected_sha256"]
         ):
             raise ConfigSchemaError(f"{entry_path}.expected_sha256 must be a SHA-256 digest")
+        if entry["method"].get("family") == "openvla_oft":
+            artifact = mapping(
+                entry["artifact"], f"{entry_path}.artifact",
+                required=(
+                    "form", "merge_status", "active_peft_adapter", "runtime_peft_modules",
+                    "published_unmerged_adapter", "files", "parameter_counts", "byte_counts",
+                ),
+            )
+            enum(artifact["form"], ("merged_backbone_with_auxiliary_components",), f"{entry_path}.artifact.form")
+            enum(artifact["merge_status"], ("merged",), f"{entry_path}.artifact.merge_status")
+            for key in ("active_peft_adapter", "runtime_peft_modules"):
+                if artifact[key] is not False:
+                    raise ConfigSchemaError(f"{entry_path}.artifact.{key} must be false")
+            if artifact["published_unmerged_adapter"] is not True:
+                raise ConfigSchemaError(f"{entry_path}.artifact.published_unmerged_adapter must be true")
+            files = artifact["files"]
+            exact_type(files, dict, f"{entry_path}.artifact.files")
+            if not files:
+                raise ConfigSchemaError(f"{entry_path}.artifact.files must not be empty")
+            for name, item in files.items():
+                non_empty_string(name, f"{entry_path}.artifact.files.name")
+                mapping(item, f"{entry_path}.artifact.files.{name}", required=("size", "sha256"))
+                exact_type(item["size"], int, f"{entry_path}.artifact.files.{name}.size")
+                digest = item["sha256"]
+                if item["size"] <= 0 or not isinstance(digest, str) or len(digest) != 64 or any(
+                    character not in "0123456789abcdef" for character in digest
+                ):
+                    raise ConfigSchemaError(f"{entry_path}.artifact.files.{name} has invalid identity")
+            counts = mapping(artifact["parameter_counts"], f"{entry_path}.artifact.parameter_counts", required=(
+                "merged_backbone", "lora_trainable", "lora_file_tensors", "action_head",
+                "proprio_projector", "auxiliary", "complete_adaptation", "total_runtime",
+            ))
+            byte_counts = mapping(artifact["byte_counts"], f"{entry_path}.artifact.byte_counts", required=(
+                "merged_backbone_weights", "lora_file", "auxiliary", "complete_adaptation",
+            ))
+            if any(type(value) is not int or value <= 0 for value in (*counts.values(), *byte_counts.values())):
+                raise ConfigSchemaError(f"{entry_path}.artifact parameter and byte counts must be positive integers")
+            method = mapping(entry["method"], f"{entry_path}.method", required=(
+                "id", "version", "family", "acronym_expansion", "backbone_adaptation",
+                "declared_base_model", "declared_base_revision", "artifact_form", "backbone_merge_status",
+                "runtime_active_adapter", "parallel_decoding", "action_representation", "objective",
+                "action_chunk_size", "action_dimension", "normalization", "image_inputs",
+                "proprioception_dimension", "film", "diffusion", "quantization", "qp_classification",
+                "adaptation_suite", "dataset_identity", "training_step", "lora", "training_provenance",
+            ))
+            enum(method["acronym_expansion"], ("optimized_fine_tuning",), f"{entry_path}.method.acronym_expansion")
+            enum(method["quantization"], ("none",), f"{entry_path}.method.quantization")
+            if method["film"] is not False or method["diffusion"] is not False:
+                raise ConfigSchemaError(f"{entry_path}.method must not enable FiLM or diffusion")
+            exact_type(method["lora"], dict, f"{entry_path}.method.lora")
+            exact_type(method["training_provenance"], dict, f"{entry_path}.method.training_provenance")
+            continue
         artifact = mapping(
             entry["artifact"],
             f"{entry_path}.artifact",

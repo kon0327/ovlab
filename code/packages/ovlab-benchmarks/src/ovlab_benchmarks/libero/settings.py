@@ -13,6 +13,7 @@ class LiberoObservationProfile(str, Enum):
     PRIMARY_RGB = "primary_rgb"
     DUAL_RGB = "dual_rgb"
     RGB_PROPRIOCEPTION = "rgb_proprioception"
+    NATIVE_OFT = "native_oft"
 
 
 class InitialStateSelection(str, Enum):
@@ -45,7 +46,9 @@ class LiberoAdapterSettings:
             raise LiberoConfigurationError("suite_names must be unique")
         if not cameras or any(not isinstance(value, str) or not value.strip() for value in cameras):
             raise LiberoConfigurationError("camera_names must contain non-empty names")
-        required_cameras = 2 if self.observation_profile is LiberoObservationProfile.DUAL_RGB else 1
+        required_cameras = 2 if self.observation_profile in (
+            LiberoObservationProfile.DUAL_RGB, LiberoObservationProfile.NATIVE_OFT,
+        ) else 1
         if len(cameras) < required_cameras:
             raise LiberoConfigurationError(f"{self.observation_profile.value} requires {required_cameras} cameras")
         for name in ("camera_width", "camera_height", "maximum_episode_steps"):

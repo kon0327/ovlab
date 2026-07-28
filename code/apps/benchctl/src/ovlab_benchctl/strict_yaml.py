@@ -19,7 +19,20 @@ class _Line:
 
 _INTEGER = re.compile(r"[-+]?(?:0|[1-9][0-9]*)\Z")
 _FLOAT = re.compile(r"[-+]?(?:(?:[0-9]+\.[0-9]*)|(?:[0-9]*\.[0-9]+)|(?:[0-9]+[eE][-+]?[0-9]+)|(?:[0-9]+\.[0-9]*[eE][-+]?[0-9]+))\Z")
-_SAFE_KEY = re.compile(r"[A-Za-z0-9_.-]+\Z")
+_SAFE_KEY = re.compile(r"[A-Za-z0-9_./-]+\Z")
+
+
+def _safe_key(value: object) -> bool:
+    """Allow relative artifact paths as keys while rejecting traversal syntax."""
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and _SAFE_KEY.fullmatch(value) is not None
+        and not value.startswith("/")
+        and not value.endswith("/")
+        and ".." not in value.split("/")
+        and "//" not in value
+    )
 
 
 def _strip_comment(text: str, source: str, line: int) -> str:
@@ -152,7 +165,7 @@ class _Parser:
             if line.text.startswith("- "):
                 break
             key, raw = _split_mapping(line.text, self.source, line.number)
-            if not key or not _SAFE_KEY.fullmatch(key):
+            if not _safe_key(key):
                 raise StrictYamlError(f"{self.source}:{line.number}: mapping keys must match {_SAFE_KEY.pattern!r}")
             if key in result:
                 raise StrictYamlError(f"{self.source}:{line.number}: duplicate key {key!r}")
@@ -210,7 +223,7 @@ def dumps(value: Any) -> str:
         prefix = " " * indent
         if isinstance(item, Mapping):
             for key, nested in item.items():
-                if not isinstance(key, str) or not _SAFE_KEY.fullmatch(key):
+                if not _safe_key(key):
                     raise TypeError(f"unsupported YAML key: {key!r}")
                 if isinstance(nested, Mapping) and not nested:
                     lines.append(f"{prefix}{key}: {{}}")

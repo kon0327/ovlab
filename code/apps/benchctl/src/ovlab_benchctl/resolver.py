@@ -27,6 +27,7 @@ from ovlab_openvla_common import (
 from ovlab_openvla_vanilla import (
     InferenceSynchronization, ModelDType, OpenVlaVanillaSettings,
 )
+from ovlab_openvla_oft import OpenVlaOftArtifact, OpenVlaOftSettings
 from ovlab_runner import (
     ActionExecutionMode, ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
     MetricAvailabilityPolicy, TraceRecordingPolicy,
@@ -235,14 +236,21 @@ class ConfigResolver:
                 raise ConfigCompatibilityError(f"{owner} action interface differs from the experiment interface")
         if components["benchmark"]["type"] == "libero" and not action_specs_match(action_spec, libero_action_spec()):
             raise ConfigCompatibilityError("action interface differs from LiberoBenchmarkAdapter's verified ActionSpec")
-        camera = components["policy"]["settings"]["input"]["camera"]
+        policy_input = components["policy"]["settings"]["input"]
         observation = components["benchmark"]["settings"]["observation"]
         benchmark_camera = (
             observation["cameras"]["primary"]["canonical_name"]
             if components["benchmark"]["type"] == "libero"
             else observation["camera"]
         )
-        if camera != benchmark_camera:
+        if components["policy"]["type"] == "openvla_oft":
+            cameras = policy_input["cameras"]
+            supplied = {item["canonical_name"] for item in observation["cameras"].values()}
+            if set(cameras.values()) != supplied:
+                raise ConfigCompatibilityError("OFT image inputs differ from the benchmark observation interface")
+            if policy_input["proprioception"] != "robot.proprioception" or observation["profile"] != "native_oft":
+                raise ConfigCompatibilityError("OFT requires the native LIBERO proprioception observation profile")
+        elif policy_input["camera"] != benchmark_camera:
             raise ConfigCompatibilityError("policy input camera is not supplied by the benchmark observation interface")
         if components["benchmark"]["type"] == "mock":
             expected_proprio = components["policy"]["settings"]["input"]["proprioception"]
@@ -301,9 +309,12 @@ class ConfigResolver:
         suite = {"libero_spatial": "LIBERO-Spatial", "libero_object": "LIBERO-Object",
                  "libero_goal": "LIBERO-Goal", "libero_10": "LIBERO-10"}[settings["suite"]]
         task_indices = None if settings["task_indices"] == "all" else tuple(settings["task_indices"])
+        camera_names = [obs["cameras"]["primary"]["native_name"]]
+        if "wrist" in obs["cameras"]:
+            camera_names.append(obs["cameras"]["wrist"]["native_name"])
         return LiberoAdapterSettings(
             suite_names=(suite,), task_indices=task_indices,
-            camera_names=(obs["cameras"]["primary"]["native_name"],), camera_width=obs["width"], camera_height=obs["height"],
+            camera_names=tuple(camera_names), camera_width=obs["width"], camera_height=obs["height"],
             observation_profile=LiberoObservationProfile(obs["profile"]), maximum_episode_steps=protocol.maximum_episode_steps,
             initialization_settling_steps=settings["initialization"]["settling_steps"],
             initial_state_selection=InitialStateSelection(settings["initialization"]["state_selection"]),
@@ -327,6 +338,27 @@ class ConfigResolver:
         except KeyError as exc: raise ConfigReferenceError(f"unknown device resource: {runtime['device_resource']}") from exc
         obs = benchmark_doc["settings"]["observation"]
         source = lambda item: OpenVlaModelSource(item["source"], item["expected_revision"], item["expected_sha256"])
+        if doc["type"] == "openvla_oft":
+            if settings["checkpoint_id"] != settings["processor_id"]:
+                raise ConfigCompatibilityError("OFT model and processor resources must be identical")
+            if benchmark_doc["settings"]["suite"] != "libero_10" or obs["profile"] != "native_oft":
+                raise ConfigCompatibilityError("native Gate E OFT requires LIBERO-10 and the native_oft profile")
+            registry_entry = {
+                "repo_id": model["source"], "expected_revision": model["expected_revision"],
+                "expected_sha256": model["expected_sha256"], "artifact": model["artifact"],
+                "method": model["method"],
+            }
+            artifact = OpenVlaOftArtifact.from_registry_entry(settings["checkpoint_id"], registry_entry)
+            cameras = settings["input"]["cameras"]
+            return OpenVlaOftSettings(
+                source(model), artifact, unnorm_key=settings["unnorm_key"],
+                primary_camera_name=cameras["primary"], wrist_camera_name=cameras["wrist"],
+                proprioception_name=settings["input"]["proprioception"],
+                input_image_shape=(obs["height"], obs["width"], 3),
+                device=device, attention_implementation=runtime["attention_implementation"],
+                target_action_spec=action_spec, record_raw_output=settings["raw_output"]["enabled"],
+                metadata={"execution_strategy": "open_loop_chunk"},
+            )
         method_descriptor = None
         runtime_artifact = None
         if doc["type"] == "openvla_lora_merged":

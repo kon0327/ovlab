@@ -97,8 +97,6 @@ class PolicyService:
         if operation == "initialize":
             require_exact_keys(payload, required={"run_context"}, where="initialize payload")
             capabilities = self.adapter.initialize(run_context_from_wire(payload["run_context"]))
-            if capabilities.observation_requirements.proprioception:
-                raise RemotePolicyProtocolError("remote service policies may not require proprioception")
             identity = dict(self.identity_provider(capabilities))
             required_identity = {
                 "model_identity", "normalization_identity", "prompt_template_identity",

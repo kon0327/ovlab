@@ -7,7 +7,11 @@ import struct
 import numpy as np
 import pytest
 
-from ovlab_core.contracts import PolicyObservation, ProprioceptiveObservation
+from ovlab_core.contracts import (
+    ActionPrediction, ColorSpace, ImageEncoding, ImageObservation, PolicyObservation,
+    PredictionId, ProprioceptiveObservation, StepId,
+)
+from ovlab_openvla_common import libero_target_action_spec
 from ovlab_remote_policy import RemotePolicyProtocolError
 from ovlab_remote_policy.protocol import (
     MAX_FRAME_BYTES,
@@ -15,6 +19,8 @@ from ovlab_remote_policy.protocol import (
     encode_frame,
     observation_to_predict_payload,
     predict_payload_to_observation,
+    prediction_from_wire,
+    prediction_to_wire,
     recv_frame,
     validate_request_envelope,
 )
@@ -94,7 +100,7 @@ def test_prediction_schema_rejects_every_privileged_field(observation, field):
         predict_payload_to_observation(payload)
 
 
-def test_prediction_schema_rejects_metadata_and_proprioception(observation):
+def test_prediction_schema_rejects_metadata_but_round_trips_negotiated_modalities(observation):
     with_metadata = PolicyObservation(
         observation.step_id,
         observation.timestamp_ns,
@@ -104,16 +110,27 @@ def test_prediction_schema_rejects_metadata_and_proprioception(observation):
     )
     with pytest.raises(RemotePolicyProtocolError, match="metadata is forbidden"):
         observation_to_predict_payload(with_metadata, episode_id="episode-0")
-    proprio = ProprioceptiveObservation("robot", np.zeros(1), 3, ("unitless",))
+    wrist = ImageObservation(
+        "camera.wrist.rgb", np.full((2, 2, 3), 9, dtype=np.uint8), 3,
+        ImageEncoding.RAW, ColorSpace.RGB, "robot0_eye_in_hand",
+    )
+    proprio = ProprioceptiveObservation("robot.proprioception", np.zeros(8, dtype=np.float32), 3, ("unitless",) * 8)
     with_proprio = PolicyObservation(
         observation.step_id,
         observation.timestamp_ns,
         observation.instruction,
-        observation.images,
+        observation.images + (wrist,),
         (proprio,),
     )
-    with pytest.raises(RemotePolicyProtocolError, match="proprioception is forbidden"):
-        observation_to_predict_payload(with_proprio, episode_id="episode-0")
+    payload = observation_to_predict_payload(with_proprio, episode_id="episode-0")
+    assert set(payload) == {"episode_id", "step_id", "instruction", "images", "proprioception"}
+    serialized = str(payload)
+    for forbidden in ("reward", "success", "simulator_state", "object_poses", "contacts"):
+        assert forbidden not in serialized
+    _, restored = predict_payload_to_observation(payload)
+    assert [item.name for item in restored.images] == ["camera.primary.rgb", "camera.wrist.rgb"]
+    assert [item.name for item in restored.proprioception] == ["robot.proprioception"]
+    np.testing.assert_array_equal(restored.proprioception[0].values, proprio.values)
 
 
 def test_prediction_schema_rejects_mismatched_image_size(observation):
@@ -121,3 +138,17 @@ def test_prediction_schema_rejects_mismatched_image_size(observation):
     payload["image"]["data_b64"] = base64.b64encode(b"short").decode()
     with pytest.raises(RemotePolicyProtocolError, match="does not match declared shape"):
         predict_payload_to_observation(payload)
+
+
+def test_action_chunk_wire_round_trip_preserves_horizon_dtype_and_offsets():
+    actions = np.arange(56, dtype=np.float32).reshape(8, 7) / 100
+    prediction = ActionPrediction(
+        PredictionId("chunk-0"), StepId("step-0"), actions, libero_target_action_spec(),
+        4, 3, 8, metadata={"action_offsets": list(range(8)), "chunk_id": "chunk-0"},
+    )
+    wire = prediction_to_wire(prediction)
+    assert set(wire) >= {"actions", "shape", "horizon"}
+    assert wire["shape"] == [8, 7] and wire["horizon"] == 8
+    restored = prediction_from_wire(wire)
+    assert restored["actions"].dtype == np.float32 and restored["actions"].shape == (8, 7)
+    np.testing.assert_array_equal(restored["actions"], actions)

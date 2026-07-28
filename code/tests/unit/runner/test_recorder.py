@@ -42,3 +42,26 @@ def test_recorder_rejects_duplicate_steps_and_unrecorded_prediction_relationship
     recorder.start(episode)
     recorder.record_observation(reset.initial_observation, 0)
     with pytest.raises(RecorderError): recorder.record_observation(reset.initial_observation, 0)
+
+
+def test_recorder_explicitly_audits_discarded_action_chunk_remainder() -> None:
+    episode = make_episode_context()
+    benchmark, policy = MockBenchmark(maximum_steps=1), MockPolicy(horizon=8)
+    benchmark.initialize(make_run_context())
+    policy.initialize(make_run_context())
+    policy.reset_episode(episode)
+    reset = benchmark.reset_episode(episode)
+    recorder = EpisodeRecorder(TraceRecordingPolicy(), DeterministicClock())
+    recorder.start(episode)
+    recorder.record_observation(reset.initial_observation, 0)
+    prediction = policy.predict(reset.initial_observation)
+    recorder.record_prediction(prediction)
+    context = recorder.step_contexts[-1]
+    result = benchmark.step(BenchmarkActionRequest(context, prediction.prediction_id, 0, prediction.actions[0], 2))
+    recorder.record_step(context, result)
+    trace = recorder.finalize(EpisodeTerminalStatus.TIME_LIMIT)
+    audit = trace.metadata["action_chunk_audit"][0]
+    assert audit["generated_horizon"] == 8
+    assert audit["executed_offsets"] == (0,)
+    assert audit["discarded_unexecuted_offsets"] == tuple(range(1, 8))
+    assert audit["executed_action_count"] == 1 and audit["discarded_action_count"] == 7

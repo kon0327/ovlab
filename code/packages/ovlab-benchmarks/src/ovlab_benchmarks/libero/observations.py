@@ -25,11 +25,21 @@ _PROPRIO_SPECS = (
     ProprioceptiveObservationSpec("robot.eef.orientation_xyzw", ((4,),), "float32", ("unitless",) * 4),
     ProprioceptiveObservationSpec("robot.gripper.joint_position", ((2,),), "float32", ("rad",) * 2),
 )
+_OFT_PROPRIO_SPEC = ProprioceptiveObservationSpec(
+    "robot.proprioception", ((8,),), "float32", ("m",) * 3 + ("rad",) * 5,
+    metadata={
+        "components": [
+            "robot0_eef_pos[0:3]", "quat2axisangle(robot0_eef_quat)[0:3]",
+            "robot0_gripper_qpos[0:2]",
+        ],
+        "convention": "LIBERO OpenVLA-OFT native state vector",
+    },
+)
 
 
 def configured_cameras(settings: LiberoAdapterSettings) -> tuple[tuple[str, str], ...]:
     cameras = ((settings.camera_names[0], "camera.primary.rgb"),)
-    if settings.observation_profile is LiberoObservationProfile.DUAL_RGB:
+    if settings.observation_profile in (LiberoObservationProfile.DUAL_RGB, LiberoObservationProfile.NATIVE_OFT):
         cameras += ((settings.camera_names[1], "camera.wrist.rgb"),)
     return cameras
 
@@ -40,11 +50,12 @@ def observation_spec(settings: LiberoAdapterSettings) -> ObservationSpec:
         ImageObservationSpec(canonical, (shape,), "uint8", (ImageEncoding.RAW,), (ColorSpace.RGB,))
         for _, canonical in configured_cameras(settings)
     )
-    proprioception = (
-        _PROPRIO_SPECS
-        if settings.observation_profile is LiberoObservationProfile.RGB_PROPRIOCEPTION
-        else ()
-    )
+    if settings.observation_profile is LiberoObservationProfile.RGB_PROPRIOCEPTION:
+        proprioception = _PROPRIO_SPECS
+    elif settings.observation_profile is LiberoObservationProfile.NATIVE_OFT:
+        proprioception = (_OFT_PROPRIO_SPEC,)
+    else:
+        proprioception = ()
     return ObservationSpec(images, proprioception, {"image_transform": "rotate_180"})
 
 
@@ -59,6 +70,29 @@ def _required_array(raw: Mapping[str, object], key: str, shape: tuple[int, ...],
     if not np.all(np.isfinite(value)):
         raise LiberoObservationError(f"native observation {key!r} contains non-finite values")
     return value
+
+
+def _required_numeric_vector(raw: Mapping[str, object], key: str, size: int) -> np.ndarray:
+    if key not in raw:
+        raise LiberoObservationError(f"required native observation {key!r} is missing")
+    value = np.asarray(raw[key])
+    if value.shape != (size,) or value.dtype.kind not in "fc" or not np.all(np.isfinite(value)):
+        raise LiberoObservationError(
+            f"native observation {key!r} must be a finite numeric vector with shape ({size},)"
+        )
+    return value
+
+
+def _quat_xyzw_to_axis_angle(quaternion: np.ndarray) -> np.ndarray:
+    """Match the pinned OFT/Robosuite xyzw quaternion mapping without mutating its input."""
+    quaternion = np.asarray(quaternion, dtype=np.float64).copy()
+    quaternion[3] = np.clip(quaternion[3], -1.0, 1.0)
+    denominator = np.sqrt(1.0 - quaternion[3] * quaternion[3])
+    if np.isclose(denominator, 0.0):
+        return np.zeros(3, dtype=np.float32)
+    return np.asarray(
+        quaternion[:3] * (2.0 * np.arccos(quaternion[3]) / denominator), dtype=np.float32,
+    )
 
 
 def map_observation(
@@ -97,4 +131,21 @@ def map_observation(
             proprioception.append(
                 ProprioceptiveObservation(spec.name, value, timestamp_ns, spec.units, {"native_key": native_key})
             )
+    elif settings.observation_profile is LiberoObservationProfile.NATIVE_OFT:
+        position = _required_numeric_vector(raw, "robot0_eef_pos", 3)
+        quaternion = _required_numeric_vector(raw, "robot0_eef_quat", 4)
+        gripper = _required_numeric_vector(raw, "robot0_gripper_qpos", 2)
+        state = np.ascontiguousarray(np.concatenate(
+            (position, _quat_xyzw_to_axis_angle(quaternion), gripper), dtype=np.float32,
+        ))
+        proprioception.append(ProprioceptiveObservation(
+            _OFT_PROPRIO_SPEC.name,
+            state,
+            timestamp_ns,
+            _OFT_PROPRIO_SPEC.units,
+            {
+                "native_keys": ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"],
+                "mapping": "position_xyz+orientation_axis_angle_xyz+gripper_qpos_2",
+            },
+        ))
     return PolicyObservation(step_id, timestamp_ns, instruction, tuple(images), tuple(proprioception))

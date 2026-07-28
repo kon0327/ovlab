@@ -2,8 +2,10 @@
 
 from .actions import (
     LiberoActionCodec,
+    LiberoActionChunkCodec,
     LiberoActionCodecConfig,
     OpenVlaDecodedAction,
+    OpenVlaDecodedActionChunk,
     action_specs_match,
     libero_target_action_spec,
 )
@@ -23,9 +25,9 @@ from .prompt import OpenVlaPromptFormatter, OpenVlaPromptTemplate
 from .settings import OpenVlaModelSource
 
 __all__ = [
-    "CheckpointFileIdentity", "LiberoActionCodec", "LiberoActionCodecConfig", "OpenVlaActionCodecError",
+    "CheckpointFileIdentity", "LiberoActionCodec", "LiberoActionChunkCodec", "LiberoActionCodecConfig", "OpenVlaActionCodecError",
     "OpenVlaArtifactForm", "OpenVlaMergeStatus", "OpenVlaMethodDescriptor", "OpenVlaMethodFamily",
-    "OpenVlaCheckpointIdentity", "OpenVlaCommonError", "OpenVlaDecodedAction",
+    "OpenVlaCheckpointIdentity", "OpenVlaCommonError", "OpenVlaDecodedAction", "OpenVlaDecodedActionChunk",
     "OpenVlaModelSource", "OpenVlaObservationError", "OpenVlaPromptFormatter", "OpenVlaRuntimeArtifact",
     "OpenVlaPromptTemplate", "action_specs_match", "libero_target_action_spec",
     "method_descriptor_from_registry", "select_canonical_rgb", "vanilla_base_method_descriptor",
