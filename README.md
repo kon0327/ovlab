@@ -34,8 +34,8 @@ Use the unified CLI directly from a checkout without installing packages:
 Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile for runtime
 resolution. Installing `ovlab-benchctl` exposes the same command as the
 `ovlab` console entrypoint. Complete command, output, exit-code, foreground
-service, cleanup, and QuIC-skeleton behavior is documented in
-[`code/apps/benchctl/README.md`](code/apps/benchctl/README.md).
+service, cleanup, and QuIC-skeleton behavior is documented in the
+[`OVLAB CLI guide`](code/apps/benchctl/CLI_README.md).
 
 ## Testing
 

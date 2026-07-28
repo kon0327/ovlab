@@ -29,6 +29,9 @@ profile and are reflected in the resolved execution configuration.
 
 ## Unified CLI
 
+See [CLI_README.md](CLI_README.md) for the complete command reference and
+workflow guide.
+
 Gate G exposes the composition root as one `ovlab` command. An installed
 `ovlab-benchctl` package provides the `ovlab` console script. From a source
 checkout, `./ovlab` is the installation-independent invocation and assembles
