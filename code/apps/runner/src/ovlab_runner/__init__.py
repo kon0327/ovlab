@@ -8,6 +8,8 @@ from .errors import (
     RunnerError, RunnerLifecycleError,
 )
 from .lifecycle import DeterministicClock, RecorderState, RunnerState, SystemClock
+from .inspection import RunIntegrityError, inspect_run, verify_run
+from .offline_metrics import MetricRecomputationError, recompute_run_metrics
 from .plan import (
     ActionExecutionMode, ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
     ExperimentPlan, MetricAvailabilityPolicy, TraceRecordingPolicy,
@@ -21,7 +23,8 @@ __all__ = [
     "ConnectionError", "ConnectionReport", "DeterministicClock", "EpisodeErrorPolicy",
     "EpisodeRecorder", "ExperimentExecutionError", "ExperimentPlan", "ExperimentRunner",
     "FilesystemRunArtifactStore", "InMemoryRunArtifactStore", "MetricAvailabilityPolicy",
-    "ProvenanceSnapshot", "RecorderError", "RecorderState", "RunArtifactStore", "RunnerError",
-    "RunConfigurationSnapshot", "RunnerLifecycleError", "RunnerState", "StaticProvenanceProvider", "SystemClock", "TraceCodec",
+    "MetricRecomputationError", "ProvenanceSnapshot", "RecorderError", "RecorderState", "RunArtifactStore", "RunnerError",
+    "RunConfigurationSnapshot", "RunIntegrityError", "RunnerLifecycleError", "RunnerState", "StaticProvenanceProvider", "SystemClock", "TraceCodec",
     "TraceRecordingPolicy",
+    "inspect_run", "recompute_run_metrics", "verify_run",
 ]

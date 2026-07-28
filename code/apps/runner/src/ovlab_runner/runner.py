@@ -121,7 +121,11 @@ class ExperimentRunner:
             return all_task_results
         except BaseException as exc:
             self.state = RunnerState.FAILED
-            failed = self._final_manifest("failed", terminal_counts, episode_count, metric_errors, type(exc).__name__)
+            status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
+            category = "interrupted" if isinstance(exc, KeyboardInterrupt) else "runtime_failure"
+            failed = self._final_manifest(
+                status, terminal_counts, episode_count, metric_errors, type(exc).__name__, category
+            )
             try: self.store.mark_run_failed(self.plan.run_context.run_id, failed)
             except Exception: pass
             raise
@@ -161,7 +165,10 @@ class ExperimentRunner:
                         if metric_id in self.plan.required_metric_ids: raise
         return tuple(aggregated)
 
-    def _final_manifest(self, status, terminal_counts, episodes, metric_errors, failure_type=None):
+    def _final_manifest(
+        self, status, terminal_counts, episodes, metric_errors,
+        failure_type=None, failure_category=None,
+    ):
         runtime = {
             name: value
             for name, value in (
@@ -171,7 +178,7 @@ class ExperimentRunner:
             if value
         }
         metadata = runtime
-        return {"status": status, "end_wall_time_utc_ns": self.clock.wall_time_utc_ns(), "task_count": len(self.connection_report.selected_tasks), "episode_count": episodes, "episode_counts_by_terminal_status": dict(sorted(terminal_counts.items())), "metric_error_count": metric_errors, "artifact_schema_version": "1.0.0", "failure_type": failure_type, "metadata": metadata}
+        return {"status": status, "end_wall_time_utc_ns": self.clock.wall_time_utc_ns(), "task_count": len(self.connection_report.selected_tasks), "episode_count": episodes, "episode_counts_by_terminal_status": dict(sorted(terminal_counts.items())), "metric_error_count": metric_errors, "artifact_schema_version": "1.0.0", "failure_type": failure_type, "failure_category": failure_category, "metadata": metadata}
 
     def _close_resources(self):
         if self._resources_closed: return

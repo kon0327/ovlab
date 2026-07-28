@@ -70,26 +70,7 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
         self._backend = backend
         self._tasks = tuple(records)
         self._tasks_by_id = {record.task_id: record for record in self._tasks}
-        action_spec = libero_action_spec()
-        registry = signal_registry(self.settings.observation_profile)
-        return BenchmarkCapabilities(
-            "libero-benchmark-adapter",
-            "0.1.0",
-            OVLAB_CONTRACT_VERSION,
-            observation_spec(self.settings),
-            action_spec,
-            registry,
-            True,
-            False,
-            any(spec.access.value == "privileged" for spec in registry),
-            self.settings.suite_names,
-            {
-                "libero_commit": LIBERO_PINNED_COMMIT,
-                "controller": "OSC_POSE",
-                "observation_profile": self.settings.observation_profile.value,
-                "renderer": self.settings.renderer.as_dict(),
-            },
-        )
+        return configured_capabilities(self.settings)
 
     def _list_tasks(self) -> tuple[TaskDescriptor, ...]:
         return tuple(record.descriptor(self.settings.maximum_episode_steps) for record in self._tasks)
@@ -246,3 +227,28 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
         renderer = self.settings.renderer.as_dict()
         renderer["detected_renderer"] = self._detected_renderer
         return {"libero_renderer": renderer}
+
+
+def configured_capabilities(settings: LiberoAdapterSettings) -> BenchmarkCapabilities:
+    """Describe the configured LIBERO boundary without importing its runtime."""
+    if not isinstance(settings, LiberoAdapterSettings):
+        raise TypeError("settings must be LiberoAdapterSettings")
+    registry = signal_registry(settings.observation_profile)
+    return BenchmarkCapabilities(
+        "libero-benchmark-adapter",
+        "0.1.0",
+        OVLAB_CONTRACT_VERSION,
+        observation_spec(settings),
+        libero_action_spec(),
+        registry,
+        True,
+        False,
+        any(spec.access.value == "privileged" for spec in registry),
+        settings.suite_names,
+        {
+            "libero_commit": LIBERO_PINNED_COMMIT,
+            "controller": "OSC_POSE",
+            "observation_profile": settings.observation_profile.value,
+            "renderer": settings.renderer.as_dict(),
+        },
+    )

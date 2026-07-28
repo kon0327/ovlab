@@ -14,9 +14,15 @@ dependencies = [
   "ovlab-metrics>=0.1.0",
   "ovlab-openvla-common>=0.1.0",
   "ovlab-openvla-vanilla>=0.1.0",
+  "ovlab-openvla-oft>=0.1.0",
+  "ovlab-openvla-quic>=0.1.0",
+  "ovlab-remote-policy>=0.1.0",
   "ovlab-runner>=0.1.0",
   "numpy>=1.24",
 ]
+
+[project.scripts]
+ovlab = "ovlab_benchctl.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

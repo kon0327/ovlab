@@ -1,6 +1,6 @@
 """Opt-in concrete LIBERO benchmark integration."""
 
-from .adapter import LiberoBenchmarkAdapter
+from .adapter import LiberoBenchmarkAdapter, configured_capabilities
 from .errors import (
     LiberoActionError,
     LiberoAdapterError,
@@ -22,7 +22,7 @@ __all__ = [
     "LiberoActionError",
     "LiberoAdapterError",
     "LiberoAdapterSettings",
-    "LiberoBenchmarkAdapter",
+    "LiberoBenchmarkAdapter", "configured_capabilities",
     "LiberoConfigurationError",
     "LiberoDependencyError",
     "LiberoEnvironmentError",

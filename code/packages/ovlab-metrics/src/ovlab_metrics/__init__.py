@@ -10,6 +10,7 @@ from .config import (
     RepeatedNoOpMetricConfig,
     SuccessRateMetricConfig,
     canonical_config,
+    config_from_canonical,
     config_hash,
 )
 from .descriptor import MetricDescriptor, MetricLevel, MetricScope, OptimizationDirection
@@ -35,5 +36,5 @@ __all__ = [
     "MinimumSampleRequirement", "OptimizationDirection", "RepeatedNoOpMetricConfig",
     "RequirementResolution", "SignalRequirement", "SuccessRateMetricConfig", "TaskMetricPlugin",
     "TraceField", "TraceFieldRequirement", "aggregate_episode_results", "aggregate_results_by_task", "canonical_config",
-    "config_hash", "resolve_requirements",
+    "config_from_canonical", "config_hash", "resolve_requirements",
 ]

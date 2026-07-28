@@ -16,6 +16,11 @@ class FailingPolicy(TrackingPolicy):
         raise PolicyInferenceError("synthetic inference failure")
 
 
+class InterruptedPolicy(TrackingPolicy):
+    def _predict(self, observation):
+        raise KeyboardInterrupt()
+
+
 def test_policy_error_persists_trace_without_fake_action_and_stop_run_fails() -> None:
     store = InMemoryRunArtifactStore()
     benchmark, policy = TrackingBenchmark(), FailingPolicy()
@@ -43,3 +48,20 @@ def test_continue_run_skips_remaining_rollouts_of_failed_task() -> None:
     runner = ExperimentRunner(plan, TrackingBenchmark(), FailingPolicy(), store, clock=DeterministicClock())
     runner.connect(); runner.run()
     assert len(store.runs["runner-test"]["episodes"]) == 1
+
+
+def test_keyboard_interrupt_preserves_aborted_trace_and_interrupted_manifest() -> None:
+    store = InMemoryRunArtifactStore()
+    runner = ExperimentRunner(
+        runner_plan(), TrackingBenchmark(), InterruptedPolicy(), store, clock=DeterministicClock()
+    )
+    runner.connect()
+    with pytest.raises(KeyboardInterrupt):
+        runner.run()
+    run = store.runs["runner-test"]
+    trace = next(iter(run["episodes"].values()))["trace"]
+    assert trace.terminal_status is EpisodeTerminalStatus.ABORTED
+    assert run["failed"]["status"] == "interrupted"
+    assert run["failed"]["failure_type"] == "KeyboardInterrupt"
+    assert run["failed"]["failure_category"] == "interrupted"
+    assert store.write_order[-1] == "manifest.failed"

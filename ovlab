@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source_paths=()
+for source_path in code/packages/*/src code/policies/*/src code/apps/*/src; do
+    if [[ -d "$repository_root/$source_path" ]]; then
+        source_paths+=("$repository_root/$source_path")
+    fi
+done
+joined_paths="$(IFS=:; echo "${source_paths[*]}")"
+export PYTHONPATH="$joined_paths${PYTHONPATH:+:$PYTHONPATH}"
+exec python -m ovlab_benchctl.cli "$@"

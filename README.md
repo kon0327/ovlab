@@ -2,7 +2,7 @@
 
 OpenVLABenchmark (OVLAB) is a reproducible experimental framework for evaluating OpenVLA-derived Vision–Language–Action policies, initially with the LIBERO benchmark.
 
-OVLAB follows a **Config → Connect → Run** workflow: define an experiment, connect interchangeable policies and benchmarks through shared contracts, and execute reproducible runs whose traces can later be recorded, analyzed, and exported.
+OVLAB follows a **Config → Connect → Run → Inspect** workflow: define an experiment, connect interchangeable policies and benchmarks through shared contracts, execute reproducible runs, and validate or analyze their immutable traces offline.
 
 The experiment runner and benchmark adapter execute together in a runner process or container. Each VLA implementation runs independently as a policy service, communicating through a dependency-light policy protocol. This separation allows Vanilla, LoRA, OFT, and QuIC implementations to keep distinct dependency environments.
 
@@ -16,7 +16,26 @@ The experiment runner and benchmark adapter execute together in a runner process
 - `datasets/`: local benchmark datasets; generated contents are not versioned.
 - `runs/`: generated experiment manifests, traces, and results; contents are not versioned.
 
-OVLAB is currently in the **scaffolding phase**. Package implementations, dependency definitions, protocols, containers, and runtime configuration will be designed in later phases.
+## Command line
+
+Use the unified CLI directly from a checkout without installing packages:
+
+```bash
+./ovlab --help
+./ovlab config validate CONFIG --mode descriptor
+./ovlab policy list
+./ovlab connect CONFIG
+./ovlab run CONFIG --dry-run
+./ovlab run inspect RUN_PATH
+./ovlab run verify RUN_PATH
+./ovlab metrics recompute RUN_PATH
+```
+
+Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile for runtime
+resolution. Installing `ovlab-benchctl` exposes the same command as the
+`ovlab` console entrypoint. Complete command, output, exit-code, foreground
+service, cleanup, and QuIC-skeleton behavior is documented in
+[`code/apps/benchctl/README.md`](code/apps/benchctl/README.md).
 
 ## Testing
 

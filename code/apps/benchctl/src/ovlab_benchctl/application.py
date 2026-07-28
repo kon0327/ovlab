@@ -1,0 +1,440 @@
+"""Thin application services used by the unified OVLAB command line."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from enum import Enum
+import os
+from pathlib import Path
+import re
+import time
+import uuid
+
+from .catalog import registered_policies
+from .errors import ConfigCompatibilityError, ConfigReferenceError
+from .models import MockPolicySettings, ResolvedExperimentConfig
+from .resolver import ConfigResolver
+from .strict_yaml import dumps, load
+from .versioning import CLI_VERSION, repository_revision
+
+
+CLI_SCHEMA_VERSION = "ovlab-cli/1.0.0"
+
+
+def _plain(value):
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "items"):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain(item) for item in value]
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return value
+
+
+def _action_spec(spec) -> dict[str, object]:
+    return {
+        "dimension": spec.dimension,
+        "representation": spec.representation.value,
+        "translation_indices": list(spec.translation_indices),
+        "rotation_indices": list(spec.rotation_indices),
+        "gripper_indices": list(spec.gripper_indices),
+        "rotation_representation": spec.rotation_representation.value,
+        "gripper_convention": spec.gripper_convention.value,
+        "units": list(spec.units),
+        "minimum": None if spec.minimum is None else spec.minimum.tolist(),
+        "maximum": None if spec.maximum is None else spec.maximum.tolist(),
+        "dtype": spec.dtype,
+        "control_frequency_hz": spec.control_frequency_hz,
+    }
+
+
+def _observation_requirements(requirements) -> dict[str, object]:
+    return {
+        "images": [
+            {
+                "name": item.name,
+                "shapes": [list(shape) for shape in item.shapes],
+                "dtype": item.dtype,
+                "encodings": [value.value for value in item.encodings],
+                "color_spaces": [value.value for value in item.color_spaces],
+                "minimum_count": item.minimum_count,
+                "maximum_count": item.maximum_count,
+                "required": item.required,
+            }
+            for item in requirements.images
+        ],
+        "proprioception": [
+            {
+                "name": item.name,
+                "shapes": [list(shape) for shape in item.shapes],
+                "dtype": item.dtype,
+                "units": list(item.units),
+                "required": item.required,
+            }
+            for item in requirements.proprioception
+        ],
+        "minimum_image_count": requirements.minimum_image_count,
+        "maximum_image_count": requirements.maximum_image_count,
+        "minimum_proprioception_count": requirements.minimum_proprioception_count,
+        "maximum_proprioception_count": requirements.maximum_proprioception_count,
+    }
+
+
+class OvlabApplication:
+    """Orchestrate owner APIs; it contains no model, rollout, metric, or trace logic."""
+
+    def __init__(self, repository_root: str | Path | None = None, *, environment=None) -> None:
+        root = Path(repository_root or Path(__file__).resolve().parents[5]).resolve()
+        self.repository_root = root
+        self.config_root = root / "configs"
+        self.environment = os.environ if environment is None else environment
+        self.resolver = ConfigResolver(self.config_root, repository_root=root)
+
+    def _config_path(self, config: str | Path) -> Path:
+        path = Path(config).expanduser()
+        if not path.is_absolute():
+            path = self.repository_root / path
+        path = path.resolve()
+        if not path.is_file():
+            raise ConfigReferenceError(f"configuration does not exist: {path}")
+        if not path.is_relative_to(self.config_root):
+            raise ConfigReferenceError("CLI configurations must be inside configs/")
+        return path
+
+    def _relative(self, path: Path) -> str:
+        return str(path.relative_to(self.config_root))
+
+    def _local_profile(self) -> Path:
+        configured = self.environment.get("OVLAB_LOCAL_PROFILE")
+        path = Path(configured).expanduser() if configured else self.config_root / "local/profile.yaml"
+        if not path.is_absolute():
+            path = self.repository_root / path
+        if not path.is_file():
+            raise ConfigReferenceError(
+                "runtime resolution requires OVLAB_LOCAL_PROFILE or configs/local/profile.yaml"
+            )
+        return path.resolve()
+
+    def _quic_descriptor(self, path: Path, *, runtime: bool):
+        from ovlab_openvla_quic import descriptor_from_document
+
+        document = self.resolver.load_component(self._relative(path), "quic_policy_descriptor")
+        descriptor = descriptor_from_document(document)
+        if runtime:
+            descriptor.require_runtime_ready()
+        return document, descriptor
+
+    def resolve(self, config: str | Path, *, mode: str = "descriptor"):
+        if mode not in {"descriptor", "runtime"}:
+            raise ValueError("mode must be descriptor or runtime")
+        path = self._config_path(config)
+        header = load(path)
+        if header.get("kind") == "quic_policy_descriptor":
+            document, descriptor = self._quic_descriptor(path, runtime=mode == "runtime")
+            return {
+                "schema_version": CLI_SCHEMA_VERSION,
+                "kind": "resolved_policy_descriptor",
+                "source": self._relative(path),
+                "descriptor": descriptor.as_metadata(),
+                "scientific_config_hash": descriptor.scientific_hash,
+                "execution_config_hash": None,
+                "runtime_ready": mode == "runtime",
+            }
+        if header.get("kind") != "experiment":
+            kind = header.get("kind")
+            document = self.resolver.load_component(self._relative(path), kind)
+            return document
+        execution = self.environment.get("OVLAB_EXECUTION_PROFILE")
+        return self.resolver.resolve(
+            path,
+            local_profile=self._local_profile(),
+            execution_profile=execution,
+            environment=self.environment,
+        )
+
+    def validate(self, config: str | Path, *, mode: str) -> dict[str, object]:
+        resolved = self.resolve(config, mode=mode)
+        if isinstance(resolved, ResolvedExperimentConfig):
+            return {
+                "valid": True,
+                "mode": mode,
+                "kind": "experiment",
+                "experiment_id": resolved.experiment_id,
+                "scientific_config_hash": resolved.scientific_config_hash,
+                "execution_config_hash": resolved.execution_config_hash,
+            }
+        return {
+            "valid": True,
+            "mode": mode,
+            "kind": resolved.get("kind"),
+            "scientific_config_hash": resolved.get("scientific_config_hash"),
+            "execution_config_hash": resolved.get("execution_config_hash"),
+        }
+
+    def resolved_document(self, config: str | Path, *, mode: str):
+        value = self.resolve(config, mode=mode)
+        return _plain(value.document() if isinstance(value, ResolvedExperimentConfig) else value)
+
+    @staticmethod
+    def policy_list() -> list[dict[str, object]]:
+        return registered_policies()
+
+    def policy_describe(self, config: str | Path) -> dict[str, object]:
+        path = self._config_path(config)
+        header = load(path)
+        if header.get("kind") == "quic_policy_descriptor":
+            _, descriptor = self._quic_descriptor(path, runtime=False)
+            metadata = descriptor.as_metadata()
+            return {
+                "method": descriptor.variant.value,
+                "family": descriptor.family,
+                "artifact": metadata["artifact_identity"],
+                "capabilities": metadata["capability_identity"],
+                "readiness": {
+                    "runtime_ready": False,
+                    "implementation_status": metadata["implementation_status"],
+                    "openvla_integration_status": metadata["openvla_integration_status"],
+                },
+                "profile": metadata["profile"],
+                "scientific_config_hash": descriptor.scientific_hash,
+                "execution_config_hash": None,
+                "unavailable_fields": metadata["unavailable_fields"],
+            }
+        resolved = self.resolve(path, mode="descriptor")
+        if not isinstance(resolved, ResolvedExperimentConfig):
+            raise ConfigCompatibilityError("policy describe requires an experiment or QuIC descriptor")
+        policy = resolved.scientific_config["components"]["policy"]
+        settings = policy["settings"]
+        return {
+            "method": policy["type"],
+            "family": {
+                "openvla_vanilla": "openvla",
+                "openvla_lora_merged": "lora",
+                "openvla_oft": "openvla_oft",
+                "mock": "mock",
+            }[policy["type"]],
+            "artifact": {"checkpoint_id": settings.get("checkpoint_id", "unavailable")},
+            "capabilities": {
+                "action_spec": _action_spec(resolved.action_spec),
+                "input": settings["input"],
+            },
+            "readiness": {"runtime_ready": policy["type"] != "mock", "provider_loaded": False},
+            "profile": None,
+            "scientific_config_hash": resolved.scientific_config_hash,
+            "execution_config_hash": resolved.execution_config_hash,
+            "unavailable_fields": [],
+        }
+
+    def default_socket(self, config: str | Path) -> Path:
+        path = self._config_path(config)
+        raw = load(path)
+        identity = raw.get("id") or raw.get("experiment", {}).get("id") or path.stem
+        slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", identity).strip(".-") or "policy"
+        return Path("/tmp") / f"ovlab-{os.getuid()}" / f"{slug}.sock"
+
+    def _resolved_experiment(self, config: str | Path) -> ResolvedExperimentConfig:
+        resolved = self.resolve(config, mode="runtime")
+        if not isinstance(resolved, ResolvedExperimentConfig):
+            raise ConfigCompatibilityError("operation requires a complete experiment configuration")
+        return resolved
+
+    @staticmethod
+    def _policy_adapter(settings):
+        if isinstance(settings, MockPolicySettings):
+            raise ConfigCompatibilityError("mock policy adapters are test-only and unavailable to production CLI")
+        from ovlab_openvla_oft import OpenVlaOftAdapter, OpenVlaOftSettings
+        if isinstance(settings, OpenVlaOftSettings):
+            return OpenVlaOftAdapter(settings)
+        from ovlab_openvla_common import OpenVlaMethodFamily
+        if settings.method_descriptor.family is OpenVlaMethodFamily.LORA:
+            from ovlab_openvla_lora_merged import OpenVlaMergedLoraAdapter
+            return OpenVlaMergedLoraAdapter(settings)
+        from ovlab_openvla_vanilla import OpenVlaVanillaAdapter
+        return OpenVlaVanillaAdapter(settings)
+
+    @staticmethod
+    def _identity_provider(capabilities):
+        if capabilities.component_name == "ovlab-openvla-vanilla":
+            from ovlab_remote_policy.openvla_service import _identity_provider
+            return _identity_provider(capabilities)
+        if capabilities.component_name == "ovlab-openvla-lora-merged":
+            from ovlab_openvla_lora_merged.service import _identity_provider
+            return _identity_provider(capabilities)
+        if capabilities.component_name == "ovlab-openvla-oft":
+            from ovlab_openvla_oft.service import _identity
+            return _identity(capabilities)
+        if capabilities.component_name not in {"mock-policy", "handshake-only-policy"}:
+            raise ConfigCompatibilityError(
+                f"no registered service identity provider for {capabilities.component_name!r}"
+            )
+        metadata = capabilities.metadata
+        checkpoint = dict(metadata.get("checkpoint_identity", metadata.get("runtime", {}).get("verified_artifact", {})))
+        method = metadata.get("method_descriptor")
+        return {
+            "model_identity": checkpoint or {"availability": "unavailable"},
+            "normalization_identity": {
+                "unnorm_key": checkpoint.get("unnorm_key", "unavailable"),
+                "action_statistics_identity": checkpoint.get("action_statistics_identity", "unavailable"),
+            },
+            "prompt_template_identity": metadata.get("prompt_template", "unavailable"),
+            "action_codec_identity": {
+                "identifier": metadata.get("action_codec", "unavailable"),
+                "conversion_owner": metadata.get("action_codec_owner", "unavailable"),
+                "application_count": 1,
+                "output_gripper_convention": capabilities.output_action_spec.gripper_convention.value,
+            },
+            "runtime_versions": {
+                "policy_component": f"{capabilities.component_name}@{capabilities.component_version}",
+                "protocol_component": "ovlab-remote-policy@0.1.0",
+            },
+            **({"method_descriptor": _plain(method)} if method is not None else {}),
+        }
+
+    def serve(self, config: str | Path, *, socket_path: str | Path | None = None, adapter_factory=None) -> dict[str, object]:
+        path = self._config_path(config)
+        if load(path).get("kind") == "quic_policy_descriptor":
+            self._quic_descriptor(path, runtime=True)
+            raise AssertionError("runtime-ready QuIC descriptor did not produce an experiment")
+        resolved = self._resolved_experiment(path)
+        adapter = (adapter_factory or self._policy_adapter)(resolved.policy_settings)
+        socket = Path(socket_path) if socket_path is not None else self.default_socket(path)
+        socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(socket.parent, 0o700)
+        from ovlab_remote_policy.service import PolicyService
+        PolicyService(socket, adapter, identity_provider=self._identity_provider).serve()
+        return {"socket": str(socket), "closed": True}
+
+    def connect(self, config: str | Path, *, socket_path: str | Path | None = None) -> dict[str, object]:
+        from ovlab_core import negotiate_capabilities
+        from ovlab_core.contracts import RunContext, RunId
+        from ovlab_remote_policy import RemotePolicyAdapter, UnixPolicyClient
+        from ovlab_benchmarks.libero import LiberoAdapterSettings, configured_capabilities
+
+        resolved = self._resolved_experiment(config)
+        if not isinstance(resolved.benchmark_settings, LiberoAdapterSettings):
+            raise ConfigCompatibilityError("connect requires a configured isolated runtime policy and benchmark")
+        socket = Path(socket_path) if socket_path is not None else self.default_socket(config)
+        policy = RemotePolicyAdapter(UnixPolicyClient(socket))
+        context = RunContext(RunId(f"connect-{uuid.uuid4().hex}"), time.time_ns(), resolved.experiment_id, 0)
+        try:
+            policy_capabilities = policy.initialize(context)
+            report = negotiate_capabilities(configured_capabilities(resolved.benchmark_settings), policy_capabilities)
+            handshake = policy.handshake
+            return {
+                "policy": handshake.get("model_identity"),
+                "protocol_version": handshake["protocol_version"],
+                "observation_requirements": _observation_requirements(policy_capabilities.observation_requirements),
+                "supports_single_action": policy_capabilities.supports_single_action,
+                "supports_action_chunks": policy_capabilities.supports_action_chunks,
+                "minimum_action_horizon": policy_capabilities.minimum_action_horizon,
+                "maximum_action_horizon": policy_capabilities.maximum_action_horizon,
+                "action_spec": _action_spec(policy_capabilities.output_action_spec),
+                "normalization_identity": handshake["normalization_identity"],
+                "compatible": report.compatible,
+                "compatibility_issues": [
+                    {"code": item.code, "severity": item.severity.value, "path": item.path, "message": item.message}
+                    for item in report.issues
+                ],
+                "scientific_config_hash": resolved.scientific_config_hash,
+                "execution_config_hash": resolved.execution_config_hash,
+                "prediction_count": 0,
+                "trace_created": False,
+            }
+        finally:
+            policy.close()
+
+    def execution_plan(self, config: str | Path, *, output_root: str | Path | None = None) -> dict[str, object]:
+        resolved = self._resolved_experiment(config)
+        output = resolved.artifact_settings.root if output_root is None else str(Path(output_root).expanduser().resolve())
+        scientific = resolved.scientific_config
+        return {
+            "experiment_id": resolved.experiment_id,
+            "policy": scientific["components"]["policy"]["type"],
+            "benchmark": scientific["components"]["benchmark"]["type"],
+            "metrics": list(resolved.metric_settings.enabled_metric_ids),
+            "scientific_config_hash": resolved.scientific_config_hash,
+            "execution_config_hash": resolved.execution_config_hash,
+            "service_mode": "external-af-unix",
+            "socket": str(self.default_socket(config)),
+            "output_root": output,
+            "side_effects_performed": False,
+        }
+
+    @staticmethod
+    def _selected_tasks(resolved: ResolvedExperimentConfig):
+        from ovlab_benchmarks.libero import LiberoAdapterSettings
+        from ovlab_core.contracts import TaskId
+        settings = resolved.benchmark_settings
+        if not isinstance(settings, LiberoAdapterSettings):
+            raise ConfigCompatibilityError("production CLI run currently requires LIBERO")
+        slug = {
+            "LIBERO-10": "10", "LIBERO-Spatial": "spatial", "LIBERO-Object": "object", "LIBERO-Goal": "goal",
+        }
+        indices = settings.task_indices if settings.task_indices is not None else tuple(range(10))
+        return tuple(TaskId(f"libero/{slug[suite]}/{index}") for suite in settings.suite_names for index in indices)
+
+    def run(self, config: str | Path, *, output_root: str | Path | None = None) -> dict[str, object]:
+        from ovlab_benchmarks.libero import LiberoBenchmarkAdapter
+        from ovlab_core.contracts import RunContext, RunId
+        from ovlab_remote_policy import RemotePolicyAdapter, UnixPolicyClient
+        from ovlab_runner import ExperimentRunner, FilesystemRunArtifactStore
+
+        resolved = self._resolved_experiment(config)
+        run_id = RunId(f"{resolved.experiment_id}-{time.time_ns()}-{uuid.uuid4().hex[:8]}")
+        context = RunContext(run_id, time.time_ns(), resolved.experiment_id, resolved.protocol_settings.base_seed)
+        plan = resolved.create_plan(context, self._selected_tasks(resolved))
+        plan = replace(plan, metadata={
+            **dict(plan.metadata),
+            "cli": {
+                "schema_version": CLI_SCHEMA_VERSION,
+                "version": CLI_VERSION,
+                "repository_revision": repository_revision(self.repository_root) or "unavailable",
+                "command": "run",
+                "resolved_config_identity": resolved.experiment_id,
+                "scientific_config_hash": resolved.scientific_config_hash,
+                "execution_config_hash": resolved.execution_config_hash,
+                "service_topology": "external-af-unix",
+                "socket": "machine-local",
+                "output_root_overridden": output_root is not None,
+            },
+        })
+        root = resolved.artifact_settings.root if output_root is None else Path(output_root).expanduser().resolve()
+        socket = self.default_socket(config)
+        policy = RemotePolicyAdapter(UnixPolicyClient(socket))
+        runner = ExperimentRunner(
+            plan,
+            LiberoBenchmarkAdapter(resolved.benchmark_settings),
+            policy,
+            FilesystemRunArtifactStore(root),
+            configuration_snapshot=resolved.configuration_snapshot(),
+        )
+        try:
+            report = runner.connect()
+            runner.run()
+        finally:
+            runner.close()
+        return {
+            "run_id": str(run_id),
+            "run_path": str(FilesystemRunArtifactStore(root)._run_path(run_id)),
+            "compatible": report.compatibility_report.compatible,
+            "scientific_config_hash": resolved.scientific_config_hash,
+            "execution_config_hash": resolved.execution_config_hash,
+            "status": "completed",
+        }
+
+    @staticmethod
+    def inspect(path):
+        from ovlab_runner import inspect_run
+        return inspect_run(path)
+
+    @staticmethod
+    def verify(path):
+        from ovlab_runner import verify_run
+        return verify_run(path)
+
+    @staticmethod
+    def recompute_metrics(path):
+        from ovlab_runner import recompute_run_metrics
+        return recompute_run_metrics(path)

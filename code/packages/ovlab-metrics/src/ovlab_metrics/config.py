@@ -99,3 +99,31 @@ class GripperFlickerMetricConfig:
 @dataclass(frozen=True, slots=True)
 class SuccessRateMetricConfig:
     aborted_policy_attributable: bool = True
+
+
+def config_from_canonical(metric_id: str, value: dict):
+    """Reconstruct a typed configuration recorded in an immutable runner plan."""
+    if not isinstance(metric_id, str) or not isinstance(value, dict):
+        raise MetricValidationError("recorded metric configuration must be a mapping")
+    if metric_id in {"action.variance", "action.smoothness_1", "action.smoothness_2"}:
+        return ActionSequenceMetricConfig(ActionSource(value["action_source"]))
+    if metric_id == "failure.action_modification_rate":
+        return ActionModificationMetricConfig(value["absolute_tolerance"], value["relative_tolerance"])
+    if metric_id == "failure.repeated_no_op_rate":
+        indices = value.get("action_indices")
+        return RepeatedNoOpMetricConfig(
+            ActionSource(value["action_source"]),
+            None if indices is None else tuple(indices),
+            value["norm_threshold"],
+            value["minimum_consecutive_run_length"],
+        )
+    if metric_id == "failure.gripper_flicker_rate":
+        return GripperFlickerMetricConfig(
+            ActionSource(value["action_source"]), value["activation_threshold"], value["deadband"],
+            value["maximum_stable_interval"], value["minimum_dwell_steps"],
+        )
+    if metric_id == "task.success_rate":
+        return SuccessRateMetricConfig(value.get("aborted_policy_attributable", True))
+    if value:
+        raise MetricValidationError(f"metric {metric_id!r} has an unexpected recorded configuration")
+    return EmptyMetricConfig()
