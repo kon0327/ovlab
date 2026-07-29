@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+FROM python:3.10.20-slim-bookworm@sha256:5cc3381b18ec240e4462510648ed7970917ac8eff4c3463320429fec285491be AS smoke
+
+LABEL cz.cvut.ovlab.role="test-only-transport-smoke" \
+      cz.cvut.ovlab.production="false"
+ENV OVLAB_ROOT=/opt/ovlab \
+    OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \
+    OVLAB_POLICY_SOCKET=/run/ovlab/policy.sock \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+WORKDIR /opt/ovlab
+RUN python -m pip install --no-cache-dir --no-deps \
+      'numpy==1.26.4' \
+    && groupadd --gid 10001 ovlab \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab
+COPY code /opt/ovlab/code
+COPY configs /opt/ovlab/configs
+COPY deploy/config /opt/ovlab/deploy/config
+COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
+RUN bash /tmp/install-ovlab-packages.sh \
+    && rm /tmp/install-ovlab-packages.sh \
+    && install -d -o 10001 -g 10001 -m 0700 /run/ovlab \
+    && install -d -o root -g root -m 0755 /usr/local/lib/python3.10/site-packages
+COPY deploy/smoke/sitecustomize.py /usr/local/lib/python3.10/site-packages/sitecustomize.py
+USER 10001:10001
+ENTRYPOINT ["ovlab"]
+CMD ["--help"]

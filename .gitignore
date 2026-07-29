@@ -10,6 +10,7 @@ datasets/*
 lab/reports/*
 !lab/reports/.gitkeep
 lab/notebooks/.ipynb_checkpoints/
+deploy/compose/images.local.env
 
 # Python caches and compiled files
 __pycache__/

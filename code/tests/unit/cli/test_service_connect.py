@@ -60,6 +60,43 @@ def test_foreground_service_uses_test_only_factory_and_cleans_socket(tmp_path):
     assert not thread.is_alive() and not socket.exists()
 
 
+def test_health_is_ready_only_after_initialization_and_does_not_consume_service(tmp_path):
+    profile = _profile(tmp_path)
+    socket = tmp_path / "health.sock"
+    initialized_before_socket = []
+
+    class ReadinessPolicy(MockPolicy):
+        def _initialize(self, context):
+            initialized_before_socket.append(not socket.exists())
+            return super()._initialize(context)
+
+        def _predict(self, observation):
+            raise AssertionError("health must never predict")
+
+    app = OvlabApplication(REPOSITORY, environment={**os.environ, "OVLAB_LOCAL_PROFILE": str(profile)})
+    thread = threading.Thread(
+        target=lambda: app.serve(
+            "configs/experiments/mock-e2e-smoke.yaml",
+            socket_path=socket,
+            adapter_factory=lambda _settings: ReadinessPolicy(),
+        )
+    )
+    thread.start(); _wait(socket, thread)
+    assert initialized_before_socket == [True]
+
+    first = app.service_health(socket)
+    second = app.service_health(socket)
+    assert first["ready"] is True and second["ready"] is True
+    assert first["protocol_version"] == "ovlab-policy-rpc/1.0.0"
+    assert first["prediction_count"] == 0 and first["trace_created"] is False
+    assert thread.is_alive()
+
+    client = UnixPolicyClient(socket, request_timeout_s=2)
+    client.connect(); client.initialize(make_run_context(run_id="deployment-run"))
+    client.request_close(); client.close_socket(); thread.join(timeout=2)
+    assert not thread.is_alive() and not socket.exists()
+
+
 def test_service_factory_failure_occurs_before_socket_readiness(tmp_path):
     profile = _profile(tmp_path)
     app = OvlabApplication(REPOSITORY, environment={**os.environ, "OVLAB_LOCAL_PROFILE": str(profile)})

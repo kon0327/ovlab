@@ -1,0 +1,41 @@
+name: ovlab-transport-smoke
+
+services:
+  policy:
+    image: ovlab-transport-smoke:local
+    command: [service, serve, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --socket, /run/ovlab/policy.sock]
+    user: "10001:10001"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+    volumes:
+      - rpc:/run/ovlab
+    healthcheck:
+      test: [CMD, ovlab, service, health, --socket, /run/ovlab/policy.sock, --json]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+
+  benchmark:
+    image: ovlab-transport-smoke:local
+    command: [connect, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --json]
+    user: "10001:10001"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+    depends_on:
+      policy:
+        condition: service_healthy
+        restart: false
+    volumes:
+      - rpc:/run/ovlab
+
+volumes:
+  rpc:

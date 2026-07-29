@@ -86,10 +86,12 @@ class OvlabApplication:
     """Orchestrate owner APIs; it contains no model, rollout, metric, or trace logic."""
 
     def __init__(self, repository_root: str | Path | None = None, *, environment=None) -> None:
-        root = Path(repository_root or Path(__file__).resolve().parents[5]).resolve()
+        values = os.environ if environment is None else environment
+        configured_root = values.get("OVLAB_ROOT")
+        root = Path(repository_root or configured_root or Path(__file__).resolve().parents[5]).resolve()
         self.repository_root = root
         self.config_root = root / "configs"
-        self.environment = os.environ if environment is None else environment
+        self.environment = values
         self.resolver = ConfigResolver(self.config_root, repository_root=root)
 
     def _config_path(self, config: str | Path) -> Path:
@@ -228,6 +230,9 @@ class OvlabApplication:
         }
 
     def default_socket(self, config: str | Path) -> Path:
+        configured = self.environment.get("OVLAB_POLICY_SOCKET")
+        if configured:
+            return Path(configured)
         path = self._config_path(config)
         raw = load(path)
         identity = raw.get("id") or raw.get("experiment", {}).get("id") or path.stem
@@ -258,13 +263,16 @@ class OvlabApplication:
     def _identity_provider(capabilities):
         if capabilities.component_name == "ovlab-openvla-vanilla":
             from ovlab_remote_policy.openvla_service import _identity_provider
-            return _identity_provider(capabilities)
+            identity = _identity_provider(capabilities)
+            return OvlabApplication._with_deployment_identity(identity)
         if capabilities.component_name == "ovlab-openvla-lora-merged":
             from ovlab_openvla_lora_merged.service import _identity_provider
-            return _identity_provider(capabilities)
+            identity = _identity_provider(capabilities)
+            return OvlabApplication._with_deployment_identity(identity)
         if capabilities.component_name == "ovlab-openvla-oft":
             from ovlab_openvla_oft.service import _identity
-            return _identity(capabilities)
+            identity = _identity(capabilities)
+            return OvlabApplication._with_deployment_identity(identity)
         if capabilities.component_name not in {"mock-policy", "handshake-only-policy"}:
             raise ConfigCompatibilityError(
                 f"no registered service identity provider for {capabilities.component_name!r}"
@@ -272,7 +280,7 @@ class OvlabApplication:
         metadata = capabilities.metadata
         checkpoint = dict(metadata.get("checkpoint_identity", metadata.get("runtime", {}).get("verified_artifact", {})))
         method = metadata.get("method_descriptor")
-        return {
+        return OvlabApplication._with_deployment_identity({
             "model_identity": checkpoint or {"availability": "unavailable"},
             "normalization_identity": {
                 "unnorm_key": checkpoint.get("unnorm_key", "unavailable"),
@@ -290,7 +298,42 @@ class OvlabApplication:
                 "protocol_component": "ovlab-remote-policy@0.1.0",
             },
             **({"method_descriptor": _plain(method)} if method is not None else {}),
+        })
+
+    @staticmethod
+    def _deployment_provenance(environment=None) -> dict[str, str]:
+        values = os.environ if environment is None else environment
+        mapping = {
+            "image_role": "OVLAB_IMAGE_ROLE",
+            "image_reference": "OVLAB_IMAGE_REFERENCE",
+            "image_digest": "OVLAB_IMAGE_DIGEST",
+            "source_manifest_sha256": "OVLAB_SOURCE_MANIFEST_SHA256",
+            "source_dirty": "OVLAB_SOURCE_DIRTY",
+            "dependency_lock_sha256": "OVLAB_LOCK_SHA256",
+            "dockerfile_sha256": "OVLAB_DOCKERFILE_SHA256",
+            "build_target": "OVLAB_BUILD_TARGET",
+            "python_version": "OVLAB_PYTHON_VERSION",
+            "cuda_runtime_version": "OVLAB_CUDA_RUNTIME_VERSION",
+            "deployment_manifest_sha256": "OVLAB_DEPLOYMENT_MANIFEST_SHA256",
+            "container_runtime_version": "OVLAB_CONTAINER_RUNTIME_VERSION",
+            "service_topology": "OVLAB_SERVICE_TOPOLOGY",
+            "offline_mode": "OVLAB_OFFLINE_MODE",
+            "mount_contract": "OVLAB_MOUNT_CONTRACT",
         }
+        return {
+            key: values[name]
+            for key, name in mapping.items()
+            if isinstance(values.get(name), str) and values[name]
+        }
+
+    @staticmethod
+    def _with_deployment_identity(identity):
+        result = dict(identity)
+        runtime = dict(result["runtime_versions"])
+        for key, value in OvlabApplication._deployment_provenance().items():
+            runtime[f"deployment_{key}"] = value
+        result["runtime_versions"] = runtime
+        return result
 
     def serve(self, config: str | Path, *, socket_path: str | Path | None = None, adapter_factory=None) -> dict[str, object]:
         path = self._config_path(config)
@@ -302,9 +345,38 @@ class OvlabApplication:
         socket = Path(socket_path) if socket_path is not None else self.default_socket(path)
         socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(socket.parent, 0o700)
+        from ovlab_core.contracts import RunContext, RunId
         from ovlab_remote_policy.service import PolicyService
-        PolicyService(socket, adapter, identity_provider=self._identity_provider).serve()
+        startup_context = RunContext(
+            RunId(f"service-{uuid.uuid4().hex}"),
+            time.time_ns(),
+            resolved.experiment_id,
+            resolved.protocol_settings.base_seed,
+        )
+        PolicyService(
+            socket,
+            adapter,
+            identity_provider=self._identity_provider,
+            startup_context=startup_context,
+        ).serve()
         return {"socket": str(socket), "closed": True}
+
+    @staticmethod
+    def service_health(socket_path: str | Path) -> dict[str, object]:
+        from ovlab_remote_policy import UnixPolicyClient
+        from ovlab_remote_policy.errors import RemotePolicyServiceError
+
+        client = UnixPolicyClient(socket_path, request_timeout_s=5.0)
+        try:
+            client.connect()
+            result = client.health()
+        finally:
+            client.close_socket()
+        if result["state"] != "ready":
+            raise RemotePolicyServiceError(
+                f"policy service is not ready (state={result['state']!r})"
+            )
+        return {**result, "ready": True, "prediction_count": 0, "trace_created": False}
 
     def connect(self, config: str | Path, *, socket_path: str | Path | None = None) -> dict[str, object]:
         from ovlab_core import negotiate_capabilities
@@ -399,6 +471,7 @@ class OvlabApplication:
                 "socket": "machine-local",
                 "output_root_overridden": output_root is not None,
             },
+            "deployment": self._deployment_provenance(self.environment),
         })
         root = resolved.artifact_settings.root if output_root is None else Path(output_root).expanduser().resolve()
         socket = self.default_socket(config)

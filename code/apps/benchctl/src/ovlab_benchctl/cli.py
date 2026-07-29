@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import signal
 import sys
@@ -60,6 +61,9 @@ def _parser() -> argparse.ArgumentParser:
     serve = service_commands.add_parser("serve", help="serve one policy over a foreground AF_UNIX socket")
     serve.add_argument("config")
     serve.add_argument("--socket")
+    health = service_commands.add_parser("health", help="probe protocol readiness without model inference")
+    health.add_argument("--socket", required=True)
+    health.add_argument("--json", action="store_true")
 
     connect = commands.add_parser("connect", help="probe policy handshake and capability compatibility")
     connect.add_argument("config")
@@ -81,7 +85,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _repository_root() -> Path:
-    return Path(__file__).resolve().parents[5]
+    return Path(os.environ.get("OVLAB_ROOT", Path(__file__).resolve().parents[5])).resolve()
 
 
 def _application():
@@ -184,6 +188,8 @@ def _dispatch(args):
             result = _application().policy_describe(args.config)
         return result, args.json, None
     if args.command == "service":
+        if args.service_command == "health":
+            return _application().service_health(args.socket), args.json, None
         previous = _install_interrupt_handlers()
         try:
             result = _application().serve(args.config, socket_path=args.socket)

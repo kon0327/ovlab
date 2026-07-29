@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1.7
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel@sha256:6353d21b66b5c00ae0f2683e447a0ba392157761f6dd0386a0dd648e0e5cc2de AS flash-builder
+ENV MAX_JOBS=4 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git=1:2.34.1-1ubuntu1.17 ca-certificates=20260601~22.04.1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY deploy/locks/flash-attn.requirements.txt /tmp/flash-attn.requirements.txt
+RUN python -m pip wheel --no-cache-dir --no-deps --no-build-isolation --require-hashes \
+      -r /tmp/flash-attn.requirements.txt -w /wheelhouse
+
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime@sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d
+
+ARG OVLAB_REVISION
+ARG OVLAB_SOURCE_MANIFEST_SHA256
+ARG OVLAB_SOURCE_DIRTY
+ARG OVLAB_LOCK_SHA256
+ARG OVLAB_DOCKERFILE_SHA256
+ARG OVLAB_IMAGE_REFERENCE=ovlab-policy-openvla:local
+
+LABEL org.opencontainers.image.title="OVLAB OpenVLA policy service" \
+      org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
+      org.opencontainers.image.revision="$OVLAB_REVISION" \
+      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.licenses="NOASSERTION" \
+      org.opencontainers.image.description="Offline Vanilla and merged-LoRA OpenVLA service; no LIBERO" \
+      cz.cvut.ovlab.role="policy-openvla" \
+      cz.cvut.ovlab.build-target="production" \
+      cz.cvut.ovlab.python.version="3.10.20" \
+      cz.cvut.ovlab.cuda.version="12.1" \
+      cz.cvut.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1;peft=0.11.1;flash-attn=2.5.5" \
+      cz.cvut.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
+      cz.cvut.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
+      cz.cvut.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
+      cz.cvut.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
+
+ENV OVLAB_ROOT=/opt/ovlab \
+    OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \
+    OVLAB_POLICY_SOCKET=/run/ovlab/policy.sock \
+    OVLAB_REVISION=$OVLAB_REVISION \
+    OVLAB_IMAGE_ROLE=policy-openvla \
+    OVLAB_IMAGE_REFERENCE=$OVLAB_IMAGE_REFERENCE \
+    OVLAB_BUILD_TARGET=production \
+    OVLAB_PYTHON_VERSION=3.10.20 \
+    OVLAB_CUDA_RUNTIME_VERSION=12.1 \
+    OVLAB_SOURCE_MANIFEST_SHA256=$OVLAB_SOURCE_MANIFEST_SHA256 \
+    OVLAB_SOURCE_DIRTY=$OVLAB_SOURCE_DIRTY \
+    OVLAB_LOCK_SHA256=$OVLAB_LOCK_SHA256 \
+    OVLAB_DOCKERFILE_SHA256=$OVLAB_DOCKERFILE_SHA256 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HOME=/checkpoints \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /opt/ovlab
+COPY deploy/locks/openvla.requirements.txt /tmp/requirements.txt
+RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
+      /opt/conda/lib/python3.10/site-packages/networkx-*.dist-info \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+COPY --from=flash-builder /wheelhouse /wheelhouse
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /wheelhouse/*.whl && rm -rf /wheelhouse
+COPY code /opt/ovlab/code
+COPY configs /opt/ovlab/configs
+COPY deploy/config /opt/ovlab/deploy/config
+COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
+COPY external/openvla /opt/ovlab/external/openvla
+RUN --mount=type=secret,id=ovlab_source_manifest \
+    bash /tmp/install-ovlab-packages.sh \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla \
+    && rm /tmp/install-ovlab-packages.sh \
+    && groupadd --gid 10001 ovlab \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \
+    && install -d -o 10001 -g 10001 -m 0700 /run/ovlab \
+    && install -d -o root -g root -m 0755 /usr/share/ovlab \
+    && test -s /run/secrets/ovlab_source_manifest \
+    && cp /run/secrets/ovlab_source_manifest /usr/share/ovlab/source-manifest.json \
+    && chmod 0444 /usr/share/ovlab/source-manifest.json
+
+USER 10001:10001
+ENTRYPOINT ["ovlab"]
+CMD ["--help"]

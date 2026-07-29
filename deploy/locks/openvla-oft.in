@@ -1,0 +1,25 @@
+accelerate==1.14.0
+diffusers==0.30.3
+draccus==0.8.0
+einops==0.8.2
+huggingface-hub==0.36.2
+imageio==2.37.3
+json-numpy==2.1.1
+jsonlines==4.0.0
+peft==0.11.1
+pillow==12.2.0
+rich==15.0.0
+safetensors==0.8.0
+sentencepiece==0.1.99
+tensorflow==2.15.0
+tensorflow-datasets==4.9.3
+tensorflow-graphics==2021.12.3
+tensorflow-metadata==1.15.0
+dlimp @ git+https://github.com/moojink/dlimp_openvla.git@040105d256bd28866cc6620621a3d5f7b6b91b46
+timm==0.9.10
+tokenizers==0.19.1
+transformers @ git+https://github.com/moojink/transformers-openvla-oft.git@bc339d9ad707454c0c115970db43c260067c61ab
+numpy==1.26.4
+torch==2.2.0
+torchvision==0.17.0
+wandb==0.16.6

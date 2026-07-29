@@ -71,3 +71,16 @@ def test_close_is_idempotent_and_blocks_operations() -> None:
     assert policy.state is AdapterState.CLOSED
     with pytest.raises(PolicyLifecycleError):
         policy.reset_episode(make_episode_context())
+
+
+def test_ready_adapter_can_bind_a_new_run_without_provider_reload() -> None:
+    policy = MockPolicy()
+    first = make_run_context(run_id="service-startup")
+    second = make_run_context(run_id="authoritative-run")
+    capabilities = policy.initialize(first)
+
+    assert policy.bind_run_context(second) is capabilities
+    policy.reset_episode(make_episode_context(run_id="authoritative-run"))
+
+    with pytest.raises(PolicyLifecycleError, match="bind_run_context"):
+        policy.bind_run_context(first)

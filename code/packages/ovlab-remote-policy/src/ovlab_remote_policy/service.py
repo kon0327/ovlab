@@ -7,6 +7,7 @@ import socket
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ovlab_core.contracts import RunContext
 from ovlab_policy_sdk import PolicyAdapter
 
 from ovlab_remote_policy.errors import RemotePolicyProtocolError
@@ -27,7 +28,7 @@ from ovlab_remote_policy.protocol import (
 
 
 class PolicyService:
-    """Strict, single-client, local policy service."""
+    """Strict local policy service with health-only reconnect support."""
 
     def __init__(
         self,
@@ -35,6 +36,7 @@ class PolicyService:
         adapter: PolicyAdapter,
         *,
         identity_provider: Callable[[object], Mapping[str, object]],
+        startup_context: RunContext | None = None,
     ) -> None:
         if not isinstance(adapter, PolicyAdapter):
             raise TypeError("adapter must be a PolicyAdapter")
@@ -43,6 +45,9 @@ class PolicyService:
         self.socket_path = Path(socket_path)
         self.adapter = adapter
         self.identity_provider = identity_provider
+        if startup_context is not None and not isinstance(startup_context, RunContext):
+            raise TypeError("startup_context must be a RunContext or None")
+        self.startup_context = startup_context
         self._seen_requests: set[str] = set()
         self._seen_steps: set[str] = set()
         self._episode_id: str | None = None
@@ -52,12 +57,18 @@ class PolicyService:
             raise RuntimeError(f"socket path already exists: {self.socket_path}")
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
+            # Provider initialization precedes socket creation.  Existence of the
+            # socket is therefore a readiness signal, never merely liveness.
+            if self.startup_context is not None:
+                self.adapter.initialize(self.startup_context)
             server.bind(str(self.socket_path))
             os.chmod(self.socket_path, 0o600)
             server.listen(1)
-            connection, _ = server.accept()
-            with connection:
-                self._serve_connection(connection)
+            should_close = False
+            while not should_close:
+                connection, _ = server.accept()
+                with connection:
+                    should_close = self._serve_connection(connection)
         finally:
             try:
                 self.adapter.close()
@@ -65,19 +76,19 @@ class PolicyService:
                 server.close()
                 self.socket_path.unlink(missing_ok=True)
 
-    def _serve_connection(self, connection: socket.socket) -> None:
+    def _serve_connection(self, connection: socket.socket) -> bool:
         while True:
             try:
                 raw_request = recv_frame(connection)
             except RemotePolicyProtocolError:
-                return
+                return False
             try:
                 request = validate_request_envelope(raw_request)
             except RemotePolicyProtocolError as exc:
                 request_id = raw_request.get("request_id")
                 if isinstance(request_id, str) and request_id and len(request_id) <= 128:
                     send_frame(connection, make_error(request_id, "protocol_error", str(exc)))
-                return
+                return True
             request_id = request["request_id"]
             if request_id in self._seen_requests:
                 send_frame(connection, make_error(request_id, "duplicate_request", "request_id was already used"))
@@ -91,12 +102,17 @@ class PolicyService:
                 continue
             send_frame(connection, make_success(request_id, response))
             if should_close:
-                return
+                return True
 
     def _dispatch(self, operation: str, payload: dict[str, object]) -> tuple[dict[str, object], bool]:
         if operation == "initialize":
             require_exact_keys(payload, required={"run_context"}, where="initialize payload")
-            capabilities = self.adapter.initialize(run_context_from_wire(payload["run_context"]))
+            context = run_context_from_wire(payload["run_context"])
+            capabilities = (
+                self.adapter.bind_run_context(context)
+                if self.adapter.state.value == "ready"
+                else self.adapter.initialize(context)
+            )
             identity = dict(self.identity_provider(capabilities))
             required_identity = {
                 "model_identity", "normalization_identity", "prompt_template_identity",
@@ -117,7 +133,11 @@ class PolicyService:
             return response, False
         if operation == "health":
             require_exact_keys(payload, required=set(), where="health payload")
-            return {"state": self.adapter.state.value, "pid": os.getpid()}, False
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "state": self.adapter.state.value,
+                "pid": os.getpid(),
+            }, False
         if operation == "reset_episode":
             require_exact_keys(payload, required={"episode_context"}, where="reset_episode payload")
             context = episode_context_from_wire(payload["episode_context"])

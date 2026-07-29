@@ -1,0 +1,16 @@
+schema_version: "0.1.0"
+kind: local_profile
+id: ovlab-container
+
+paths:
+  checkpoint_root: /checkpoints/hub
+  dataset_root: /datasets
+  runs_root: /runs
+
+devices:
+  primary_gpu: cuda:0
+
+execution:
+  libero:
+    renderer:
+      device_id: 0

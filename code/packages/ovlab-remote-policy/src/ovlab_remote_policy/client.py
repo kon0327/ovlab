@@ -80,7 +80,11 @@ class UnixPolicyClient:
 
     def health(self) -> dict[str, Any]:
         payload, _ = self._request("health", {})
-        require_exact_keys(payload, required={"state", "pid"}, where="health response")
+        require_exact_keys(
+            payload,
+            required={"protocol_version", "state", "pid"},
+            where="health response",
+        )
         return payload
 
     def reset_episode(self, context: EpisodeContext) -> None:

@@ -1,0 +1,80 @@
+# syntax=docker/dockerfile:1.7
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime@sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d
+
+ARG OVLAB_REVISION
+ARG OVLAB_SOURCE_MANIFEST_SHA256
+ARG OVLAB_SOURCE_DIRTY
+ARG OVLAB_LOCK_SHA256
+ARG OVLAB_DOCKERFILE_SHA256
+ARG OVLAB_IMAGE_REFERENCE=ovlab-benchmark-libero:local
+
+LABEL org.opencontainers.image.title="OVLAB LIBERO benchmark runner" \
+      org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
+      org.opencontainers.image.revision="$OVLAB_REVISION" \
+      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.licenses="NOASSERTION" \
+      org.opencontainers.image.description="Isolated LIBERO runner; no OpenVLA model runtime" \
+      cz.cvut.ovlab.role="benchmark-libero" \
+      cz.cvut.ovlab.build-target="production" \
+      cz.cvut.ovlab.python.version="3.10.20" \
+      cz.cvut.ovlab.cuda.version="12.1" \
+      cz.cvut.ovlab.runtime.components="torch=2.2.0;mujoco=3.9.0;robosuite=1.4.1" \
+      cz.cvut.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
+      cz.cvut.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
+      cz.cvut.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
+      cz.cvut.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
+
+ENV OVLAB_ROOT=/opt/ovlab \
+    OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \
+    OVLAB_EXECUTION_PROFILE=profiles/libero-bench-egl.yaml \
+    OVLAB_POLICY_SOCKET=/run/ovlab/policy.sock \
+    OVLAB_REVISION=$OVLAB_REVISION \
+    OVLAB_IMAGE_ROLE=benchmark-libero \
+    OVLAB_IMAGE_REFERENCE=$OVLAB_IMAGE_REFERENCE \
+    OVLAB_BUILD_TARGET=production \
+    OVLAB_PYTHON_VERSION=3.10.20 \
+    OVLAB_CUDA_RUNTIME_VERSION=12.1 \
+    OVLAB_SOURCE_MANIFEST_SHA256=$OVLAB_SOURCE_MANIFEST_SHA256 \
+    OVLAB_SOURCE_DIRTY=$OVLAB_SOURCE_DIRTY \
+    OVLAB_LOCK_SHA256=$OVLAB_LOCK_SHA256 \
+    OVLAB_DOCKERFILE_SHA256=$OVLAB_DOCKERFILE_SHA256 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/opt/ovlab/external/libero \
+    NUMBA_CACHE_DIR=/tmp/ovlab-numba-cache \
+    LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
+    MUJOCO_GL=egl \
+    MUJOCO_EGL_DEVICE_ID=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libegl1=1.4.0-1 libgl1=1.4.0-1 libglvnd0=1.4.0-1 \
+      libglib2.0-0=2.72.4-0ubuntu2.9 libx11-6=2:1.7.5-1ubuntu0.3 \
+      libxext6=2:1.3.4-1build1 libsm6=2:1.2.3-1build2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/ovlab
+COPY deploy/locks/benchmark.requirements.txt /tmp/requirements.txt
+RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
+      /opt/conda/lib/python3.10/site-packages/networkx-*.dist-info \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+COPY code /opt/ovlab/code
+COPY configs /opt/ovlab/configs
+COPY deploy/config /opt/ovlab/deploy/config
+COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
+COPY external/libero /opt/ovlab/external/libero
+RUN --mount=type=secret,id=ovlab_source_manifest \
+    bash /tmp/install-ovlab-packages.sh \
+    && rm /tmp/install-ovlab-packages.sh \
+    && groupadd --gid 10001 ovlab \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \
+    && install -d -o 10001 -g 10001 -m 0700 /run/ovlab /runs \
+    && install -d -o root -g root -m 0755 /usr/share/ovlab \
+    && test -s /run/secrets/ovlab_source_manifest \
+    && cp /run/secrets/ovlab_source_manifest /usr/share/ovlab/source-manifest.json \
+    && chmod 0444 /usr/share/ovlab/source-manifest.json
+
+USER 10001:10001
+ENTRYPOINT ["ovlab"]
+CMD ["--help"]

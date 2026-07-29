@@ -1,0 +1,135 @@
+name: ovlab
+
+x-policy-security: &policy-security
+  user: "10001:10001"
+  read_only: true
+  network_mode: none
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+  restart: "no"
+
+x-policy-health: &policy-health
+  test: [CMD, ovlab, service, health, --socket, /run/ovlab/policy.sock, --json]
+  interval: 10s
+  timeout: 8s
+  retries: 6
+  start_period: 15m
+
+services:
+  policy-openvla:
+    <<: *policy-security
+    profiles: [openvla]
+    image: ${OVLAB_OPENVLA_IMAGE:-ovlab-policy-openvla:local}
+    command: [service, serve, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --socket, /run/ovlab/policy.sock]
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      OVLAB_IMAGE_DIGEST: ${OVLAB_OPENVLA_IMAGE_DIGEST:-unavailable}
+      OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
+      OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
+      OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla
+      OVLAB_OFFLINE_MODE: hf-hub-offline,transformers-offline,network-none
+      OVLAB_MOUNT_CONTRACT: checkpoints-ro,rpc-rw
+      NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all
+    volumes:
+      - rpc-openvla:/run/ovlab
+      - type: bind
+        source: ${OVLAB_CHECKPOINTS_PATH:-../../checkpoints}
+        target: /checkpoints
+        read_only: true
+    healthcheck: *policy-health
+
+  benchmark-openvla:
+    <<: *policy-security
+    profiles: [openvla]
+    image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
+    command: [run, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --output-root, /runs]
+    environment:
+      MUJOCO_GL: egl
+      MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
+      OVLAB_IMAGE_DIGEST: ${OVLAB_BENCHMARK_IMAGE_DIGEST:-unavailable}
+      OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
+      OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
+      OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla
+      OVLAB_OFFLINE_MODE: network-none
+      OVLAB_MOUNT_CONTRACT: datasets-ro,runs-rw,rpc-rw
+      NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility
+    gpus: all
+    depends_on:
+      policy-openvla:
+        condition: service_healthy
+        restart: false
+    volumes:
+      - rpc-openvla:/run/ovlab
+      - type: bind
+        source: ${OVLAB_DATASETS_PATH:-../../datasets}
+        target: /datasets
+        read_only: true
+      - type: bind
+        source: ${OVLAB_RUNS_PATH:-../../runs}
+        target: /runs
+
+  policy-openvla-oft:
+    <<: *policy-security
+    profiles: [oft]
+    image: ${OVLAB_OFT_IMAGE:-ovlab-policy-openvla-oft:local}
+    command: [service, serve, configs/experiments/libero10-openvla-oft-rpc-smoke.yaml, --socket, /run/ovlab/policy.sock]
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      OVLAB_IMAGE_DIGEST: ${OVLAB_OFT_IMAGE_DIGEST:-unavailable}
+      OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
+      OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
+      OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-oft
+      OVLAB_OFFLINE_MODE: hf-hub-offline,transformers-offline,network-none
+      OVLAB_MOUNT_CONTRACT: checkpoints-ro,rpc-rw
+      NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all
+    volumes:
+      - rpc-oft:/run/ovlab
+      - type: bind
+        source: ${OVLAB_CHECKPOINTS_PATH:-../../checkpoints}
+        target: /checkpoints
+        read_only: true
+    healthcheck: *policy-health
+
+  benchmark-oft:
+    <<: *policy-security
+    profiles: [oft]
+    image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
+    command: [run, configs/experiments/libero10-openvla-oft-rpc-smoke.yaml, --output-root, /runs]
+    environment:
+      MUJOCO_GL: egl
+      MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
+      OVLAB_IMAGE_DIGEST: ${OVLAB_BENCHMARK_IMAGE_DIGEST:-unavailable}
+      OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
+      OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
+      OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-oft
+      OVLAB_OFFLINE_MODE: network-none
+      OVLAB_MOUNT_CONTRACT: datasets-ro,runs-rw,rpc-rw
+      NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility
+    gpus: all
+    depends_on:
+      policy-openvla-oft:
+        condition: service_healthy
+        restart: false
+    volumes:
+      - rpc-oft:/run/ovlab
+      - type: bind
+        source: ${OVLAB_DATASETS_PATH:-../../datasets}
+        target: /datasets
+        read_only: true
+      - type: bind
+        source: ${OVLAB_RUNS_PATH:-../../runs}
+        target: /runs
+
+volumes:
+  rpc-openvla:
+  rpc-oft:

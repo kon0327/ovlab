@@ -71,6 +71,21 @@ class PolicyAdapter(ABC):
         self._state = AdapterState.READY
         return capabilities
 
+    def bind_run_context(self, run_context: RunContext) -> PolicyCapabilities:
+        """Attach an initialized adapter to a run without reloading its provider.
+
+        Long-lived policy services initialize their immutable model before they
+        advertise readiness.  A runner supplies its authoritative run identity
+        later, during the protocol handshake.  Rebinding is deliberately allowed
+        only while READY, so it cannot cross an episode boundary or revive a
+        closed adapter.
+        """
+        self._require_state("bind_run_context", AdapterState.READY)
+        if not isinstance(run_context, RunContext):
+            raise TypeError("run_context must be a RunContext")
+        self._run_context = run_context
+        return self.capabilities
+
     def reset_episode(self, episode_context: EpisodeContext) -> None:
         self._require_state("reset_episode", AdapterState.READY)
         self._validate_episode_context("reset_episode", episode_context)
