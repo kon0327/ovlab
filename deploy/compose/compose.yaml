@@ -47,7 +47,7 @@ services:
     <<: *policy-security
     profiles: [openvla]
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --output-root, /runs]
+    command: [run, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --output-root, /var/lib/ovlab/runs]
     environment:
       MUJOCO_GL: egl
       MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
@@ -71,8 +71,8 @@ services:
         target: /datasets
         read_only: true
       - type: bind
-        source: ${OVLAB_RUNS_PATH:-../../runs}
-        target: /runs
+        source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}
+        target: /var/lib/ovlab/runs
 
   policy-openvla-oft:
     <<: *policy-security
@@ -103,7 +103,7 @@ services:
     <<: *policy-security
     profiles: [oft]
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, configs/experiments/libero10-openvla-oft-rpc-smoke.yaml, --output-root, /runs]
+    command: [run, configs/experiments/libero10-openvla-oft-rpc-smoke.yaml, --output-root, /var/lib/ovlab/runs]
     environment:
       MUJOCO_GL: egl
       MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
@@ -127,8 +127,29 @@ services:
         target: /datasets
         read_only: true
       - type: bind
-        source: ${OVLAB_RUNS_PATH:-../../runs}
-        target: /runs
+        source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}
+        target: /var/lib/ovlab/runs
+
+  reporting:
+    <<: *policy-security
+    profiles: [reporting]
+    image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
+    command:
+      - report
+      - generate
+      - /var/lib/ovlab/runs/${OVLAB_REPORT_RUN_ID:-unset}
+      - --output
+      - /var/lib/ovlab/derived/${OVLAB_REPORT_OUTPUT_NAME:-report-output}
+    environment:
+      OVLAB_MOUNT_CONTRACT: runs-ro,derived-rw
+    volumes:
+      - type: bind
+        source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}
+        target: /var/lib/ovlab/runs
+        read_only: true
+      - type: bind
+        source: ${OVLAB_DERIVED_ROOT:-../../../ovlab-data/derived}
+        target: /var/lib/ovlab/derived
 
 volumes:
   rpc-openvla:

@@ -39,9 +39,31 @@ class InvalidPredictionRateMetric(EpisodeMetricPlugin):
         if not trace.policy_predictions:
             return episode_result(self, trace, config, MetricStatus.UNAVAILABLE, reason="no predictions are stored")
         invalid = sum(prediction.validity is not PredictionValidity.VALID for prediction in trace.policy_predictions)
+        validity_counts = Counter(prediction.validity.value for prediction in trace.policy_predictions)
+        bounds_violations = 0
+        value_count = 0
+        for prediction in trace.policy_predictions:
+            values = prediction.actions
+            value_count += values.size
+            spec = prediction.action_spec
+            if spec.minimum is not None and spec.maximum is not None:
+                bounds_violations += int(np.count_nonzero(
+                    (values < spec.minimum[np.newaxis, :])
+                    | (values > spec.maximum[np.newaxis, :])
+                ))
         return available(
             self, trace, config, invalid / len(trace.policy_predictions), samples=len(trace.policy_predictions),
-            diagnostics={"invalid_count": invalid, "prediction_count": len(trace.policy_predictions)},
+            diagnostics={
+                "invalid_count": invalid,
+                "prediction_count": len(trace.policy_predictions),
+                "validity_counts": dict(sorted(validity_counts.items())),
+                # Canonical action arrays are finite by contract. These explicit
+                # counters make that validation boundary visible to reports.
+                "nan_value_count": 0,
+                "infinity_value_count": 0,
+                "bounds_violation_count": bounds_violations,
+                "decoded_value_count": value_count,
+            },
         )
 
 

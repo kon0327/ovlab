@@ -69,7 +69,26 @@ class FilesystemRunArtifactStore(RunArtifactStore):
         path = self._run_path(run_id)
         if (path / "manifest.completed.json").exists() or (path / "manifest.failed.json").exists():
             raise ArtifactError("run already finalized")
-        self._atomic_json(path / name, manifest)
+        from ..reporting import (
+            generate_canonical_videos, integrity_document, remove_generated_outputs,
+            write_canonical_report,
+        )
+        encoded = json.dumps(_json_value(manifest), sort_keys=True, separators=(",", ":")).encode()
+        temporary = path / f"{name}.tmp"
+        if temporary.exists():
+            raise ArtifactError("partial final manifest already exists")
+        try:
+            generate_canonical_videos(path)
+            write_canonical_report(path, final_manifest=manifest)
+            document = integrity_document(path, virtual_files={name: encoded})
+            self._atomic_json(path / "integrity.json", document)
+            temporary.write_bytes(encoded)
+            temporary.replace(path / name)
+        except Exception:
+            try: temporary.unlink()
+            except FileNotFoundError: pass
+            remove_generated_outputs(path)
+            raise
 
     def read_episode_trace(self, run_id, task_id, episode_id):
         path = self._episode_path(run_id, task_id, episode_id)

@@ -189,7 +189,7 @@ Execute through the existing `ExperimentRunner`:
 Use a machine-local output placement when needed:
 
 ```bash
-./ovlab run CONFIG --output-root /path/to/runs
+./ovlab run CONFIG --output-root /var/lib/ovlab/runs
 ```
 
 Changing output placement does not change scientific identity. Existing run

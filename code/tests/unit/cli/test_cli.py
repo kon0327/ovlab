@@ -180,6 +180,23 @@ def test_output_root_does_not_change_scientific_hash(tmp_path):
     assert first["output_root"] != second["output_root"]
 
 
+def test_container_image_tag_does_not_change_scientific_hash():
+    profile = str(REPOSITORY / "configs/local/gate-b-showrack.yaml")
+    first = OvlabApplication(REPOSITORY, environment={
+        **os.environ,
+        "OVLAB_LOCAL_PROFILE": profile,
+        "OVLAB_BENCHMARK_IMAGE": "registry.example/ovlab-benchmark:first",
+        "OVLAB_IMAGE_REFERENCE": "registry.example/ovlab-benchmark:first",
+    }).execution_plan("configs/experiments/mock-e2e-smoke.yaml")
+    second = OvlabApplication(REPOSITORY, environment={
+        **os.environ,
+        "OVLAB_LOCAL_PROFILE": profile,
+        "OVLAB_BENCHMARK_IMAGE": "registry.example/ovlab-benchmark:second",
+        "OVLAB_IMAGE_REFERENCE": "registry.example/ovlab-benchmark:second",
+    }).execution_plan("configs/experiments/mock-e2e-smoke.yaml")
+    assert first["scientific_config_hash"] == second["scientific_config_hash"]
+
+
 def test_cli_module_contains_no_rollout_or_metric_implementation():
     source = (REPOSITORY / "code/apps/benchctl/src/ovlab_benchctl/cli.py").read_text(encoding="utf-8")
     assert "execute_episode" not in source

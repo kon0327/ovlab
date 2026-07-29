@@ -80,6 +80,8 @@ def test_success_terminates_and_releases_environment() -> None:
     benchmark.reset_episode(context)
     result = benchmark.step(request(context))
     assert result.terminated and not result.truncated and result.success is True
+    assert result.next_observation is not None
+    assert str(result.next_observation.step_id).endswith("-step-1")
     assert backend.environments[0].closed
     with pytest.raises(BenchmarkLifecycleError):
         benchmark.step(request(context, 1))
@@ -93,7 +95,25 @@ def test_time_limit_truncates_without_fabricating_success() -> None:
     benchmark.reset_episode(context)
     result = benchmark.step(request(context))
     assert result.truncated and not result.terminated and result.success is False
+    assert result.next_observation is not None
+    assert str(result.next_observation.step_id).endswith("-step-1")
     assert backend.environments[0].closed
+
+
+def test_simulator_state_is_recorded_as_privileged_audit_only_signal() -> None:
+    backend = FakeLiberoBackend()
+    benchmark = adapter(backend=backend, maximum_episode_steps=1)
+    context = fake_libero_episode()
+    capabilities = benchmark.initialize(make_run_context())
+    reset = benchmark.reset_episode(context)
+    result = benchmark.step(request(context))
+    spec = capabilities.signal_registry.resolve("simulator.state")
+    assert spec.access.value == "privileged" and spec.optional is True
+    reset_state = next(signal for signal in reset.evaluation_signals if signal.name == "simulator.state")
+    final_state = next(signal for signal in result.evaluation_signals if signal.name == "simulator.state")
+    assert reset_state.access.value == "privileged"
+    assert final_state.access.value == "privileged"
+    assert reset_state.value.shape == final_state.value.shape == spec.shape
 
 
 def test_reward_does_not_infer_authoritative_success() -> None:

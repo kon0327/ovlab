@@ -61,7 +61,7 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     forbidden = ("ports:", "privileged:", "network_mode: host", "/var/run/docker.sock")
     assert not any(value in COMPOSE for value in forbidden)
     assert COMPOSE.count("network_mode: none") == 1
-    assert COMPOSE.count("<<: *policy-security") == 4
+    assert COMPOSE.count("<<: *policy-security") == 5
     assert "read_only: true" in COMPOSE
     assert COMPOSE.count("cap_drop: [ALL]") >= 1
     assert "HF_HUB_OFFLINE: \"1\"" in COMPOSE
@@ -74,6 +74,29 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     assert "service, health, --socket, /run/ovlab/policy.sock" in COMPOSE
     assert "target: /checkpoints\n        read_only: true" in COMPOSE
     assert "target: /datasets\n        read_only: true" in COMPOSE
+
+
+def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
+    assert "OVLAB_RUNS_PATH" not in COMPOSE
+    assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 3
+    assert COMPOSE.count("target: /var/lib/ovlab/runs") == 3
+    assert COMPOSE.count("--output-root, /var/lib/ovlab/runs") == 2
+    assert COMPOSE.count("target: /var/lib/ovlab/runs\n        read_only: true") == 1
+    assert "source: ${OVLAB_DERIVED_ROOT:-../../../ovlab-data/derived}" in COMPOSE
+    assert "target: /var/lib/ovlab/derived" in COMPOSE
+    assert "OVLAB_MOUNT_CONTRACT: runs-ro,derived-rw" in COMPOSE
+    assert "OVLAB_EXPORTS_ROOT" not in COMPOSE
+    reporting = COMPOSE.split("  reporting:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    assert "profiles: [reporting]" in reporting
+    assert "report\n      - generate" in reporting
+    assert "gpus:" not in reporting
+    assert "rpc-openvla" not in reporting and "rpc-oft" not in reporting
+    assert "runs:" not in COMPOSE.split("\nvolumes:\n", 1)[1]
+
+    profile = (ROOT / "deploy/config/container-profile.yaml").read_text(encoding="utf-8")
+    assert "runs_root: /var/lib/ovlab/runs" in profile
+    benchmark = _dockerfile("Dockerfile.benchmark")
+    assert "install -d -o 10001 -g 10001 -m 0700 /run/ovlab /var/lib/ovlab/runs" in benchmark
 
 
 def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
@@ -159,7 +182,14 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
     assert {row["path"] for row in document["submodules"]} == {
         "external/libero", "external/openvla", "external/openvla-oft", "external/openvla-quic"
     }
-    assert document["dirty"] is True
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    assert document["dirty"] is bool(status.strip())
 
 
 def test_container_root_revision_and_deployment_provenance_are_explicit(monkeypatch):

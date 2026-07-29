@@ -10,6 +10,7 @@ from .failure.metrics import (
     RepeatedNoOpRateMetric,
 )
 from .system.inference_latency import InferenceLatencyMetric
+from .system.episode import ControlFrequencyMetric, EpisodeLengthMetric
 from .task.success import TaskSuccessMetric, TaskSuccessRateMetric
 
 
@@ -55,6 +56,8 @@ class MetricRegistry:
                 InvalidPredictionRateMetric(),
                 RepeatedNoOpRateMetric(),
                 InferenceLatencyMetric(),
+                EpisodeLengthMetric(),
+                ControlFrequencyMetric(),
                 TaskSuccessMetric(),
                 TaskSuccessRateMetric(),
             )

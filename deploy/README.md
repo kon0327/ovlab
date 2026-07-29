@@ -6,6 +6,9 @@ They communicate through a versioned AF_UNIX socket in `/run/ovlab`; no TCP
 port, host networking, Docker socket, privileged mode, or source-tree bind is
 used.
 
+For a command-oriented build and launch guide, see
+[`docker/README.md`](docker/README.md).
+
 ## Production image matrix
 
 | Image | Runtime responsibility | Included heavy closure | Deliberately absent |
@@ -62,8 +65,10 @@ export OVLAB_CONTAINER_RUNTIME_VERSION="$(docker version --format '{{.Server.Ver
 All containers run as UID/GID `10001:10001`, drop all capabilities, enable
 `no-new-privileges`, use a read-only root filesystem and have no network. The
 policy receives only `/checkpoints:ro` and the shared socket volume. The
-benchmark receives `/datasets:ro`, the socket volume and `/runs` as its only
-persistent writable mount. Configuration is baked into each image.
+benchmark receives `/datasets:ro`, the socket volume and the host-backed
+`/var/lib/ovlab/runs` directory as its only persistent writable mount. Canonical
+run evidence is therefore directly available outside the container. Configuration
+is baked into each image.
 
 The benchmark image also contains a portable LIBERO path map at
 `/etc/ovlab/libero/config.yaml`. It points bundled BDDL, initial-state and asset
@@ -76,13 +81,32 @@ Override the portable repository-relative asset locations when necessary:
 ```bash
 export OVLAB_CHECKPOINTS_PATH=/host/read-only/huggingface
 export OVLAB_DATASETS_PATH=/host/read-only/libero
-export OVLAB_RUNS_PATH=/host/ovlab-runs
+export OVLAB_RUNS_ROOT=/home/kony/dissertation/ovlab-data/runs
+export OVLAB_DERIVED_ROOT=/home/kony/dissertation/ovlab-data/derived
+export OVLAB_EXPORTS_ROOT=/home/kony/dissertation/ovlab-data/exports
 export OVLAB_GPU_DEVICE=0
 export OVLAB_EGL_DEVICE_ID=0
 ```
 
 These are deployment settings, not scientific parameters. Do not put secrets in
 them. Hugging Face and Transformers offline modes are forced in policy services.
+
+Create the host artifact workspace before launching containers. It is deliberately
+outside the source checkout:
+
+```text
+/home/kony/dissertation/ovlab-data/
+├── runs/       # immutable canonical traces, metrics, video, config and provenance
+├── derived/    # regenerated reports, plots and tables
+└── exports/    # curated outputs prepared for papers and sharing
+```
+
+The container runtime uses UID/GID `10001:10001`, so those directories must allow
+that identity to create files. `runs/` is writable only in benchmark services.
+Reporting mounts it read-only and writes only below `derived/`. `exports/` is never
+mounted into benchmark or policy containers; promotion into it is an explicit host
+workflow. Host paths and Docker tags are deployment provenance and never enter the
+scientific configuration hash.
 
 ## Compose profiles
 
@@ -127,6 +151,18 @@ foreground `ovlab service serve ...`, use `ovlab connect ...` for a no-predictio
 capability probe, and then `ovlab run ...`. Add `--json` where supported for stable
 machine output; omit it for human output. Compose delegates directly to the service
 and run commands and returns their exit status.
+
+Regenerate a report without granting write access to canonical evidence:
+
+```bash
+export OVLAB_REPORT_RUN_ID=<canonical-run-directory>
+export OVLAB_REPORT_OUTPUT_NAME=<derived-output-directory>
+docker compose --file deploy/compose/compose.yaml --profile reporting run --rm reporting
+```
+
+The source is mounted at `/var/lib/ovlab/runs:ro`; the new report is written below
+`/var/lib/ovlab/derived`. The output directory must not already exist. Report
+generation performs neither policy inference nor LIBERO execution.
 
 Use `docker compose ... down` for scoped teardown. Do not use global prune commands.
 On a signal, the foreground CLI closes its adapter and removes only its owned socket;

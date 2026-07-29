@@ -273,7 +273,7 @@ class OvlabApplication:
             from ovlab_openvla_oft.service import _identity
             identity = _identity(capabilities)
             return OvlabApplication._with_deployment_identity(identity)
-        if capabilities.component_name not in {"mock-policy", "handshake-only-policy"}:
+        if capabilities.component_name not in {"mock-policy", "handshake-only-policy", "qualification-test-policy"}:
             raise ConfigCompatibilityError(
                 f"no registered service identity provider for {capabilities.component_name!r}"
             )
@@ -459,6 +459,7 @@ class OvlabApplication:
         plan = resolved.create_plan(context, self._selected_tasks(resolved))
         plan = replace(plan, metadata={
             **dict(plan.metadata),
+            **({"qualification": "test-provider"} if isinstance(resolved.policy_settings, MockPolicySettings) else {}),
             "cli": {
                 "schema_version": CLI_SCHEMA_VERSION,
                 "version": CLI_VERSION,
@@ -511,3 +512,8 @@ class OvlabApplication:
     def recompute_metrics(path):
         from ovlab_runner import recompute_run_metrics
         return recompute_run_metrics(path)
+
+    @staticmethod
+    def generate_report(path, output):
+        from ovlab_runner import regenerate_report
+        return regenerate_report(path, output)

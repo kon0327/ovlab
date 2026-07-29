@@ -81,6 +81,13 @@ def _parser() -> argparse.ArgumentParser:
     recompute = metrics_commands.add_parser("recompute", help="recompute metrics from immutable traces")
     recompute.add_argument("run_path")
     recompute.add_argument("--json", action="store_true")
+
+    report = commands.add_parser("report", help="regenerate deterministic reports from immutable runs")
+    report_commands = report.add_subparsers(dest="report_command", required=True)
+    generate = report_commands.add_parser("generate", help="write a derived report outside the canonical run")
+    generate.add_argument("run_path")
+    generate.add_argument("--output", required=True)
+    generate.add_argument("--json", action="store_true")
     return parser
 
 
@@ -95,7 +102,7 @@ def _application():
 
 def _command_name(args) -> str:
     parts = [args.command]
-    for name in ("config_command", "policy_command", "service_command", "metrics_command"):
+    for name in ("config_command", "policy_command", "service_command", "metrics_command", "report_command"):
         value = getattr(args, name, None)
         if value:
             parts.append(value)
@@ -214,6 +221,8 @@ def _dispatch(args):
         return result, args.json, None
     if args.command == "metrics":
         return _application().recompute_metrics(args.run_path), args.json, None
+    if args.command == "report":
+        return _application().generate_report(args.run_path, args.output), args.json, None
     raise AssertionError("unhandled CLI command")
 
 

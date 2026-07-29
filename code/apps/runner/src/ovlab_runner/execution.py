@@ -100,6 +100,10 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
             )
             recorder.record_step(step_context, result)
             step_index += 1
+            # A terminal post-action observation is canonical trace evidence,
+            # but is never sent back to the policy for another prediction.
+            if result.next_observation is not None:
+                recorder.record_observation(result.next_observation, step_index)
             if result.terminated or result.truncated:
                 terminal = _terminal_status(result)
                 policy.end_episode(context)
@@ -108,7 +112,6 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
             if step_index >= maximum_steps:
                 raise ExperimentExecutionError("benchmark did not terminate or truncate at its declared task maximum")
             observation = result.next_observation
-            recorder.record_observation(observation, step_index)
             chunk_index += 1
             if observation.instruction != pending_step_instruction(pending, recorder):
                 pending = None

@@ -216,6 +216,7 @@ _PLUGIN_KEYS = {
     "failure.repeated_no_op_rate": ("enabled", "action_source", "norm_threshold", "minimum_consecutive_steps"),
     "failure.gripper_flicker_rate": ("enabled", "action_source", "activation_threshold", "deadband", "flicker_window_steps", "minimum_dwell_steps"),
     "failure.collision_rate": ("enabled", "required"), "system.inference_latency": ("enabled",),
+    "episode.length": ("enabled",), "system.control_frequency": ("enabled",),
 }
 
 

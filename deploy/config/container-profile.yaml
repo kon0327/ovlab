@@ -5,7 +5,7 @@ id: ovlab-container
 paths:
   checkpoint_root: /checkpoints/hub
   dataset_root: /datasets
-  runs_root: /runs
+  runs_root: /var/lib/ovlab/runs
 
 devices:
   primary_gpu: cuda:0

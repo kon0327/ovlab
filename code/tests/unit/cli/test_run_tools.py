@@ -13,7 +13,8 @@ import pytest
 from helpers.runner_fixtures import TrackingBenchmark, TrackingPolicy, runner_plan
 from ovlab_runner import (
     DeterministicClock, ExperimentRunner, FilesystemRunArtifactStore,
-    RunConfigurationSnapshot, RunIntegrityError, inspect_run, recompute_run_metrics, verify_run,
+    RunConfigurationSnapshot, RunIntegrityError, inspect_run, recompute_run_metrics,
+    regenerate_report, verify_run,
 )
 
 
@@ -54,6 +55,9 @@ def test_run_inspect_and_verify_are_read_only(completed_run):
     assert summary["rollout_count"] == 1
     assert summary["trace_schema_version"] == "1.0.0"
     assert verified["integrity"] == "verified"
+    assert (completed_run / "reports/report.json").is_file()
+    assert (completed_run / "reports/report.txt").is_file()
+    assert (completed_run / "integrity.json").is_file()
     assert _tree_hash(completed_run) == before
 
 
@@ -61,6 +65,26 @@ def test_verify_detects_checksum_mutation(completed_run):
     array = next(completed_run.glob("tasks/*/episodes/*/arrays/*.npy"))
     array.write_bytes(array.read_bytes() + b"tampered")
     with pytest.raises(RunIntegrityError, match="checksum mismatch"):
+        verify_run(completed_run)
+
+
+def test_report_regeneration_is_deterministic_separate_and_read_only(completed_run, tmp_path):
+    before = _tree_hash(completed_run)
+    output = tmp_path / "derived-report"
+    result = regenerate_report(completed_run, output)
+    assert result["canonical_semantic_match"] is True
+    assert result["source_modified"] is False
+    assert json.loads((output / "report.json").read_text(encoding="utf-8")) == json.loads(
+        (completed_run / "reports/report.json").read_text(encoding="utf-8")
+    )
+    assert (output / "report.txt").read_bytes() == (completed_run / "reports/report.txt").read_bytes()
+    assert _tree_hash(completed_run) == before
+
+
+def test_integrity_inventory_detects_report_tampering(completed_run):
+    report = completed_run / "reports/report.txt"
+    report.write_text(report.read_text(encoding="utf-8") + "tampered\n", encoding="utf-8")
+    with pytest.raises(RunIntegrityError, match="integrity checksum mismatch"):
         verify_run(completed_run)
 
 

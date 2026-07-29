@@ -14,7 +14,13 @@ The experiment runner and benchmark adapter execute together in a runner process
 - `external/`: destinations for pinned external repositories and the dedicated OpenVLA-QuIC fork.
 - `checkpoints/`: local model checkpoints; generated contents are not versioned.
 - `datasets/`: local benchmark datasets; generated contents are not versioned.
-- `runs/`: generated experiment manifests, traces, and results; contents are not versioned.
+- `runs/`: optional repo-local development output; contents are not versioned.
+
+Container deployments use a host-backed artifact workspace outside the source
+checkout. The canonical convention is `ovlab-data/runs` for immutable evidence,
+`ovlab-data/derived` for regenerated analyses, and `ovlab-data/exports` for curated
+publication outputs. Only benchmark containers write canonical runs; reporting
+mounts them read-only. See [`deploy/README.md`](deploy/README.md).
 
 ## Command line
 

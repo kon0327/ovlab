@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import re
 
@@ -119,6 +120,25 @@ def verify_run(value: str | Path) -> dict[str, object]:
             raise RunIntegrityError("failed manifest has an invalid run status")
     else:
         raise RunIntegrityError("run has no final manifest")
+    integrity_path = path / "integrity.json"
+    if not integrity_path.is_file():
+        raise RunIntegrityError("required artifact is missing: integrity.json")
+    integrity = _json(integrity_path)
+    if integrity.get("schema_version") != "ovlab-integrity/1.0.0" or integrity.get("algorithm") != "sha256":
+        raise RunIntegrityError("integrity manifest has an unsupported schema or algorithm")
+    expected = {row.get("path"): row for row in integrity.get("files", [])}
+    actual = {
+        str(item.relative_to(path)): item
+        for item in path.rglob("*")
+        if item.is_file() and item != integrity_path and not item.name.endswith(".tmp")
+    }
+    if set(expected) != set(actual):
+        raise RunIntegrityError("integrity inventory differs from stored run files")
+    for relative, item in sorted(actual.items()):
+        digest = hashlib.sha256(item.read_bytes()).hexdigest()
+        row = expected[relative]
+        if row.get("size_bytes") != item.stat().st_size or row.get("sha256") != digest:
+            raise RunIntegrityError(f"integrity checksum mismatch: {relative}")
     codec = TraceCodec()
     episode_paths = sorted(path.glob("tasks/*/episodes/*"))
     for episode in episode_paths:
@@ -132,4 +152,9 @@ def verify_run(value: str | Path) -> dict[str, object]:
             raise RunIntegrityError(f"trace validation failed: {episode.relative_to(path)}: {exc}") from exc
     if final.get("episode_count") != len(episode_paths):
         raise RunIntegrityError("final manifest episode_count differs from stored traces")
-    return {**summary, "integrity": "verified", "verified_episode_count": len(episode_paths)}
+    return {
+        **summary,
+        "integrity": "verified",
+        "verified_episode_count": len(episode_paths),
+        "verified_file_count": len(actual),
+    }

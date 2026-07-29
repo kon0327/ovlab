@@ -18,6 +18,7 @@ from ovlab_metrics import (
 from ovlab_metrics.errors import MetricRegistryError, MetricValidationError
 from ovlab_metrics.plugin import EpisodeMetricPlugin
 from ovlab_metrics.results import MetricStatus
+from ovlab_metrics import system as system_metrics
 
 
 def descriptor(metric_id="test.metric", version="1.0.0"):
@@ -70,6 +71,14 @@ def test_default_evaluator_is_deterministic_and_missing_is_not_zero() -> None:
     assert by_id["task.success"].status is MetricStatus.UNAVAILABLE
     assert by_id["task.success"].value is None
     assert by_id["failure.collision_rate"].status is MetricStatus.UNAVAILABLE
+
+
+def test_system_metric_public_exports_include_qualification_metrics() -> None:
+    assert set(system_metrics.__all__) == {
+        "ControlFrequencyMetric",
+        "EpisodeLengthMetric",
+        "InferenceLatencyMetric",
+    }
 
 
 def test_non_strict_evaluator_converts_unexpected_error_and_strict_raises() -> None:

@@ -70,7 +70,16 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
         self._backend = backend
         self._tasks = tuple(records)
         self._tasks_by_id = {record.task_id: record for record in self._tasks}
-        return configured_capabilities(self.settings)
+        state_dimensions = {
+            np.asarray(record.initial_states[0]).reshape(-1).size
+            for record in self._tasks
+            if record.initial_states
+        }
+        simulator_state_dimension = next(iter(state_dimensions)) if len(state_dimensions) == 1 else None
+        return configured_capabilities(
+            self.settings,
+            simulator_state_dimension=simulator_state_dimension,
+        )
 
     def _list_tasks(self) -> tuple[TaskDescriptor, ...]:
         return tuple(record.descriptor(self.settings.maximum_episode_steps) for record in self._tasks)
@@ -125,6 +134,7 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
             truncated=False,
             native_step_index=0,
             initial_state_index=state_index,
+            simulator_state=_simulator_state(environment),
         )
         return BenchmarkResetResult(
             episode_context,
@@ -177,18 +187,21 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
             truncated=truncated,
             native_step_index=self._native_step_index,
             initial_state_index=self._initial_state_index,
+            simulator_state=_simulator_state(self._environment),
         )
-        next_observation = None
-        if not terminated and not truncated:
-            assert self._episode_context is not None
-            next_step_id = StepId(f"{self._episode_context.episode_id}-step-{self._native_step_index}")
-            next_observation = map_observation(
-                raw,
-                self.settings,
-                next_step_id,
-                self._episode_context.initial_instruction,
-                request.timestamp_ns,
-            )
+        # Preserve the post-action observation even when this action terminates
+        # or truncates the episode. It is audit evidence and a video frame, not
+        # another policy input. This makes N accepted actions correspond to
+        # exactly N observation transitions (reset + N post-action frames).
+        assert self._episode_context is not None
+        next_step_id = StepId(f"{self._episode_context.episode_id}-step-{self._native_step_index}")
+        next_observation = map_observation(
+            raw,
+            self.settings,
+            next_step_id,
+            self._episode_context.initial_instruction,
+            request.timestamp_ns,
+        )
         self._native_observation = raw
         if terminated or truncated:
             self._release_environment()
@@ -229,11 +242,18 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
         return {"libero_renderer": renderer}
 
 
-def configured_capabilities(settings: LiberoAdapterSettings) -> BenchmarkCapabilities:
+def configured_capabilities(
+    settings: LiberoAdapterSettings,
+    *,
+    simulator_state_dimension: int | None = None,
+) -> BenchmarkCapabilities:
     """Describe the configured LIBERO boundary without importing its runtime."""
     if not isinstance(settings, LiberoAdapterSettings):
         raise TypeError("settings must be LiberoAdapterSettings")
-    registry = signal_registry(settings.observation_profile)
+    registry = signal_registry(
+        settings.observation_profile,
+        simulator_state_dimension=simulator_state_dimension,
+    )
     return BenchmarkCapabilities(
         "libero-benchmark-adapter",
         "0.1.0",
@@ -252,3 +272,13 @@ def configured_capabilities(settings: LiberoAdapterSettings) -> BenchmarkCapabil
             "renderer": settings.renderer.as_dict(),
         },
     )
+
+
+def _simulator_state(environment: object) -> np.ndarray:
+    """Read the pinned Robosuite/MuJoCo state without exposing it to policy input."""
+    sim = getattr(environment, "sim", None)
+    if sim is None:
+        sim = getattr(getattr(environment, "env", None), "sim", None)
+    if sim is None or not hasattr(sim, "get_state"):
+        raise LiberoEnvironmentError("native LIBERO environment does not expose MuJoCo state")
+    return np.asarray(sim.get_state().flatten(), dtype=np.float64)

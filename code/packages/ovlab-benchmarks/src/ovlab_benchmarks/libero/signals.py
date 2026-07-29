@@ -10,7 +10,11 @@ from .errors import LiberoObservationError
 from .settings import LiberoObservationProfile
 
 
-def signal_registry(profile: LiberoObservationProfile) -> SignalRegistry:
+def signal_registry(
+    profile: LiberoObservationProfile,
+    *,
+    simulator_state_dimension: int | None = None,
+) -> SignalRegistry:
     specs = [
         SignalSpec("benchmark.task_success", "bool", (), "", SignalAccess.EVALUATION_ONLY, "LIBERO goal predicate"),
         SignalSpec("benchmark.reward", "float64", (), "", SignalAccess.EVALUATION_ONLY, "Native reward"),
@@ -27,6 +31,16 @@ def signal_registry(profile: LiberoObservationProfile) -> SignalRegistry:
                 SignalSpec("robot.gripper.joint_position", "float32", (2,), "rad", SignalAccess.PRIVILEGED, "Ground-truth gripper joints"),
             )
         )
+    if simulator_state_dimension is not None:
+        specs.append(SignalSpec(
+            "simulator.state",
+            "float64",
+            (simulator_state_dimension,),
+            "native_state",
+            SignalAccess.PRIVILEGED,
+            "Flattened MuJoCo state for deterministic replay auditing",
+            optional=True,
+        ))
     return SignalRegistry(specs)
 
 
@@ -42,6 +56,7 @@ def map_signals(
     truncated: bool,
     native_step_index: int,
     initial_state_index: int,
+    simulator_state: np.ndarray | None = None,
 ) -> tuple[SignalValue, ...]:
     values = [
         SignalValue("benchmark.task_success", success, timestamp_ns, "libero", step_id, access=SignalAccess.EVALUATION_ONLY),
@@ -65,4 +80,17 @@ def map_signals(
             values.append(
                 SignalValue(signal_name, value, timestamp_ns, "libero", step_id, access=SignalAccess.PRIVILEGED)
             )
+    if simulator_state is not None:
+        state = np.asarray(simulator_state, dtype=np.float64).reshape(-1)
+        if state.size == 0 or not np.all(np.isfinite(state)):
+            raise LiberoObservationError("native simulator state is invalid")
+        values.append(SignalValue(
+            "simulator.state",
+            state,
+            timestamp_ns,
+            "libero-mujoco",
+            step_id,
+            metadata={"comparison_tolerance": {"absolute": 1.0e-9, "relative": 1.0e-9}},
+            access=SignalAccess.PRIVILEGED,
+        ))
     return tuple(sorted(values, key=lambda value: value.name))

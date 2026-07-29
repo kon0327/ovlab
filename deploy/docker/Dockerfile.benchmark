@@ -71,7 +71,7 @@ RUN --mount=type=secret,id=ovlab_source_manifest \
     && rm /tmp/install-ovlab-packages.sh \
     && groupadd --gid 10001 ovlab \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \
-    && install -d -o 10001 -g 10001 -m 0700 /run/ovlab /runs \
+    && install -d -o 10001 -g 10001 -m 0700 /run/ovlab /var/lib/ovlab/runs \
     && install -d -o root -g root -m 0755 /usr/share/ovlab \
     && test -s /run/secrets/ovlab_source_manifest \
     && cp /run/secrets/ovlab_source_manifest /usr/share/ovlab/source-manifest.json \

@@ -1,0 +1,18 @@
+schema_version: "0.1.0"
+kind: experiment
+
+experiment:
+  id: libero10-openvla-production-qualification
+  name: Complete merged OpenVLA LIBERO-10 production qualification episode
+  tags: [libero-10, openvla, merged-full-weights, rpc, production-qualification]
+
+components:
+  benchmark: benchmarks/libero/libero10-qualification.yaml
+  policy: policies/openvla-lora/merged-libero10.yaml
+  metrics: metrics/qualification-v1.yaml
+  protocol: protocols/libero-official-episode-v1.yaml
+  action_interface: interfaces/actions/libero-osc-pose-v1.yaml
+  artifacts: artifacts/filesystem.yaml
+
+resources:
+  registry: resources/registry.yaml

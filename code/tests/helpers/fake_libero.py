@@ -47,6 +47,11 @@ class FakeLiberoEnvironment:
         self.actions = []
         self.closed = False
         self.selected_state = None
+        self.sim = SimpleNamespace(
+            get_state=lambda: SimpleNamespace(
+                flatten=lambda: np.array([self.steps], dtype=np.float64)
+            )
+        )
 
     def reset(self):
         return self.raw

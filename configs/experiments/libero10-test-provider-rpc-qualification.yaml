@@ -1,0 +1,18 @@
+schema_version: "0.1.0"
+kind: experiment
+
+experiment:
+  id: libero10-test-provider-rpc-qualification
+  name: Deterministic test-provider qualification through real LIBERO and local RPC
+  tags: [libero-10, qualification, test-provider, rpc, deterministic]
+
+components:
+  benchmark: benchmarks/libero/libero10-qualification.yaml
+  policy: policies/mock/libero-noop.yaml
+  metrics: metrics/qualification-v1.yaml
+  protocol: protocols/libero-qualification-v1.yaml
+  action_interface: interfaces/actions/libero-osc-pose-v1.yaml
+  artifacts: artifacts/filesystem.yaml
+
+resources:
+  registry: resources/registry.yaml

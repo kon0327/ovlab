@@ -76,7 +76,8 @@ def test_terminal_step_returns_adapter_to_ready() -> None:
     adapter.initialize(make_run_context())
     adapter.reset_episode(episode)
     result = adapter.step(action_request(episode))
-    assert result.terminated and result.next_observation is None
+    assert result.terminated
+    assert result.next_observation is None
     assert adapter.state is AdapterState.READY
     with pytest.raises(BenchmarkLifecycleError):
         adapter.step(action_request(episode, 1))
