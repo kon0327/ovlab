@@ -36,6 +36,23 @@ resolver produces a scientific hash without that profile and an execution hash
 including all resolved paths and devices. Its immutable output is one
 `resolved_config.yaml`.
 
+## Checkpoint resources
+
+Portable policy configurations select a logical `settings.checkpoint_id`.
+`resources/registry.yaml` binds that ID to its repository, immutable `revision`,
+aggregate SHA-256, and file manifest. Absolute paths never belong in an
+experiment or the portable registry.
+
+A gitignored local profile may provide
+`resources.checkpoints.<checkpoint-id>.local_path` for an unpublished artifact
+such as a QuIC checkpoint. The path is execution-only. Repository, revision,
+file sizes, and hashes remain registry-controlled and therefore remain in the
+scientific configuration hash.
+
+Docker deployment resolves global Hugging Face cache, local override, and
+OVLAB-managed cache in that order. The policy always sees the selected artifact
+at `/checkpoints/resolved/<checkpoint-id>` and cannot observe its host location.
+
 Only OpenVLA Vanilla currently has a complete policy configuration. LoRA, OFT,
 and QuIC experiment files will be added together with their owner settings and
 adapters rather than being represented by non-runnable placeholders.

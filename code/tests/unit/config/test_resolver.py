@@ -246,6 +246,34 @@ def test_scientific_hash_excludes_local_profile_but_execution_hash_includes_it(t
     assert "machine-a" in execution and "cuda:0" in execution
 
 
+def test_checkpoint_local_path_is_execution_only_and_preserves_registry_identity(tmp_path):
+    first_profile = profile(tmp_path, suffix="checkpoint-a")
+    second_profile = profile(tmp_path, suffix="checkpoint-b")
+    resource_id = "openvla-7b-finetuned-libero-10"
+    for target, location in (
+        (first_profile, "/checkpoints/resolved/first"),
+        (second_profile, "/checkpoints/resolved/second"),
+    ):
+        target.write_text(
+            target.read_text(encoding="utf-8")
+            + "resources:\n  checkpoints:\n"
+            + f"    {resource_id}:\n      local_path: {location}\n",
+            encoding="utf-8",
+        )
+    experiment = "configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
+
+    first = resolver().resolve(experiment, local_profile=first_profile, environment={})
+    second = resolver().resolve(experiment, local_profile=second_profile, environment={})
+
+    assert first.policy_settings.model.source == second.policy_settings.model.source
+    assert first.policy_settings.model.revision == second.policy_settings.model.revision
+    assert first.policy_settings.model.local_path == "/checkpoints/resolved/first"
+    assert second.policy_settings.model.local_path == "/checkpoints/resolved/second"
+    assert first.policy_settings.settings_hash == second.policy_settings.settings_hash
+    assert first.scientific_config_hash == second.scientific_config_hash
+    assert first.execution_config_hash != second.execution_config_hash
+
+
 def test_renderer_profiles_are_execution_only_and_preserve_scientific_contracts(tmp_path):
     egl = resolver().resolve(
         EXPERIMENT,

@@ -5,7 +5,7 @@ the existing configuration, policy-service, runner, artifact, and metric APIs
 through one workflow:
 
 ```text
-Config -> Connect -> Run -> Inspect
+Experiment -> Deploy -> Run -> Verify -> Report
 ```
 
 The CLI is an orchestration layer. It does not implement policy inference,
@@ -25,12 +25,71 @@ When `ovlab-benchctl` is installed, the same interface is available as:
 ovlab --help
 ```
 
-The source-tree launcher does not install or update packages.
+The source-tree launcher does not install or update packages. `deploy` commands
+need only system Python 3, Docker Engine and Docker Compose; they do not require
+an activated Conda environment.
 
-## Machine-local configuration
+## Recommended Docker workflow
 
-Runtime commands require a local profile containing host-specific paths and
-device selection:
+Copy the deployment environment template once and set the host paths:
+
+```bash
+cp deploy/compose/.env.example deploy/compose/.env
+```
+
+Then run a complete isolated policy-service plus LIBERO benchmark topology with
+one command:
+
+```bash
+./ovlab deploy run \
+  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+  --profile openvla \
+  --renderer egl
+```
+
+The CLI validates the Compose model, passes the same experiment to both
+containers, waits for policy readiness, runs the benchmark, propagates failure,
+and removes its containers and private RPC volume. Canonical artifacts remain in
+the host directory configured by `OVLAB_RUNS_ROOT`.
+
+LIBERO datasets follow the same external-data convention. If
+`OVLAB_DATASETS_PATH` is unset, deployment derives
+`<OVLAB_RUNS_ROOT>/../datasets/libero`, creates the directory, and mounts it
+read-only. An explicitly configured dataset path must already exist.
+
+Use `--profile oft` for an OpenVLA-OFT experiment. Use `--renderer glfw` only
+with an interactive display server. Preview the exact commands without touching
+Docker:
+
+```bash
+./ovlab deploy run CONFIG --profile openvla --renderer egl --dry-run
+```
+
+Before Docker starts, the CLI resolves the policy's portable `checkpoint_id`.
+It checks `~/.cache/huggingface`, an optional local-profile `local_path`, and
+`ovlab-data/checkpoints/huggingface`; if still absent, it downloads exactly the
+registry-pinned revision into managed storage. File sizes and SHA-256 values are
+verified before the snapshot is mounted read-only. Resolution, per-file download
+progress, transferred byte counts, and verification stages are printed to
+stderr; `--json` stdout therefore remains machine-readable. Use `--offline` to
+prohibit the download path:
+
+```bash
+./ovlab deploy run CONFIG --profile oft --offline
+```
+
+Custom unpublished checkpoints remain outside the repository and are selected
+through a gitignored local profile:
+
+```bash
+./ovlab deploy run CONFIG --profile openvla \
+  --local-profile configs/local/profile.yaml
+```
+
+## Machine-local native configuration
+
+Low-level native development commands require a local profile containing
+host-specific paths and device selection:
 
 ```bash
 export OVLAB_LOCAL_PROFILE=configs/local/profile.yaml
@@ -59,12 +118,18 @@ ovlab
 │   ├── list [--json]
 │   └── describe CONFIG [--json]
 ├── service
-│   └── serve CONFIG [--socket PATH]
+│   ├── serve CONFIG [--socket PATH]
+│   └── health --socket PATH [--json]
 ├── connect CONFIG [--json]
+├── deploy
+│   └── run EXPERIMENT --profile openvla|oft [--renderer egl|glfw]
+│       [--env-file PATH] [--local-profile PATH] [--offline]
+│       [--project-name NAME] [--dry-run] [--json]
 ├── run CONFIG [--output-root PATH] [--dry-run] [--json]
 ├── run inspect RUN_PATH [--json]
 ├── run verify RUN_PATH [--json]
-└── metrics recompute RUN_PATH [--json]
+├── metrics recompute RUN_PATH [--json]
+└── report generate RUN_PATH --output PATH [--json]
 ```
 
 ## 1. Validate and resolve configuration
@@ -116,9 +181,11 @@ The description reports the method family, configured artifact, capabilities,
 readiness, and available scientific and execution identities. It does not load
 a model or initialize CUDA.
 
-## 3. Start a policy service
+## 3. Low-level native policy service
 
-Run one policy service in the foreground:
+This command is an internal container entrypoint and a developer diagnostic. A
+normal deployment should use `ovlab deploy run` instead. Run one native policy
+service in the foreground:
 
 ```bash
 ./ovlab service serve CONFIG
@@ -139,10 +206,10 @@ Service behavior:
 - SIGINT and SIGTERM close the adapter and remove only the owned socket;
 - service diagnostics remain attached to the foreground process.
 
-Run the service in the policy's compatible environment. The runner and an
-OpenVLA policy service may require different existing Conda environments.
+Native development requires the policy's compatible environment. Docker
+deployment does not expose this environment split to the user.
 
-## 4. Probe connectivity
+## 4. Low-level connectivity probe
 
 With the service running, perform a lifecycle and capability handshake:
 
@@ -163,7 +230,7 @@ With the service running, perform a lifecycle and capability handshake:
 It does not reset an episode, request a prediction, start LIBERO, or create an
 inference trace. Privileged benchmark signals are not part of the RPC schema.
 
-## 5. Plan or execute a run
+## 5. Low-level native runner
 
 Inspect the execution plan without runtime side effects:
 
@@ -180,7 +247,8 @@ Dry-run guarantees:
 - no prediction or benchmark rollout;
 - no run-directory creation.
 
-Execute through the existing `ExperimentRunner`:
+Inside the benchmark container, execute through the existing
+`ExperimentRunner`:
 
 ```bash
 ./ovlab run CONFIG
@@ -225,6 +293,15 @@ The command does not run a policy, simulator, or benchmark; does not modify the
 original trace or stored metrics; records metric implementation identity;
 preserves unavailable results as `status=unavailable, value=null`; and compares
 complete recorded and recomputed `MetricResult` objects.
+
+## 8. Generate a derived report
+
+```bash
+./ovlab report generate RUN_PATH --output DERIVED_PATH
+```
+
+The source run remains immutable. In Docker deployment, the reporting profile
+mounts canonical runs read-only and writes only to the configured derived root.
 
 ## JSON output
 
@@ -278,8 +355,9 @@ transformation is configured. LoRA and OpenVLA-OFT are not QP0.
 ## Current limitations
 
 The CLI does not provide TCP services, daemon management, schedulers, parallel
-execution, run resumption, a TUI, Docker/Compose entrypoints, automatic Conda
-environment switching, or QuIC runtime implementations.
+execution, run resumption, a TUI, automatic Conda environment switching, or
+QuIC runtime implementations. Conda switching is intentionally unnecessary in
+the Docker deployment workflow.
 
 Use `./ovlab --help` and the subcommand help pages as the authoritative option
 reference.

@@ -12,15 +12,17 @@ The experiment runner and benchmark adapter execute together in a runner process
 - `configs/`: benchmark, policy, metric, protocol, and experiment configuration.
 - `deploy/`: reserved for Docker, Compose, and deployment scripts.
 - `external/`: destinations for pinned external repositories and the dedicated OpenVLA-QuIC fork.
-- `checkpoints/`: local model checkpoints; generated contents are not versioned.
-- `datasets/`: local benchmark datasets; generated contents are not versioned.
 - `runs/`: optional repo-local development output; contents are not versioned.
 
 Container deployments use a host-backed artifact workspace outside the source
 checkout. The canonical convention is `ovlab-data/runs` for immutable evidence,
-`ovlab-data/derived` for regenerated analyses, and `ovlab-data/exports` for curated
-publication outputs. Only benchmark containers write canonical runs; reporting
-mounts them read-only. See [`deploy/README.md`](deploy/README.md).
+`ovlab-data/checkpoints` for orchestrator-managed model artifacts,
+`ovlab-data/datasets` for benchmark datasets,
+`ovlab-data/derived` for regenerated analyses, and `ovlab-data/exports` for
+curated publication outputs. Existing snapshots in the user's global Hugging
+Face cache are reused through verified hard links rather than copied. Only
+benchmark containers write canonical runs; reporting mounts them read-only.
+See [`deploy/README.md`](deploy/README.md).
 
 ## Command line
 
@@ -28,6 +30,7 @@ Use the unified CLI directly from a checkout without installing packages:
 
 ```bash
 ./ovlab --help
+./ovlab deploy run EXPERIMENT --profile openvla --renderer egl
 ./ovlab config validate CONFIG --mode descriptor
 ./ovlab policy list
 ./ovlab connect CONFIG
@@ -37,8 +40,14 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab metrics recompute RUN_PATH
 ```
 
-Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile for runtime
-resolution. Installing `ovlab-benchctl` exposes the same command as the
+`ovlab deploy run` is the normal operator workflow. It launches the selected
+policy service and the LIBERO runner as separate Compose containers, waits for
+readiness, propagates the benchmark result, and cleans up the private deployment
+resources. It needs Docker and system Python 3, not an activated Conda
+environment.
+
+Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile only for low-level
+native development. Installing `ovlab-benchctl` exposes the same command as the
 `ovlab` console entrypoint. Complete command, output, exit-code, foreground
 service, cleanup, and QuIC-skeleton behavior is documented in the
 [`OVLAB CLI guide`](code/apps/benchctl/CLI_README.md).

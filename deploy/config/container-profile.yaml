@@ -3,7 +3,7 @@ kind: local_profile
 id: ovlab-container
 
 paths:
-  checkpoint_root: /checkpoints/hub
+  checkpoint_root: /checkpoints/resolved
   dataset_root: /datasets
   runs_root: /var/lib/ovlab/runs
 

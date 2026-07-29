@@ -3,12 +3,19 @@ kind: local_profile
 id: example-local-machine
 
 paths:
-  checkpoint_root: /absolute/path/to/checkpoints
-  dataset_root: /absolute/path/to/datasets
+  checkpoint_root: /absolute/path/to/ovlab-data/checkpoints/huggingface
+  dataset_root: /absolute/path/to/ovlab-data/datasets/libero
   runs_root: /absolute/path/to/ovlab-data/runs
 
 devices:
   primary_gpu: cuda:0
+
+# Optional host-only overrides for unpublished or custom artifacts. Portable
+# experiments still refer only to the logical checkpoint ID.
+resources:
+  checkpoints:
+    quic-libero10-v1:
+      local_path: /absolute/path/to/ovlab-data/checkpoints/local/quic-libero10-v1
 
 # Optional machine-local override for the EGL device selected by a portable
 # execution profile. It does not select the renderer backend.

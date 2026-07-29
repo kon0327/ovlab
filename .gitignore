@@ -1,10 +1,6 @@
 # Generated experiment data (retain directory markers)
 runs/*
 !runs/.gitkeep
-checkpoints/*
-!checkpoints/.gitkeep
-datasets/*
-!datasets/.gitkeep
 
 # Generated analytical laboratory outputs
 lab/reports/*

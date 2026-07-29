@@ -136,6 +136,22 @@ def test_missing_local_snapshot_is_rejected_without_model_loader(tmp_path):
         HuggingFaceOpenVlaRuntime._resolve(settings.model, missing, True)
 
 
+def test_resolved_local_path_is_used_without_hugging_face_cache_lookup(tmp_path):
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    source = OpenVlaModelSource(
+        "owner/model", "a" * 40, "b" * 64, local_path=str(snapshot)
+    )
+    calls = []
+
+    resolved = HuggingFaceOpenVlaRuntime._resolve(
+        source, lambda **kwargs: calls.append(kwargs), True
+    )
+
+    assert resolved == snapshot.resolve()
+    assert calls == []
+
+
 def test_runtime_dependency_error_preserves_cause(monkeypatch):
     import builtins
     original = builtins.__import__

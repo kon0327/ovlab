@@ -78,9 +78,11 @@ class HuggingFaceOpenVlaRuntime:
 
     @staticmethod
     def _resolve(source, snapshot_download, local_files_only: bool) -> Path:
-        candidate = Path(source.source).expanduser()
+        candidate = Path(source.local_path or source.source).expanduser()
         if candidate.is_dir():
             return candidate.resolve()
+        if source.local_path is not None:
+            raise OpenVlaCheckpointError(f"resolved checkpoint path is unavailable: {candidate}")
         if not local_files_only:
             raise OpenVlaCheckpointError("OVLAB Vanilla currently requires local_files_only=True")
         try:

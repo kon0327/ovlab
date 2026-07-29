@@ -68,7 +68,7 @@ def main() -> int:
     )
     entry = registry["checkpoints"][args.resource_id]
     artifact = OpenVlaOftArtifact.from_registry_entry(args.resource_id, entry)
-    source = OpenVlaModelSource(entry["repo_id"], entry["expected_revision"], entry["expected_sha256"])
+    source = OpenVlaModelSource(entry["repo_id"], entry["revision"], entry["expected_sha256"])
     settings = OpenVlaOftSettings(source, artifact, device=args.device)
     PolicyService(args.socket, OpenVlaOftAdapter(settings), identity_provider=_identity).serve()
     return 0

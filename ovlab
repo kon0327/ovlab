@@ -10,4 +10,9 @@ for source_path in code/packages/*/src code/policies/*/src code/apps/*/src; do
 done
 joined_paths="$(IFS=:; echo "${source_paths[*]}")"
 export PYTHONPATH="$joined_paths${PYTHONPATH:+:$PYTHONPATH}"
-exec python -m ovlab_benchctl.cli "$@"
+python_executable="${OVLAB_PYTHON:-python3}"
+if ! command -v "$python_executable" >/dev/null 2>&1; then
+    echo "OVLAB requires Python 3 for its host-side CLI launcher." >&2
+    exit 127
+fi
+exec "$python_executable" -m ovlab_benchctl.cli "$@"

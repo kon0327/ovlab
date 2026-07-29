@@ -72,7 +72,7 @@ class OpenVlaOftArtifact:
         return cls(
             resource_id,
             entry["repo_id"],
-            entry["expected_revision"],
+            entry["revision"],
             entry["expected_sha256"],
             tuple(
                 OftFileIdentity(path, identity["size"], identity["sha256"])

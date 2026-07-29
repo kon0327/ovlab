@@ -82,9 +82,14 @@ class OpenVlaOftRuntime:
             raise RuntimeError("OFT runtime components may be loaded only once")
         (torch, snapshot_download, AutoModel, AutoProcessor, get_vla_action,
          load_state, L1Head, ProprioProjector) = self._imports()
-        snapshot = Path(snapshot_download(
-            repo_id=settings.model.source, revision=settings.model.revision, local_files_only=True,
-        )).resolve()
+        if settings.model.local_path is not None:
+            snapshot = Path(settings.model.local_path).resolve()
+            if not snapshot.is_dir():
+                raise RuntimeError(f"resolved OFT checkpoint path is unavailable: {snapshot}")
+        else:
+            snapshot = Path(snapshot_download(
+                repo_id=settings.model.source, revision=settings.model.revision, local_files_only=True,
+            )).resolve()
         verified = settings.artifact.verify(snapshot)
         kwargs = {
             "torch_dtype": torch.bfloat16, "low_cpu_mem_usage": True,

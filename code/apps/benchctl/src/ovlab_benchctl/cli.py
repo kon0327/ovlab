@@ -69,6 +69,26 @@ def _parser() -> argparse.ArgumentParser:
     connect.add_argument("config")
     connect.add_argument("--json", action="store_true")
 
+    deploy = commands.add_parser("deploy", help="orchestrate isolated OVLAB containers")
+    deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
+    deploy_run = deploy_commands.add_parser("run", help="run one experiment through Docker Compose")
+    deploy_run.add_argument("experiment")
+    deploy_run.add_argument("--profile", choices=("openvla", "oft"), required=True)
+    deploy_run.add_argument("--renderer", choices=("egl", "glfw"), default="egl")
+    deploy_run.add_argument("--env-file", default="deploy/compose/.env")
+    deploy_run.add_argument(
+        "--local-profile",
+        help="gitignored host profile containing optional checkpoint local_path overrides",
+    )
+    deploy_run.add_argument(
+        "--offline",
+        action="store_true",
+        help="reject a missing checkpoint instead of downloading its pinned revision",
+    )
+    deploy_run.add_argument("--project-name")
+    deploy_run.add_argument("--dry-run", action="store_true")
+    deploy_run.add_argument("--json", action="store_true")
+
     run = commands.add_parser("run", help="execute, inspect, or verify a run")
     run.add_argument("target", help="CONFIG, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH for inspect or verify")
@@ -102,7 +122,10 @@ def _application():
 
 def _command_name(args) -> str:
     parts = [args.command]
-    for name in ("config_command", "policy_command", "service_command", "metrics_command", "report_command"):
+    for name in (
+        "config_command", "policy_command", "service_command", "deploy_command",
+        "metrics_command", "report_command",
+    ):
         value = getattr(args, name, None)
         if value:
             parts.append(value)
@@ -205,6 +228,19 @@ def _dispatch(args):
         return result, False, None
     if args.command == "connect":
         return _application().connect(args.config), args.json, None
+    if args.command == "deploy":
+        from .deployment import ComposeDeployment
+        deployment = ComposeDeployment(_repository_root())
+        plan = deployment.plan(
+            args.experiment,
+            profile=args.profile,
+            renderer=args.renderer,
+            env_file=args.env_file,
+            local_profile=args.local_profile,
+            offline=args.offline,
+            project_name=args.project_name,
+        )
+        return deployment.run(plan, dry_run=args.dry_run), args.json, None
     if args.command == "run":
         app = _application()
         if args.target in {"inspect", "verify"}:

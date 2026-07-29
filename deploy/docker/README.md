@@ -1,9 +1,10 @@
 # OVLAB Docker deployment
 
 This directory contains the production Dockerfiles for the isolated OVLAB
-runtime. Use the Compose definitions in `deploy/compose/` to run them; the
-Dockerfiles are not intended to collapse the benchmark and policy service into
-one container.
+runtime. The public `ovlab deploy run` command owns the Compose lifecycle; users
+do not need to activate Conda or start containers separately. The Dockerfiles
+are not intended to collapse the benchmark and policy service into one
+container.
 
 For the complete reproducibility and security contract, see
 [`deploy/README.md`](../README.md). Dependency locks are documented in
@@ -73,16 +74,22 @@ Keep deployment evidence outside the source checkout:
 
 ```text
 /home/kony/dissertation/ovlab-data/
-├── runs/       # canonical traces, metrics, video, config and provenance
-├── derived/    # regenerated reports, plots and tables
-└── exports/    # curated publication and sharing outputs
+├── checkpoints/
+│   ├── huggingface/   # pinned snapshots managed by the OVLAB CLI
+│   └── local/         # unpublished QuIC and experimental artifacts
+├── datasets/
+│   └── libero/        # LIBERO demonstrations mounted read-only
+├── runs/              # canonical traces, metrics, video, config and provenance
+├── derived/           # regenerated reports, plots and tables
+└── exports/           # curated publication and sharing outputs
 ```
 
-Create all three directories before starting Compose. Benchmark and reporting
-containers run as UID/GID `10001:10001`; grant that identity write access to
-`runs/` and `derived/` without making them world-writable. Only the benchmark
-writes canonical runs. Reporting mounts `runs/` read-only, and `exports/` is not
-mounted into OVLAB containers.
+The CLI creates a missing `runs/` directory with mode `2770` and passes the
+invoking user's primary GID to benchmark containers as a supplementary group.
+For direct Compose use, create the directories yourself and set
+`OVLAB_HOST_ARTIFACT_GID` to `id -g`. Only the benchmark writes canonical runs.
+Reporting mounts `runs/` read-only, and `exports/` is not mounted into OVLAB
+containers.
 
 Copy the environment template and replace every host-specific value:
 
@@ -93,8 +100,10 @@ cp deploy/compose/.env.example deploy/compose/.env
 At minimum, configure:
 
 ```dotenv
-OVLAB_CHECKPOINTS_PATH=/absolute/path/to/huggingface
-OVLAB_DATASETS_PATH=/absolute/path/to/libero
+OVLAB_GLOBAL_HF_CACHE=/home/kony/.cache/huggingface
+OVLAB_MANAGED_CHECKPOINTS_ROOT=/home/kony/dissertation/ovlab-data/checkpoints/huggingface
+# Optional; defaults to /home/kony/dissertation/ovlab-data/datasets/libero
+OVLAB_DATASETS_PATH=/home/kony/dissertation/ovlab-data/datasets/libero
 OVLAB_RUNS_ROOT=/home/kony/dissertation/ovlab-data/runs
 OVLAB_DERIVED_ROOT=/home/kony/dissertation/ovlab-data/derived
 OVLAB_EXPORTS_ROOT=/home/kony/dissertation/ovlab-data/exports
@@ -105,46 +114,71 @@ OVLAB_EGL_DEVICE_ID=0
 Host paths, renderer device IDs, socket names and Docker tags are execution
 settings. They do not change the scientific configuration hash.
 
+The checkpoint variables are discovery and storage roots, not direct policy
+mounts. The CLI resolves the experiment's logical checkpoint ID, verifies its
+pinned registry revision and file hashes, and mounts only that snapshot at
+`/checkpoints/resolved/<checkpoint-id>:ro`. Existing global Hugging Face cache
+data is reused with hard links instead of copying weight bytes.
+When `OVLAB_DATASETS_PATH` is omitted, the CLI derives `datasets/libero` next
+to `runs`, creates it if necessary, and mounts it read-only into the benchmark.
+
 ## Validate Compose
 
-Resolve the configuration without starting containers:
+Preview the resolved orchestration without starting containers:
 
 ```bash
-docker compose \
-  --env-file deploy/compose/.env \
-  --file deploy/compose/compose.yaml \
-  --profile openvla config --quiet
+./ovlab deploy run \
+  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+  --profile openvla \
+  --renderer egl \
+  --dry-run
 ```
 
-For the OFT topology, replace `openvla` with `oft`.
+The real command performs its own `docker compose config --quiet` preflight. It
+also verifies a versioned deployment-contract label on both selected images, so
+a stale image fails with an exact `build-images.sh` command before checkpoint
+verification or container startup. After changing packaged source, rebuild the
+selected topology, for example:
+
+```bash
+bash deploy/scripts/build-images.sh benchmark policy-openvla-oft
+```
 
 ## Run with EGL
 
 EGL is the supported backend for headless and automated LIBERO execution:
 
 ```bash
-docker compose \
-  --env-file deploy/compose/.env \
-  --file deploy/compose/compose.yaml \
-  --profile openvla up \
-  --abort-on-container-exit \
-  --exit-code-from benchmark-openvla
+./ovlab deploy run \
+  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+  --profile openvla \
+  --renderer egl
 ```
 
 Run OpenVLA-OFT separately:
 
 ```bash
-docker compose \
-  --env-file deploy/compose/.env \
-  --file deploy/compose/compose.yaml \
-  --profile oft up \
-  --abort-on-container-exit \
-  --exit-code-from benchmark-oft
+./ovlab deploy run \
+  configs/experiments/libero10-openvla-oft-rpc-smoke.yaml \
+  --profile oft \
+  --renderer egl
 ```
 
 The policy service loads checkpoints offline, becomes healthy only after
 initialization and is then consumed by the benchmark through the local socket.
 Canonical output is written below `${OVLAB_RUNS_ROOT}` on the host.
+
+By default, a checkpoint absent from the global and managed caches is downloaded
+at its pinned revision by the host orchestrator before policy startup. For a
+strictly offline run, require an already verified artifact:
+
+```bash
+./ovlab deploy run \
+  configs/experiments/libero10-openvla-oft-rpc-smoke.yaml \
+  --profile oft \
+  --renderer egl \
+  --offline
+```
 
 ## Run the interactive GLFW path
 
@@ -152,13 +186,10 @@ GLFW requires a live X11 or Wayland display such as WSLg. It is not a truly
 headless backend; hiding a window does not remove the display-server dependency.
 
 ```bash
-docker compose \
-  --env-file deploy/compose/.env \
-  --file deploy/compose/compose.yaml \
-  --file deploy/compose/compose.glfw.yaml \
-  --profile openvla up \
-  --abort-on-container-exit \
-  --exit-code-from benchmark-openvla
+./ovlab deploy run \
+  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+  --profile openvla \
+  --renderer glfw
 ```
 
 The overlay forces `MUJOCO_GL=glfw`, removes the EGL device variable and mounts
@@ -183,13 +214,9 @@ The report service reads `/var/lib/ovlab/runs` read-only and writes only to
 
 ## Shutdown and verification
 
-Stop only the selected Compose project:
-
-```bash
-docker compose \
-  --env-file deploy/compose/.env \
-  --file deploy/compose/compose.yaml down
-```
+`ovlab deploy run` always executes project-scoped Compose teardown, including
+its private RPC volume, on success, failure or interruption. Canonical bind-
+mounted run artifacts are not removed.
 
 Do not use a global Docker prune as part of the OVLAB workflow. After a run,
 verify that no service remains alive and inspect the host artifacts directly:
@@ -203,8 +230,10 @@ find "${OVLAB_RUNS_ROOT}" -maxdepth 2 -type f
 
 - `permission denied` below the runs directory: correct ownership or ACLs for
   container UID/GID `10001:10001`.
-- checkpoint or dataset not found: verify the absolute bind-mount source; runtime
-  networking is disabled and cannot download missing artifacts.
+- checkpoint not found under `--offline`: verify the logical ID, pinned registry
+  revision, global cache, managed cache, or local-profile override. Without
+  `--offline`, inspect host network and managed-storage permissions. Policy
+  containers never receive network access.
 - CUDA unavailable: check the NVIDIA Container Toolkit, host driver and
   `OVLAB_GPU_DEVICE`.
 - EGL initialization failure: verify graphics-device exposure and
@@ -213,4 +242,3 @@ find "${OVLAB_RUNS_ROOT}" -maxdepth 2 -type f
   CUDA, FlashAttention or compatibility errors.
 - socket permission failure: do not override the fixed UID/GID independently
   between benchmark and policy services.
-

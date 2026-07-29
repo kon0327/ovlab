@@ -155,16 +155,36 @@ class ConfigResolver:
 
         paths = {key: self._local_path(value, f"local_profile.paths.{key}") for key, value in profile["paths"].items()}
         devices = dict(profile["devices"])
+        local_checkpoint_paths = {
+            resource_id: self._local_path(
+                entry["local_path"], f"local_profile.resources.checkpoints.{resource_id}.local_path"
+            )
+            for resource_id, entry in profile.get("resources", {}).get("checkpoints", {}).items()
+        }
+        values = os.environ if environment is None else environment
+        resolved_id = values.get("OVLAB_RESOLVED_CHECKPOINT_ID")
+        resolved_path = values.get("OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH")
+        if bool(resolved_id) != bool(resolved_path):
+            raise ConfigSchemaError(
+                "OVLAB_RESOLVED_CHECKPOINT_ID and OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH "
+                "must be set together"
+            )
+        if resolved_path is not None:
+            local_checkpoint_paths[str(resolved_id)] = self._local_path(
+                resolved_path, "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH"
+            )
         resolved_checkpoints = {}
         for resource_id, entry in registry["checkpoints"].items():
             resolved = {
                 "source": entry["repo_id"],
-                "expected_revision": entry["expected_revision"], "expected_sha256": entry["expected_sha256"],
+                "revision": entry["revision"], "expected_sha256": entry["expected_sha256"],
             }
             if "artifact" in entry:
                 resolved["artifact"] = deepcopy(entry["artifact"])
                 resolved["method"] = deepcopy(entry["method"])
                 resolved["repo_id"] = entry["repo_id"]
+            if resource_id in local_checkpoint_paths:
+                resolved["local_path"] = str(local_checkpoint_paths[resource_id])
             resolved_checkpoints[resource_id] = resolved
         resolved_repositories = {}
         for resource_id, entry in registry["repositories"].items():
@@ -337,14 +357,16 @@ class ConfigResolver:
         try: device = devices[runtime["device_resource"]]
         except KeyError as exc: raise ConfigReferenceError(f"unknown device resource: {runtime['device_resource']}") from exc
         obs = benchmark_doc["settings"]["observation"]
-        source = lambda item: OpenVlaModelSource(item["source"], item["expected_revision"], item["expected_sha256"])
+        source = lambda item: OpenVlaModelSource(
+            item["source"], item["revision"], item["expected_sha256"], item.get("local_path")
+        )
         if doc["type"] == "openvla_oft":
             if settings["checkpoint_id"] != settings["processor_id"]:
                 raise ConfigCompatibilityError("OFT model and processor resources must be identical")
             if benchmark_doc["settings"]["suite"] != "libero_10" or obs["profile"] != "native_oft":
                 raise ConfigCompatibilityError("native Gate E OFT requires LIBERO-10 and the native_oft profile")
             registry_entry = {
-                "repo_id": model["source"], "expected_revision": model["expected_revision"],
+                "repo_id": model["source"], "revision": model["revision"],
                 "expected_sha256": model["expected_sha256"], "artifact": model["artifact"],
                 "method": model["method"],
             }
@@ -368,7 +390,7 @@ class ConfigResolver:
                 raise ConfigCompatibilityError("merged LoRA policy requires registered artifact and method identity")
             registry_entry = {
                 "repo_id": model["source"],
-                "expected_revision": model["expected_revision"],
+                "revision": model["revision"],
                 "expected_sha256": model["expected_sha256"],
                 "artifact": model["artifact"],
                 "method": model["method"],

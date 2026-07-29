@@ -97,7 +97,7 @@ def main() -> int:
         raise RuntimeError(f"unknown merged LoRA resource: {args.resource_id}") from exc
     artifact = OpenVlaRuntimeArtifact.from_registry_entry(args.resource_id, entry)
     method = method_descriptor_from_registry(entry)
-    source = OpenVlaModelSource(entry["repo_id"], entry["expected_revision"], entry["expected_sha256"])
+    source = OpenVlaModelSource(entry["repo_id"], entry["revision"], entry["expected_sha256"])
     settings = OpenVlaVanillaSettings(
         model=source,
         processor=source,

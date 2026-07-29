@@ -31,6 +31,7 @@ LABEL org.opencontainers.image.title="OVLAB OpenVLA-OFT policy service" \
       org.opencontainers.image.description="Offline OpenVLA-OFT service with its distinct dependency closure; no LIBERO" \
       cz.cvut.ovlab.role="policy-openvla-oft" \
       cz.cvut.ovlab.build-target="production" \
+      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-v1" \
       cz.cvut.ovlab.python.version="3.10.20" \
       cz.cvut.ovlab.cuda.version="12.1" \
       cz.cvut.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1-oft-bc339d9;peft=0.11.1;flash-attn=2.5.5" \

@@ -37,6 +37,7 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
         assert "cz.cvut.ovlab.dependency-lock.sha256" in text
         assert 'org.opencontainers.image.licenses="NOASSERTION"' in text
         assert 'cz.cvut.ovlab.build-target="production"' in text
+        assert 'cz.cvut.ovlab.deployment.contract="resolved-checkpoint-v1"' in text
 
 
 def test_role_closures_do_not_cross_heavy_runtime_boundaries():
@@ -72,8 +73,14 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     assert "OVLAB_CONTAINER_RUNTIME_VERSION" in COMPOSE
     assert "OVLAB_MOUNT_CONTRACT" in COMPOSE
     assert "service, health, --socket, /run/ovlab/policy.sock" in COMPOSE
-    assert "target: /checkpoints\n        read_only: true" in COMPOSE
+    assert COMPOSE.count("source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?") == 2
+    assert "../../checkpoints" not in COMPOSE
+    assert COMPOSE.count("target: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}") == 2
+    assert "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH" in COMPOSE
+    assert COMPOSE.count("source: ${OVLAB_DATASETS_PATH:?") == 2
+    assert "../../datasets" not in COMPOSE
     assert "target: /datasets\n        read_only: true" in COMPOSE
+    assert COMPOSE.count("${OVLAB_EXPERIMENT_CONFIG:-") == 4
 
 
 def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
@@ -86,6 +93,7 @@ def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
     assert "target: /var/lib/ovlab/derived" in COMPOSE
     assert "OVLAB_MOUNT_CONTRACT: runs-ro,derived-rw" in COMPOSE
     assert "OVLAB_EXPORTS_ROOT" not in COMPOSE
+    assert COMPOSE.count("${OVLAB_HOST_ARTIFACT_GID:-1000}") == 3
     reporting = COMPOSE.split("  reporting:\n", 1)[1].split("\nvolumes:\n", 1)[0]
     assert "profiles: [reporting]" in reporting
     assert "report\n      - generate" in reporting

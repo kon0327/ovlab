@@ -319,6 +319,12 @@ class OvlabApplication:
             "service_topology": "OVLAB_SERVICE_TOPOLOGY",
             "offline_mode": "OVLAB_OFFLINE_MODE",
             "mount_contract": "OVLAB_MOUNT_CONTRACT",
+            "checkpoint_id": "OVLAB_CHECKPOINT_ID",
+            "checkpoint_source_kind": "OVLAB_CHECKPOINT_SOURCE_KIND",
+            "checkpoint_host_path": "OVLAB_CHECKPOINT_HOST_PATH",
+            "checkpoint_repository": "OVLAB_CHECKPOINT_REPOSITORY",
+            "checkpoint_revision": "OVLAB_CHECKPOINT_REVISION",
+            "checkpoint_sha256": "OVLAB_CHECKPOINT_SHA256",
         }
         return {
             key: values[name]

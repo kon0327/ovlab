@@ -24,6 +24,14 @@ profile; callers may explicitly select `profiles/libero-playground-glfw.yaml`.
 Diagnostic `MUJOCO_GL` and `MUJOCO_EGL_DEVICE_ID` values override the selected
 profile and are reflected in the resolved execution configuration.
 
+The host-side deployment resolver reads only the selected policy's logical
+checkpoint ID and the portable registry identity. It checks the default global
+Hugging Face cache, an optional local-profile override, and OVLAB-managed
+storage, verifies declared file sizes and SHA-256 values, and exposes only the
+resolved snapshot to the policy container. Missing artifacts are downloaded at
+their pinned revision unless `ovlab deploy run --offline` is used. This path uses
+the Python standard library and does not require a host Conda environment.
+
 `ResolvedExperimentConfig.write()` creates one deterministic
 `resolved_config.yaml` and refuses to overwrite an existing file.
 

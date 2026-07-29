@@ -78,7 +78,7 @@ class OpenVlaRuntimeArtifact:
         return cls(
             logical_resource_id=resource_id,
             repository=entry["repo_id"],
-            revision=entry["expected_revision"],
+            revision=entry["revision"],
             artifact_form=artifact["form"],
             merge_status=artifact["merge_status"],
             adapter_config_status=artifact["adapter_config"],

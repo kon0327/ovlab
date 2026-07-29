@@ -64,7 +64,8 @@ export OVLAB_CONTAINER_RUNTIME_VERSION="$(docker version --format '{{.Server.Ver
 
 All containers run as UID/GID `10001:10001`, drop all capabilities, enable
 `no-new-privileges`, use a read-only root filesystem and have no network. The
-policy receives only `/checkpoints:ro` and the shared socket volume. The
+policy receives only its resolved snapshot at
+`/checkpoints/resolved/<checkpoint-id>:ro` and the shared socket volume. The
 benchmark receives `/datasets:ro`, the socket volume and the host-backed
 `/var/lib/ovlab/runs` directory as its only persistent writable mount. Canonical
 run evidence is therefore directly available outside the container. Configuration
@@ -76,11 +77,13 @@ paths into the pinned LIBERO source and maps demonstrations to `/datasets`.
 `LIBERO_CONFIG_PATH=/etc/ovlab/libero` prevents upstream LIBERO from trying to
 create an interactive configuration below the non-root user's read-only home.
 
-Override the portable repository-relative asset locations when necessary:
+Configure host deployment locations when necessary:
 
 ```bash
-export OVLAB_CHECKPOINTS_PATH=/host/read-only/huggingface
-export OVLAB_DATASETS_PATH=/host/read-only/libero
+export OVLAB_GLOBAL_HF_CACHE=/home/kony/.cache/huggingface
+export OVLAB_MANAGED_CHECKPOINTS_ROOT=/home/kony/dissertation/ovlab-data/checkpoints/huggingface
+# Optional override; otherwise derived as ovlab-data/datasets/libero.
+export OVLAB_DATASETS_PATH=/home/kony/dissertation/ovlab-data/datasets/libero
 export OVLAB_RUNS_ROOT=/home/kony/dissertation/ovlab-data/runs
 export OVLAB_DERIVED_ROOT=/home/kony/dissertation/ovlab-data/derived
 export OVLAB_EXPORTS_ROOT=/home/kony/dissertation/ovlab-data/exports
@@ -89,26 +92,106 @@ export OVLAB_EGL_DEVICE_ID=0
 ```
 
 These are deployment settings, not scientific parameters. Do not put secrets in
-them. Hugging Face and Transformers offline modes are forced in policy services.
+them. Hugging Face and Transformers offline modes are forced in policy services;
+only the host orchestrator may download a missing pinned artifact before the
+containers start.
 
 Create the host artifact workspace before launching containers. It is deliberately
 outside the source checkout:
 
 ```text
 /home/kony/dissertation/ovlab-data/
-├── runs/       # immutable canonical traces, metrics, video, config and provenance
-├── derived/    # regenerated reports, plots and tables
-└── exports/    # curated outputs prepared for papers and sharing
+├── checkpoints/
+│   ├── huggingface/   # pinned snapshots managed or materialized by OVLAB
+│   └── local/         # unpublished QuIC and experimental checkpoints
+├── datasets/
+│   └── libero/        # LIBERO demonstration datasets, mounted read-only
+├── runs/              # immutable traces, metrics, video, config and provenance
+├── derived/           # regenerated reports, plots and tables
+└── exports/           # curated outputs prepared for papers and sharing
 ```
 
-The container runtime uses UID/GID `10001:10001`, so those directories must allow
-that identity to create files. `runs/` is writable only in benchmark services.
+## Checkpoint resolution
+
+Experiments contain only a logical `settings.checkpoint_id`. The portable
+registry supplies its Hugging Face repository, pinned revision, aggregate hash,
+and exact file identities. Before Compose starts, `ovlab deploy run` resolves
+that identity in this order:
+
+1. `${OVLAB_GLOBAL_HF_CACHE}`, defaulting to `~/.cache/huggingface`;
+2. `resources.checkpoints.<id>.local_path` in an explicitly selected gitignored
+   local profile;
+3. `${OVLAB_MANAGED_CHECKPOINTS_ROOT}`, defaulting to
+   `<OVLAB_RUNS_ROOT>/../checkpoints/huggingface`;
+4. a host-side download of the pinned revision into managed storage.
+
+Every selected artifact is checked against registry sizes and SHA-256 values
+before Docker starts. A global Hugging Face snapshot is materialized into the
+managed tree with hard links, so its weight bytes are not copied and its cache
+symlinks remain valid after mounting only the selected snapshot. Cross-filesystem
+materialization fails clearly instead of silently copying large weights.
+During a managed download the CLI reports repository metadata, file number,
+filename, byte progress, completion, and verification stages on stderr.
+
+Use strict offline resolution when downloads are forbidden:
+
+```bash
+./ovlab deploy run EXPERIMENT --profile oft --offline
+```
+
+For a custom checkpoint, pass a local profile explicitly:
+
+```bash
+./ovlab deploy run EXPERIMENT --profile openvla \
+  --local-profile configs/local/profile.yaml
+```
+
+The policy always receives `/checkpoints/resolved/<checkpoint-id>`. The host
+path and discovery source are execution provenance; checkpoint ID, repository,
+revision, file identities, and hashes remain scientific identity.
+
+`OVLAB_DATASETS_PATH` is optional. When unset, the CLI derives
+`<OVLAB_RUNS_ROOT>/../datasets/libero`, creates the directory, and mounts it at
+`/datasets:ro`. An explicit override must already exist, preventing a misspelled
+path from being silently created. LIBERO task definitions, assets, and initial
+states remain supplied by the pinned benchmark source; demonstration datasets
+belong only in this host data tree.
+
+The container runtime uses UID/GID `10001:10001`. The host CLI creates a missing
+`runs/` root with mode `2770`, creates the default `datasets/libero/` root when
+absent, and passes the invoking user's primary GID as a
+supplementary container group, so canonical artifacts remain writable by the
+host user without world-writable permissions. `runs/` is writable only in benchmark services.
 Reporting mounts it read-only and writes only below `derived/`. `exports/` is never
 mounted into benchmark or policy containers; promotion into it is an explicit host
 workflow. Host paths and Docker tags are deployment provenance and never enter the
 scientific configuration hash.
 
-## Compose profiles
+## CLI-managed Compose profiles
+
+Normal operation uses the repository launcher. It requires Docker and system
+Python 3, not an activated Conda environment:
+
+```bash
+./ovlab deploy run \
+  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+  --profile openvla \
+  --renderer egl
+```
+
+The CLI passes the selected experiment to both services, performs checkpoint
+resolution and Compose preflight, propagates the benchmark status and reaps the
+project-scoped containers and RPC volume. It checks a versioned deployment
+contract on both selected images before hashing a large checkpoint, so stale
+images fail with an exact rebuild command instead of running old mount semantics.
+After changing packaged source, rebuild the selected topology, for example:
+
+```bash
+bash deploy/scripts/build-images.sh benchmark policy-openvla-oft
+```
+
+The commands below describe the underlying topology and remain useful for
+diagnostics.
 
 The accepted OpenVLA topology is:
 
@@ -183,9 +266,10 @@ benchmark evidence.
 
 ## Troubleshooting and limitations
 
-- A missing checkpoint or dataset is an expected hard failure: verify the read-only
-  host binding and registry identity; runtime networking is disabled and will not
-  repair it by downloading.
+- A missing checkpoint under `--offline` is an expected hard failure. Without
+  `--offline`, inspect host resolver diagnostics, registry revision, network
+  access, and managed-storage permissions. Policy runtime networking remains
+  disabled.
 - For `cuda is not available`, verify the NVIDIA runtime, driver compatibility and
   selected `OVLAB_GPU_DEVICE`.
 - For EGL failures, validate `MUJOCO_EGL_DEVICE_ID`, graphics driver exposure and the

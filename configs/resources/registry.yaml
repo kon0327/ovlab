@@ -4,11 +4,60 @@ kind: resource_registry
 checkpoints:
   openvla-7b:
     repo_id: openvla/openvla-7b
-    expected_revision: null
-    expected_sha256: null
+    revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
+    expected_sha256: "f00cf60094c5df1b7656bec4fe0060830a8fe168d5fabd6626e3964842481f86"
+    files:
+      added_tokens.json:
+        size: 21
+        sha256: "ab43123267b190cb7990bc9f2ae4ad32dcb7ed029fb0fccb1b4e062c6f54a2a1"
+      config.json:
+        size: 60712
+        sha256: "edd5c5cf6d7927e07465cf086ebe41f7b3ec8f3b128a51f71d6db14dad7ad8b1"
+      configuration_prismatic.py:
+        size: 5865
+        sha256: "68cc5ae34f1b46af3168d8d479cb81bb776965653453fd904aa8eefb6c8f9f68"
+      generation_config.json:
+        size: 136
+        sha256: "67fbe17b12e8beb5be98eb911483971cc78589e51a37ac0cce9cd499d06a8bf1"
+      model-00001-of-00003.safetensors:
+        size: 6948961960
+        sha256: "10d8636256018712c5e5c823d12e22b5797f99bb721bd123bf6bf2379892be85"
+      model-00002-of-00003.safetensors:
+        size: 6971232040
+        sha256: "2050b14f21d48904d269f48d5a980fecea87cd7b36641d9b0f015e72d1fe216a"
+      model-00003-of-00003.safetensors:
+        size: 1162406824
+        sha256: "ea65305a1577f36f721965bf84c8caec0a948ce7ce84d754701637376c531fef"
+      model.safetensors.index.json:
+        size: 94764
+        sha256: "b3a4516f74a609422002e265e542c23ddf11e54c2b781e1c0d4e23e5181f3fd0"
+      modeling_prismatic.py:
+        size: 26062
+        sha256: "9ce241c5ca09a4bed73654d0ca509baaff0fc5887d0bdd62e360ca8254f7794a"
+      preprocessor_config.json:
+        size: 1650
+        sha256: "bd024783fb785cbdfe35b710b621c5e8678d4c157a9ba625675e67d40d1757da"
+      processing_prismatic.py:
+        size: 12718
+        sha256: "06563586bbc73d36501a14a231a3174904ede830d33174d0c625ece8e931ef1e"
+      processor_config.json:
+        size: 130
+        sha256: "167e026d8121f6cb0bf5c18310b97ba8139152f970822bb3824213bd37dc7a76"
+      special_tokens_map.json:
+        size: 552
+        sha256: "cb90ee5cf5793aa444039af9795b00db59d3fef8942e7eca9cf1990bab370d61"
+      tokenizer.json:
+        size: 1842976
+        sha256: "8f5e2869e1807b8bb3c7717a294539c37e9de5d728ad60e31ef57e83cc5ea527"
+      tokenizer.model:
+        size: 499723
+        sha256: "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+      tokenizer_config.json:
+        size: 1192
+        sha256: "f5f1d3ed015ebb71cf11686ff00bc8e0c25957bbf3952f95312cecc9b168fbea"
   openvla-7b-finetuned-libero-10:
     repo_id: openvla/openvla-7b-finetuned-libero-10
-    expected_revision: "80970322773f81baa2e22fe495d0487b93a05cfa"
+    revision: "80970322773f81baa2e22fe495d0487b93a05cfa"
     expected_sha256: "33abee128d94d3bf54660b48c233c525f7969608924c58152602acca1b190eed"
     artifact:
       form: merged_full_weights
@@ -70,7 +119,7 @@ checkpoints:
         precision: bfloat16
   openvla-oft-7b-finetuned-libero-10:
     repo_id: moojink/openvla-7b-oft-finetuned-libero-10
-    expected_revision: "95220f9a3421a7ff12d4218e73d09ade830fa9a3"
+    revision: "95220f9a3421a7ff12d4218e73d09ade830fa9a3"
     expected_sha256: "c08526071fc0303069532386493ed95483c466f4cdd07848482e2758e7f33c61"
     artifact:
       form: merged_backbone_with_auxiliary_components

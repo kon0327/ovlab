@@ -1,5 +1,6 @@
 """Exact kind-specific schemas for OVLAB configuration version 0.1.0."""
 
+from pathlib import Path
 from typing import Any
 
 from .errors import ConfigSchemaError
@@ -275,17 +276,44 @@ def validate_registry(doc, path):
         mapping(
             entry,
             entry_path,
-            required=("repo_id", "expected_revision", "expected_sha256"),
-            optional=("artifact", "method"),
+            required=("repo_id", "revision", "expected_sha256"),
+            optional=("files", "artifact", "method"),
         )
         non_empty_string(entry["repo_id"], f"{entry_path}.repo_id")
-        for key in ("expected_revision", "expected_sha256"):
+        for key in ("revision", "expected_sha256"):
             if entry[key] is not None: exact_type(entry[key], str, f"{entry_path}.{key}")
         if ("artifact" in entry) != ("method" in entry):
             raise ConfigSchemaError(f"{entry_path}.artifact and method must be declared together")
+        if "files" in entry:
+            for key in ("revision", "expected_sha256"):
+                non_empty_string(entry[key], f"{entry_path}.{key}")
+            revision = entry["revision"]
+            if len(revision) != 40 or any(
+                character not in "0123456789abcdef" for character in revision
+            ):
+                raise ConfigSchemaError(f"{entry_path}.revision must be a full commit digest")
+            aggregate = entry["expected_sha256"]
+            if len(aggregate) != 64 or any(
+                character not in "0123456789abcdef" for character in aggregate
+            ):
+                raise ConfigSchemaError(f"{entry_path}.expected_sha256 must be a SHA-256 digest")
+            files = entry["files"]
+            exact_type(files, dict, f"{entry_path}.files")
+            if not files:
+                raise ConfigSchemaError(f"{entry_path}.files must not be empty")
+            for name, item in files.items():
+                file_path = f"{entry_path}.files.{name}"
+                non_empty_string(name, f"{file_path}.name")
+                mapping(item, file_path, required=("size", "sha256"))
+                exact_type(item["size"], int, f"{file_path}.size")
+                digest = item["sha256"]
+                if item["size"] <= 0 or not isinstance(digest, str) or len(digest) != 64 or any(
+                    character not in "0123456789abcdef" for character in digest
+                ):
+                    raise ConfigSchemaError(f"{file_path} has invalid identity")
         if "artifact" not in entry:
             continue
-        for key in ("expected_revision", "expected_sha256"):
+        for key in ("revision", "expected_sha256"):
             non_empty_string(entry[key], f"{entry_path}.{key}")
         if len(entry["expected_sha256"]) != 64 or any(
             character not in "0123456789abcdef" for character in entry["expected_sha256"]
@@ -426,12 +454,36 @@ def validate_registry(doc, path):
 
 def validate_local_profile(doc, path):
     header(doc, path, "local_profile", identified=True)
-    mapping(doc, path, required=("schema_version", "kind", "id", "paths", "devices"), optional=("execution",))
+    mapping(
+        doc,
+        path,
+        required=("schema_version", "kind", "id", "paths", "devices"),
+        optional=("execution", "resources"),
+    )
     paths = mapping(doc["paths"], f"{path}.paths", required=("checkpoint_root", "dataset_root", "runs_root"))
     for key, value in paths.items(): exact_type(value, str, f"{path}.paths.{key}")
     if not isinstance(doc["devices"], dict) or not doc["devices"]:
         raise ConfigSchemaError(f"{path}.devices must be a non-empty mapping")
     for key, value in doc["devices"].items(): exact_type(value, str, f"{path}.devices.{key}")
+    if "resources" in doc:
+        resources = mapping(doc["resources"], f"{path}.resources", required=("checkpoints",))
+        checkpoints = resources["checkpoints"]
+        exact_type(checkpoints, dict, f"{path}.resources.checkpoints")
+        for resource_id, entry in checkpoints.items():
+            non_empty_string(resource_id, f"{path}.resources.checkpoints.id")
+            override = mapping(
+                entry,
+                f"{path}.resources.checkpoints.{resource_id}",
+                required=("local_path",),
+            )
+            non_empty_string(
+                override["local_path"],
+                f"{path}.resources.checkpoints.{resource_id}.local_path",
+            )
+            if not Path(override["local_path"]).expanduser().is_absolute():
+                raise ConfigSchemaError(
+                    f"{path}.resources.checkpoints.{resource_id}.local_path must be absolute"
+                )
     if "execution" in doc:
         execution = mapping(doc["execution"], f"{path}.execution", required=("libero",))
         libero = mapping(execution["libero"], f"{path}.execution.libero", required=("renderer",))

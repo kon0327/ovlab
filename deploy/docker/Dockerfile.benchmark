@@ -16,6 +16,7 @@ LABEL org.opencontainers.image.title="OVLAB LIBERO benchmark runner" \
       org.opencontainers.image.description="Isolated LIBERO runner; no OpenVLA model runtime" \
       cz.cvut.ovlab.role="benchmark-libero" \
       cz.cvut.ovlab.build-target="production" \
+      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-v1" \
       cz.cvut.ovlab.python.version="3.10.20" \
       cz.cvut.ovlab.cuda.version="12.1" \
       cz.cvut.ovlab.runtime.components="torch=2.2.0;mujoco=3.9.0;robosuite=1.4.1" \

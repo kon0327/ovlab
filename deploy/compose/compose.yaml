@@ -22,24 +22,33 @@ services:
     <<: *policy-security
     profiles: [openvla]
     image: ${OVLAB_OPENVLA_IMAGE:-ovlab-policy-openvla:local}
-    command: [service, serve, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --socket, /run/ovlab/policy.sock]
+    command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-lora-merged-rpc-smoke.yaml}", --socket, /run/ovlab/policy.sock]
     environment:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: /tmp/ovlab-huggingface
+      HF_HUB_CACHE: /tmp/ovlab-huggingface/hub
+      HF_MODULES_CACHE: /tmp/ovlab-transformers-modules
+      OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID:?checkpoint resolver did not set an ID}
+      OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_SOURCE_KIND: ${OVLAB_CHECKPOINT_SOURCE_KIND:?checkpoint resolver did not set provenance}
+      OVLAB_CHECKPOINT_REPOSITORY: ${OVLAB_CHECKPOINT_REPOSITORY:?checkpoint resolver did not set repository}
+      OVLAB_CHECKPOINT_REVISION: ${OVLAB_CHECKPOINT_REVISION:?checkpoint resolver did not set revision}
+      OVLAB_CHECKPOINT_SHA256: ${OVLAB_CHECKPOINT_SHA256:?checkpoint resolver did not set SHA-256}
       OVLAB_IMAGE_DIGEST: ${OVLAB_OPENVLA_IMAGE_DIGEST:-unavailable}
       OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
       OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla
       OVLAB_OFFLINE_MODE: hf-hub-offline,transformers-offline,network-none
-      OVLAB_MOUNT_CONTRACT: checkpoints-ro,rpc-rw
+      OVLAB_MOUNT_CONTRACT: resolved-checkpoint-ro,rpc-rw
       NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     gpus: all
     volumes:
       - rpc-openvla:/run/ovlab
       - type: bind
-        source: ${OVLAB_CHECKPOINTS_PATH:-../../checkpoints}
-        target: /checkpoints
+        source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?checkpoint resolver did not set a host path}
+        target: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
         read_only: true
     healthcheck: *policy-health
 
@@ -47,7 +56,7 @@ services:
     <<: *policy-security
     profiles: [openvla]
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, configs/experiments/libero10-lora-merged-rpc-smoke.yaml, --output-root, /var/lib/ovlab/runs]
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-lora-merged-rpc-smoke.yaml}", --output-root, /var/lib/ovlab/runs]
     environment:
       MUJOCO_GL: egl
       MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
@@ -57,9 +66,19 @@ services:
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla
       OVLAB_OFFLINE_MODE: network-none
       OVLAB_MOUNT_CONTRACT: datasets-ro,runs-rw,rpc-rw
+      OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_SOURCE_KIND: ${OVLAB_CHECKPOINT_SOURCE_KIND}
+      OVLAB_CHECKPOINT_HOST_PATH: ${OVLAB_RESOLVED_CHECKPOINT_PATH}
+      OVLAB_CHECKPOINT_REPOSITORY: ${OVLAB_CHECKPOINT_REPOSITORY}
+      OVLAB_CHECKPOINT_REVISION: ${OVLAB_CHECKPOINT_REVISION}
+      OVLAB_CHECKPOINT_SHA256: ${OVLAB_CHECKPOINT_SHA256}
       NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
       NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility
     gpus: all
+    group_add:
+      - ${OVLAB_HOST_ARTIFACT_GID:-1000}
     depends_on:
       policy-openvla:
         condition: service_healthy
@@ -67,7 +86,7 @@ services:
     volumes:
       - rpc-openvla:/run/ovlab
       - type: bind
-        source: ${OVLAB_DATASETS_PATH:-../../datasets}
+        source: ${OVLAB_DATASETS_PATH:?dataset resolver did not set a host path}
         target: /datasets
         read_only: true
       - type: bind
@@ -78,24 +97,34 @@ services:
     <<: *policy-security
     profiles: [oft]
     image: ${OVLAB_OFT_IMAGE:-ovlab-policy-openvla-oft:local}
-    command: [service, serve, configs/experiments/libero10-openvla-oft-rpc-smoke.yaml, --socket, /run/ovlab/policy.sock]
+    command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-openvla-oft-rpc-smoke.yaml}", --socket, /run/ovlab/policy.sock]
     environment:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: /tmp/ovlab-huggingface
+      HF_HUB_CACHE: /tmp/ovlab-huggingface/hub
+      HF_MODULES_CACHE: /tmp/ovlab-transformers-modules
+      OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID:?checkpoint resolver did not set an ID}
+      OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_SOURCE_KIND: ${OVLAB_CHECKPOINT_SOURCE_KIND:?checkpoint resolver did not set provenance}
+      OVLAB_CHECKPOINT_REPOSITORY: ${OVLAB_CHECKPOINT_REPOSITORY:?checkpoint resolver did not set repository}
+      OVLAB_CHECKPOINT_REVISION: ${OVLAB_CHECKPOINT_REVISION:?checkpoint resolver did not set revision}
+      OVLAB_CHECKPOINT_SHA256: ${OVLAB_CHECKPOINT_SHA256:?checkpoint resolver did not set SHA-256}
+      TF_CPP_MIN_LOG_LEVEL: "3"
       OVLAB_IMAGE_DIGEST: ${OVLAB_OFT_IMAGE_DIGEST:-unavailable}
       OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
       OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-oft
       OVLAB_OFFLINE_MODE: hf-hub-offline,transformers-offline,network-none
-      OVLAB_MOUNT_CONTRACT: checkpoints-ro,rpc-rw
+      OVLAB_MOUNT_CONTRACT: resolved-checkpoint-ro,rpc-rw
       NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     gpus: all
     volumes:
       - rpc-oft:/run/ovlab
       - type: bind
-        source: ${OVLAB_CHECKPOINTS_PATH:-../../checkpoints}
-        target: /checkpoints
+        source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?checkpoint resolver did not set a host path}
+        target: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
         read_only: true
     healthcheck: *policy-health
 
@@ -103,7 +132,7 @@ services:
     <<: *policy-security
     profiles: [oft]
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, configs/experiments/libero10-openvla-oft-rpc-smoke.yaml, --output-root, /var/lib/ovlab/runs]
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-openvla-oft-rpc-smoke.yaml}", --output-root, /var/lib/ovlab/runs]
     environment:
       MUJOCO_GL: egl
       MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
@@ -113,9 +142,19 @@ services:
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-oft
       OVLAB_OFFLINE_MODE: network-none
       OVLAB_MOUNT_CONTRACT: datasets-ro,runs-rw,rpc-rw
+      OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_SOURCE_KIND: ${OVLAB_CHECKPOINT_SOURCE_KIND}
+      OVLAB_CHECKPOINT_HOST_PATH: ${OVLAB_RESOLVED_CHECKPOINT_PATH}
+      OVLAB_CHECKPOINT_REPOSITORY: ${OVLAB_CHECKPOINT_REPOSITORY}
+      OVLAB_CHECKPOINT_REVISION: ${OVLAB_CHECKPOINT_REVISION}
+      OVLAB_CHECKPOINT_SHA256: ${OVLAB_CHECKPOINT_SHA256}
       NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
       NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility
     gpus: all
+    group_add:
+      - ${OVLAB_HOST_ARTIFACT_GID:-1000}
     depends_on:
       policy-openvla-oft:
         condition: service_healthy
@@ -123,7 +162,7 @@ services:
     volumes:
       - rpc-oft:/run/ovlab
       - type: bind
-        source: ${OVLAB_DATASETS_PATH:-../../datasets}
+        source: ${OVLAB_DATASETS_PATH:?dataset resolver did not set a host path}
         target: /datasets
         read_only: true
       - type: bind
@@ -142,6 +181,8 @@ services:
       - /var/lib/ovlab/derived/${OVLAB_REPORT_OUTPUT_NAME:-report-output}
     environment:
       OVLAB_MOUNT_CONTRACT: runs-ro,derived-rw
+    group_add:
+      - ${OVLAB_HOST_ARTIFACT_GID:-1000}
     volumes:
       - type: bind
         source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}
