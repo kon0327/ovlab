@@ -1,0 +1,26 @@
+# Interactive playground overlay. This requires an existing X11 display server
+# such as WSLg; it is not a headless benchmark configuration.
+services:
+  benchmark-openvla:
+    environment:
+      OVLAB_EXECUTION_PROFILE: profiles/libero-playground-glfw.yaml
+      MUJOCO_GL: glfw
+      MUJOCO_EGL_DEVICE_ID: !reset null
+      DISPLAY: ${OVLAB_DISPLAY:-:0}
+    volumes:
+      - type: bind
+        source: ${OVLAB_X11_SOCKET:-/tmp/.X11-unix}
+        target: /tmp/.X11-unix
+        read_only: true
+
+  benchmark-oft:
+    environment:
+      OVLAB_EXECUTION_PROFILE: profiles/libero-playground-glfw.yaml
+      MUJOCO_GL: glfw
+      MUJOCO_EGL_DEVICE_ID: !reset null
+      DISPLAY: ${OVLAB_DISPLAY:-:0}
+    volumes:
+      - type: bind
+        source: ${OVLAB_X11_SOCKET:-/tmp/.X11-unix}
+        target: /tmp/.X11-unix
+        read_only: true

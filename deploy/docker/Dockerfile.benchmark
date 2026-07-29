@@ -42,10 +42,10 @@ ENV OVLAB_ROOT=/opt/ovlab \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/opt/ovlab/external/libero \
+    LIBERO_CONFIG_PATH=/etc/ovlab/libero \
     NUMBA_CACHE_DIR=/tmp/ovlab-numba-cache \
-    LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
-    MUJOCO_GL=egl \
-    MUJOCO_EGL_DEVICE_ID=0
+    MPLCONFIGDIR=/tmp/ovlab-matplotlib \
+    LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libegl1=1.4.0-1 libgl1=1.4.0-1 libglvnd0=1.4.0-1 \
@@ -62,6 +62,8 @@ RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
 COPY code /opt/ovlab/code
 COPY configs /opt/ovlab/configs
 COPY deploy/config /opt/ovlab/deploy/config
+RUN install -d -o root -g root -m 0755 /etc/ovlab/libero
+COPY --chmod=0444 deploy/config/libero/config.yaml /etc/ovlab/libero/config.yaml
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 COPY external/libero /opt/ovlab/external/libero
 RUN --mount=type=secret,id=ovlab_source_manifest \

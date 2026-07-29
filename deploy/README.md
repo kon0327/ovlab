@@ -65,6 +65,12 @@ policy receives only `/checkpoints:ro` and the shared socket volume. The
 benchmark receives `/datasets:ro`, the socket volume and `/runs` as its only
 persistent writable mount. Configuration is baked into each image.
 
+The benchmark image also contains a portable LIBERO path map at
+`/etc/ovlab/libero/config.yaml`. It points bundled BDDL, initial-state and asset
+paths into the pinned LIBERO source and maps demonstrations to `/datasets`.
+`LIBERO_CONFIG_PATH=/etc/ovlab/libero` prevents upstream LIBERO from trying to
+create an interactive configuration below the non-root user's read-only home.
+
 Override the portable repository-relative asset locations when necessary:
 
 ```bash
@@ -96,6 +102,24 @@ GPU access uses Compose `gpus: all` plus `NVIDIA_VISIBLE_DEVICES`; set a concret
 device in reproducible deployments. The benchmark forces EGL. GLFW remains an
 interactive, dependency-light-tested playground path and is not required by
 headless deployment.
+
+For an interactive WSLg/X11 playground, layer the GLFW overlay on the primary
+project:
+
+```bash
+docker compose \
+  --file deploy/compose/compose.yaml \
+  --file deploy/compose/compose.glfw.yaml \
+  --profile openvla up --abort-on-container-exit \
+  --exit-code-from benchmark-openvla
+```
+
+The overlay selects `profiles/libero-playground-glfw.yaml`, explicitly forces
+`MUJOCO_GL=glfw`, removes `MUJOCO_EGL_DEVICE_ID`, and mounts only the X11 Unix
+socket read-only. Set `OVLAB_DISPLAY` and `OVLAB_X11_SOCKET` when their host
+values differ. GLFW still requires a live X11/Wayland display server; hiding a
+window does not make it a headless backend. Use EGL for automated or unattended
+execution. The production image intentionally does not bundle Xvfb.
 
 The containers preserve the Gate G workflow through the same public entrypoint:
 use `ovlab config validate ...` or `ovlab config resolve ...`, start the selected

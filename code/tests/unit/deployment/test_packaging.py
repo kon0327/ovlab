@@ -14,6 +14,7 @@ from ovlab_benchctl.versioning import repository_revision
 ROOT = Path(__file__).resolve().parents[4]
 DOCKER = ROOT / "deploy/docker"
 COMPOSE = (ROOT / "deploy/compose/compose.yaml").read_text(encoding="utf-8")
+GLFW_COMPOSE = (ROOT / "deploy/compose/compose.glfw.yaml").read_text(encoding="utf-8")
 
 
 def _dockerfile(name: str) -> str:
@@ -121,6 +122,30 @@ def test_pinned_base_networkx_overlay_and_numba_cache_are_normalized():
         )).read_text(encoding="utf-8")
     assert "NUMBA_CACHE_DIR=/tmp/ovlab-numba-cache" in _dockerfile("Dockerfile.benchmark")
     assert "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6" in _dockerfile("Dockerfile.benchmark")
+
+
+def test_benchmark_renderer_is_selected_at_runtime_and_libero_paths_are_portable():
+    benchmark = _dockerfile("Dockerfile.benchmark")
+    assert "MUJOCO_GL=egl" not in benchmark
+    assert "MUJOCO_EGL_DEVICE_ID=0" not in benchmark
+    assert "LIBERO_CONFIG_PATH=/etc/ovlab/libero" in benchmark
+    assert "MPLCONFIGDIR=/tmp/ovlab-matplotlib" in benchmark
+    assert "install -d -o root -g root -m 0755 /etc/ovlab/libero" in benchmark
+    assert "deploy/config/libero/config.yaml /etc/ovlab/libero/config.yaml" in benchmark
+
+    config = (ROOT / "deploy/config/libero/config.yaml").read_text(encoding="utf-8")
+    assert "datasets: /datasets" in config
+    assert "/opt/ovlab/external/libero/libero/libero" in config
+    assert "/home/" not in config
+
+
+def test_glfw_overlay_requires_a_display_and_removes_egl_device_configuration():
+    assert GLFW_COMPOSE.count("OVLAB_EXECUTION_PROFILE: profiles/libero-playground-glfw.yaml") == 2
+    assert GLFW_COMPOSE.count("MUJOCO_GL: glfw") == 2
+    assert GLFW_COMPOSE.count("MUJOCO_EGL_DEVICE_ID: !reset null") == 2
+    assert GLFW_COMPOSE.count("target: /tmp/.X11-unix") == 2
+    assert "privileged:" not in GLFW_COMPOSE
+    assert "ports:" not in GLFW_COMPOSE
 
 
 def test_source_manifest_is_deterministic_and_records_dirty_state():

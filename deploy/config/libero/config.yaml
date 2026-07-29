@@ -1,0 +1,5 @@
+assets: /opt/ovlab/external/libero/libero/libero/assets
+bddl_files: /opt/ovlab/external/libero/libero/libero/bddl_files
+benchmark_root: /opt/ovlab/external/libero/libero/libero
+datasets: /datasets
+init_states: /opt/ovlab/external/libero/libero/libero/init_files
