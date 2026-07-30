@@ -84,6 +84,7 @@ runs/<run-key>/
 │   ├── arrays/*.npy
 │   ├── trace.finalized.json
 │   ├── finalized.json
+│   ├── metadata.json
 │   └── metrics.episode.json
 ├── tasks/<task-key>/metrics.task.json
 └── manifest.completed.json | manifest.failed.json
@@ -95,6 +96,15 @@ dtype/shape declarations, and SHA-256 checksums. Reads reject missing, modified,
 or path-traversing arrays. Writes use temporary sibling files and atomic rename;
 started manifests, traces, results, and final manifests are never overwritten.
 Partial directories remain distinguishable and no cleanup is automatic.
+
+`metadata.json` is a compact, human-readable episode index generated after
+episode metrics. It summarizes experiment and benchmark identity, scenario and
+available environment details, the authoritative mission, model configuration,
+checkpoint identity, UTC timestamps, terminal result, IDs, seeds, hashes, and
+relative artifact links. It is deliberately derived from the immutable trace,
+plan, started manifest, and metric results; those files remain the canonical
+sources of truth. Unknown environment fields such as object inventories are
+stored as unavailable rather than inferred.
 
 `ExperimentRunner` accepts an optional immutable `RunConfigurationSnapshot`.
 The filesystem and in-memory stores persist it before the plan and connection

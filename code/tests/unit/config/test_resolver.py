@@ -62,6 +62,7 @@ def test_every_versioned_component_is_schema_valid():
         "benchmarks/mock/base.yaml": "benchmark",
         "benchmarks/libero/spatial-smoke.yaml": "benchmark",
         "benchmarks/libero/libero10-smoke.yaml": "benchmark",
+        "benchmarks/libero/libero10-oft-five-tasks.yaml": "benchmark",
         "policies/mock/base.yaml": "policy",
         "policies/mock/libero-noop.yaml": "policy",
         "policies/openvla-vanilla/base.yaml": "policy",
@@ -71,6 +72,7 @@ def test_every_versioned_component_is_schema_valid():
         "metrics/action-safe-v1.yaml": "metric_set",
         "protocols/libero-standard-v1.yaml": "protocol",
         "protocols/libero-smoke-v1.yaml": "protocol",
+        "protocols/libero-oft-episode-v1.yaml": "protocol",
         "protocols/smoke-v1.yaml": "protocol",
         "profiles/libero-bench-egl.yaml": "execution_profile",
         "profiles/libero-playground-glfw.yaml": "execution_profile",
@@ -82,6 +84,8 @@ def test_every_versioned_component_is_schema_valid():
         "experiments/libero-vanilla-smoke.yaml": "experiment",
         "experiments/libero10-vanilla-rpc-smoke.yaml": "experiment",
         "experiments/libero10-lora-merged-rpc-smoke.yaml": "experiment",
+        "experiments/libero10-openvla-oft-rpc-episode.yaml": "experiment",
+        "experiments/libero10-openvla-oft-rpc-five-episodes.yaml": "experiment",
     }
     for reference, kind in components.items():
         document = resolver().load_component(reference, kind)
@@ -97,6 +101,35 @@ def test_every_libero_protocol_records_all_episode_video_frames_by_default():
         )
         assert document["recording"]["observations"] is True, protocol.name
         assert document["recording"]["images"] is True, protocol.name
+
+
+def test_oft_full_episode_keeps_one_rollout_and_the_native_chunk_protocol(tmp_path):
+    resolved = resolver().resolve(
+        "configs/experiments/libero10-openvla-oft-rpc-episode.yaml",
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-bench-egl.yaml",
+        environment={},
+    )
+    assert resolved.benchmark_settings.suite_names == ("LIBERO-10",)
+    assert resolved.benchmark_settings.task_indices == (0,)
+    assert resolved.protocol_settings.rollouts_per_task == 1
+    assert resolved.protocol_settings.maximum_episode_steps == 520
+    assert resolved.protocol_settings.action_execution_policy.mode.value == "open_loop_chunk"
+    assert resolved.protocol_settings.trace_recording_policy.record_image_arrays is True
+
+
+def test_oft_five_episode_experiment_selects_five_distinct_tasks(tmp_path):
+    resolved = resolver().resolve(
+        "configs/experiments/libero10-openvla-oft-rpc-five-episodes.yaml",
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-bench-egl.yaml",
+        environment={},
+    )
+    assert resolved.benchmark_settings.suite_names == ("LIBERO-10",)
+    assert resolved.benchmark_settings.task_indices == (0, 1, 2, 3, 4)
+    assert resolved.protocol_settings.rollouts_per_task == 1
+    assert resolved.protocol_settings.maximum_episode_steps == 520
+    assert resolved.protocol_settings.action_execution_policy.mode.value == "open_loop_chunk"
 
 
 def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):

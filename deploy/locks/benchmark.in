@@ -5,6 +5,7 @@ robosuite==1.4.1
 bddl==3.6.0
 gym==0.26.2
 opencv-python==4.10.0.84
+imageio-ffmpeg==0.6.0
 easydict==1.13
 cloudpickle==3.1.2
 future==1.0.0

@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
 
 import numpy as np
 
@@ -14,7 +15,7 @@ from .errors import ArtifactError
 
 
 REPORT_SCHEMA_VERSION = "ovlab-report/1.0.0"
-VIDEO_SCHEMA_VERSION = "ovlab-video/1.0.0"
+VIDEO_SCHEMA_VERSION = "ovlab-video/1.1.0"
 INTEGRITY_SCHEMA_VERSION = "ovlab-integrity/1.0.0"
 
 
@@ -40,6 +41,96 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _h264_command(
+    executable: str,
+    target: Path,
+    *,
+    width: int,
+    height: int,
+    fps: float,
+) -> tuple[str, ...]:
+    """Return the fixed web-compatible video encoding command."""
+
+    return (
+        executable,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
+        "-f", "rawvideo",
+        "-pixel_format", "rgb24",
+        "-video_size", f"{width}x{height}",
+        "-framerate", str(fps),
+        "-i", "pipe:0",
+        "-an",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-tag:v", "avc1",
+        "-movflags", "+faststart",
+        "-f", "mp4",
+        str(target),
+    )
+
+
+def _encode_h264(
+    executable: str,
+    target: Path,
+    frames: list[np.ndarray],
+    *,
+    fps: float,
+) -> None:
+    """Encode RGB frames atomically with the canonical H.264 settings."""
+
+    height, width, _ = frames[0].shape
+    if width % 2 or height % 2:
+        raise ArtifactError("H.264 yuv420p video requires even frame dimensions")
+    temporary = target.with_name(f"{target.stem}.tmp{target.suffix}")
+    if temporary.exists():
+        raise ArtifactError("temporary video artifact already exists")
+    command = _h264_command(
+        executable, temporary, width=width, height=height, fps=fps,
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        if process.stdin is None:
+            raise ArtifactError("H.264 encoder did not expose its input stream")
+        for frame in frames:
+            process.stdin.write(np.ascontiguousarray(frame).tobytes())
+        process.stdin.close()
+        return_code = process.wait()
+        stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+        if return_code != 0:
+            detail = stderr.strip() or f"exit status {return_code}"
+            raise ArtifactError(f"H.264 encoder failed: {detail}")
+        if not temporary.is_file() or temporary.stat().st_size == 0:
+            raise ArtifactError("H.264 encoder produced an empty artifact")
+        temporary.replace(target)
+    except Exception:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        temporary.unlink(missing_ok=True)
+        raise
+    finally:
+        if process.stdin is not None and not process.stdin.closed:
+            process.stdin.close()
+        if process.stderr is not None:
+            process.stderr.close()
+
+
+def _faststart_enabled(path: Path) -> bool:
+    content = path.read_bytes()
+    moov = content.find(b"moov")
+    mdat = content.find(b"mdat")
+    return moov >= 0 and mdat >= 0 and moov < mdat
 
 
 def _episode_video(episode: Path, trace) -> dict[str, object]:
@@ -73,8 +164,9 @@ def _episode_video(episode: Path, trace) -> dict[str, object]:
         raise ArtifactError("video source frames must have one consistent shape and dtype")
     try:
         import cv2
+        import imageio_ffmpeg
     except ImportError:
-        return {**base, "status": "unavailable", "reason": "OpenCV video runtime is unavailable"}
+        return {**base, "status": "unavailable", "reason": "H.264 video runtime is unavailable"}
 
     height, width, _ = first.shape
     frequencies = {
@@ -86,18 +178,14 @@ def _episode_video(episode: Path, trace) -> dict[str, object]:
     target = episode / "video.mp4"
     if target.exists():
         raise ArtifactError("finalized video artifact already exists")
-    writer = cv2.VideoWriter(
-        str(target), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height), True,
-    )
-    if not writer.isOpened():
-        raise ArtifactError("OpenCV could not open the MP4 video encoder")
     try:
-        for frame in frames:
-            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    finally:
-        writer.release()
-    if not target.is_file() or target.stat().st_size == 0:
-        raise ArtifactError("video encoder produced an empty artifact")
+        executable = imageio_ffmpeg.get_ffmpeg_exe()
+    except RuntimeError as exc:
+        raise ArtifactError("bundled H.264 encoder is unavailable") from exc
+    _encode_h264(executable, target, frames, fps=fps)
+    if not _faststart_enabled(target):
+        target.unlink(missing_ok=True)
+        raise ArtifactError("H.264 encoder did not produce a faststart MP4")
 
     # Decode through a new reader instance after the writer has been closed.
     reader = cv2.VideoCapture(str(target))
@@ -120,8 +208,13 @@ def _episode_video(episode: Path, trace) -> dict[str, object]:
         **base,
         "status": "available",
         "path": "video.mp4",
-        "codec": "mp4v",
-        "pixel_format": "RGB source; decoder-native BGR verification",
+        "container": "mp4",
+        "codec": "h264",
+        "codec_tag": "avc1",
+        "encoder": "libx264",
+        "pixel_format": "yuv420p",
+        "source_pixel_format": "rgb24",
+        "faststart": True,
         "width": width,
         "height": height,
         "fps": fps,
@@ -220,6 +313,7 @@ def build_run_report(run_path: str | Path, *, final_manifest=None) -> dict[str, 
             "connection": "connection.json",
             "plan": "plan.json",
             "traces": "tasks/*/episodes/*/trace.json",
+            "episode_metadata": "tasks/*/episodes/*/metadata.json",
             "episode_metrics": "tasks/*/episodes/*/metrics.episode.json",
             "task_metrics": "tasks/*/metrics.task.json",
         },

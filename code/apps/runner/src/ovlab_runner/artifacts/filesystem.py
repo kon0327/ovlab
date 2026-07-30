@@ -1,6 +1,7 @@
 """Atomic local filesystem artifact store."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 
@@ -54,8 +55,150 @@ class FilesystemRunArtifactStore(RunArtifactStore):
     def write_episode_metric_results(self, run_id, task_id, episode_id, results):
         path = self._episode_path(run_id, task_id, episode_id)
         if not (path / "trace.finalized.json").is_file(): raise ArtifactError("raw trace must be finalized before metrics")
+        results = tuple(results)
         self._atomic_json(path / "metrics.episode.json", [_metric(result) for result in results])
+        trace = self.codec.decode(path)
+        self._atomic_json(
+            path / "metadata.json",
+            self._episode_metadata(run_id, trace, results),
+        )
         self._atomic_json(path / "finalized.json", {"episode_finalized": True})
+
+    def _episode_metadata(self, run_id, trace, results):
+        run_path = self._run_path(run_id)
+        started = _read_json(run_path / "manifest.started.json")
+        plan = _read_json(run_path / "plan.json")
+        context = trace.episode_context
+        context_metadata = dict(context.metadata)
+        environment = dict(context_metadata.get("environment", {}))
+        reset = dict(trace.metadata.get("benchmark_reset", {}))
+        plan_metadata = dict(plan.get("metadata", {}))
+        deployment = dict(started.get("metadata", {}).get("deployment", {}))
+        method = _method_descriptor(started)
+        policy_configuration = dict(plan_metadata.get("policy_configuration", {}))
+        success_metric = next(
+            (result for result in results if result.metric_id == "task.success"),
+            None,
+        )
+        success = trace.terminal_status.value == "success"
+        metric_status = None if success_metric is None else success_metric.status.value
+        objects = environment.get("objects", environment.get("object_names"))
+        started_ns = trace.metadata.get("episode_started_wall_time_utc_ns")
+        ended_ns = trace.metadata.get("episode_ended_wall_time_utc_ns")
+        run_created_ns = plan.get("run_context", {}).get("created_wall_time_utc_ns")
+        checkpoint_identity = dict(method.get("checkpoint_identity", {}))
+        checkpoint = {
+            "checkpoint_id": deployment.get(
+                "checkpoint_id", policy_configuration.get("checkpoint_id")
+            ),
+            "repository": deployment.get(
+                "checkpoint_repository", checkpoint_identity.get("repository")
+            ),
+            "revision": deployment.get(
+                "checkpoint_revision", checkpoint_identity.get("revision")
+            ),
+            "sha256": deployment.get(
+                "checkpoint_sha256", checkpoint_identity.get("aggregate_sha256")
+            ),
+            "normalization_key": policy_configuration.get("unnorm_key"),
+        }
+        return {
+            "schema_version": "ovlab-episode-metadata/1.0.0",
+            "identity": {
+                "run_id": str(context.run_id),
+                "task_id": str(context.task_id),
+                "episode_id": str(context.episode_id),
+                "rollout_index": context.rollout_index,
+                "episode_seed": context.seed,
+                "plan_hash": plan.get("metadata", {}).get("plan_hash", started.get("plan_hash")),
+                "scientific_config_hash": started.get("scientific_config_hash"),
+                "execution_config_hash": started.get("execution_config_hash"),
+            },
+            "experiment": {
+                "id": plan_metadata.get(
+                    "experiment_id", plan.get("run_context", {}).get("experiment_name")
+                ),
+                "name": plan_metadata.get(
+                    "experiment_name", plan.get("run_context", {}).get("experiment_name")
+                ),
+                "tags": plan_metadata.get("experiment_tags", []),
+            },
+            "benchmark": {
+                "name": _benchmark_family(context_metadata, started),
+                "component": started.get("benchmark", {}).get("name"),
+                "version": started.get("benchmark", {}).get("version"),
+            },
+            "scenario": {
+                "suite": context_metadata.get("suite_name"),
+                "task_name": context_metadata.get("task_name"),
+                "task_index": context_metadata.get("task_index"),
+                "task_id": str(context.task_id),
+                "initial_state_index": reset.get("initial_state_index"),
+            },
+            "environment_description": {
+                "availability": "available" if objects is not None else "partial",
+                "objects": objects,
+                "native_task_reference": environment.get(
+                    "native_task_reference", reset.get("native_task_reference")
+                ),
+                "available_initial_state_count": environment.get(
+                    "available_initial_state_count"
+                ),
+                "details": environment,
+            },
+            "mission": {
+                "initial_instruction": context.initial_instruction.text,
+                "instruction_id": str(context.initial_instruction.instruction_id),
+                "source": context.initial_instruction.source.value,
+            },
+            "model": {
+                "name": started.get("policy", {}).get("name"),
+                "version": started.get("policy", {}).get("version"),
+                "method": _method_summary(method),
+                "configuration": policy_configuration,
+            },
+            "checkpoint": checkpoint,
+            "execution": {
+                "action_execution_mode": plan.get("action_execution_policy", {}).get("mode"),
+                "maximum_episode_steps": trace.metadata.get("task_maximum_steps"),
+                "renderer": (
+                    started.get("runtime", {}).get("benchmark", {}).get("libero_renderer")
+                ),
+            },
+            "datetime": {
+                "run_created_utc": _iso_utc(run_created_ns),
+                "episode_started_utc": _iso_utc(started_ns),
+                "episode_ended_utc": _iso_utc(ended_ns),
+            },
+            "result": {
+                "status": "OK" if success else "NOK",
+                "success": success,
+                "success_rate": 1.0 if success else 0.0,
+                "success_metric_status": metric_status,
+                "terminal_status": trace.terminal_status.value,
+                "executed_step_count": len(trace.executed_actions),
+                "prediction_count": len(trace.policy_predictions),
+                "failure_type": trace.metadata.get("failure_type"),
+                "failure_message": trace.metadata.get("failure_message"),
+                "duration_ns": (
+                    None if trace.end_timestamp_ns is None
+                    else trace.end_timestamp_ns - trace.start_timestamp_ns
+                ),
+            },
+            "artifacts": {
+                "trace": "trace.json",
+                "episode_metrics": "metrics.episode.json",
+                "video": "video.mp4",
+                "video_metadata": "video.json",
+                "run_integrity": "../../../../integrity.json",
+            },
+            "source_of_truth": {
+                "trace": "trace.json",
+                "metrics": "metrics.episode.json",
+                "configuration": "../../../../resolved_config.yaml",
+                "note": "metadata.json is a derived human-readable episode index",
+            },
+        }
 
     def write_task_metric_results(self, run_id, task_id, results):
         path = self._task_path(run_id, task_id)
@@ -123,6 +266,58 @@ def _metric(result):
 
 def _decode_metric(value):
     return MetricResult(value["metric_id"], value["metric_version"], MetricScope(value["scope"]), MetricStatus(value["status"]), value["value"], value["unit"], value["sample_count"], RunId(value["run_id"]), TaskId(value["task_id"]), None if value["episode_id"] is None else EpisodeId(value["episode_id"]), value["reason"], value["diagnostics"], value["metric_config"], value["metric_config_hash"], value["metadata"])
+
+
+def _read_json(path):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArtifactError(f"cannot read episode metadata source: {path.name}") from exc
+    if not isinstance(value, dict):
+        raise ArtifactError(f"episode metadata source must be an object: {path.name}")
+    return value
+
+
+def _method_descriptor(started):
+    policy_runtime = started.get("runtime", {}).get("policy", {})
+    remote = policy_runtime.get("remote_policy", {})
+    descriptor = remote.get("method_descriptor", policy_runtime.get("method_descriptor", {}))
+    return dict(descriptor) if isinstance(descriptor, dict) else {}
+
+
+def _method_summary(method):
+    keys = (
+        "family", "id", "method_name", "version", "artifact_form",
+        "backbone_adaptation", "backbone_merge_status", "quantization",
+        "action_chunk_size", "action_dimension", "normalization", "objective",
+        "parameter_counts", "training_step",
+    )
+    summary = {key: method[key] for key in keys if key in method}
+    lora = method.get("lora")
+    if isinstance(lora, dict):
+        lora_keys = (
+            "peft_type", "rank", "alpha", "scaling", "dropout", "bias",
+            "target_modules", "modules_to_save", "trainable_parameter_count",
+        )
+        summary["lora"] = {key: lora[key] for key in lora_keys if key in lora}
+    return summary
+
+
+def _benchmark_family(context_metadata, started):
+    suite = context_metadata.get("suite_name")
+    if isinstance(suite, str) and suite.upper().startswith("LIBERO"):
+        return "LIBERO"
+    return started.get("benchmark", {}).get("name")
+
+
+def _iso_utc(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    seconds, nanoseconds = divmod(value, 1_000_000_000)
+    result = datetime.fromtimestamp(seconds, timezone.utc).replace(
+        microsecond=nanoseconds // 1_000
+    )
+    return result.isoformat().replace("+00:00", "Z")
 
 
 def _connection(report):

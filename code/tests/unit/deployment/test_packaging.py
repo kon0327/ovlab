@@ -117,6 +117,7 @@ def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
         assert "--hash=sha256:" in requirements
     assert "rich==15.0.0" in (locks / "openvla.requirements.txt").read_text(encoding="utf-8")
     assert "rich==15.0.0" in (locks / "openvla-oft.requirements.txt").read_text(encoding="utf-8")
+    assert "imageio-ffmpeg==0.6.0" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
     oft = (locks / "openvla-oft.pylock.toml").read_text(encoding="utf-8")
     assert oft.count('commit-id = "bc339d9ad707454c0c115970db43c260067c61ab"') == 1
     assert oft.count('commit-id = "040105d256bd28866cc6620621a3d5f7b6b91b46"') == 1

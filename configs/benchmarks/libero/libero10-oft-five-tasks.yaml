@@ -1,0 +1,9 @@
+schema_version: "0.1.0"
+kind: benchmark
+type: libero
+extends: libero10-oft-smoke.yaml
+
+settings:
+  # Five distinct LIBERO-10 task scenarios. With one rollout per task this
+  # produces exactly five episodes.
+  task_indices: [0, 1, 2, 3, 4]

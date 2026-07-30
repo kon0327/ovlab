@@ -22,13 +22,30 @@ def make_episode_context(plan, task, task_order_index, rollout_index, clock):
     instruction = Instruction(
         InstructionId(f"instruction-{digest}"), task.natural_language_instruction, timestamp, InstructionSource.BENCHMARK
     )
-    return EpisodeContext(plan.run_context.run_id, task.task_id, episode_id, rollout_index, seed, instruction)
+    return EpisodeContext(
+        plan.run_context.run_id,
+        task.task_id,
+        episode_id,
+        rollout_index,
+        seed,
+        instruction,
+        {
+            "suite_name": task.suite_name,
+            "task_name": task.task_name,
+            "task_index": task.task_index,
+            "environment": dict(task.metadata),
+        },
+    )
 
 
 def execute_episode(plan, task, task_order_index, rollout_index, benchmark, policy, clock):
     context = make_episode_context(plan, task, task_order_index, rollout_index, clock)
     recorder = EpisodeRecorder(plan.trace_recording_policy, clock)
-    recorder.start(context, {"task_maximum_steps": task.maximum_steps, "plan_hash": plan.hash})
+    recorder.start(context, {
+        "task_maximum_steps": task.maximum_steps,
+        "plan_hash": plan.hash,
+        "episode_started_wall_time_utc_ns": clock.wall_time_utc_ns(),
+    })
     policy_active = False
     failure_domain = "runner"
     try:
@@ -37,6 +54,7 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
         policy_active = True
         failure_domain = "benchmark"
         reset = benchmark.reset_episode(context)
+        recorder.record_metadata({"benchmark_reset": dict(reset.metadata)})
         observation = reset.initial_observation
         recorder.record_observation(observation, 0)
         recorder.record_signals(reset.evaluation_signals)
@@ -108,7 +126,7 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
                 terminal = _terminal_status(result)
                 policy.end_episode(context)
                 policy_active = False
-                return recorder.finalize(terminal, {"executed_step_count": step_index}), None
+                return _finalize(recorder, terminal, {"executed_step_count": step_index}, clock), None
             if step_index >= maximum_steps:
                 raise ExperimentExecutionError("benchmark did not terminate or truncate at its declared task maximum")
             observation = result.next_observation
@@ -120,13 +138,25 @@ def execute_episode(plan, task, task_order_index, rollout_index, benchmark, poli
         if policy_active:
             _safe_end(policy, context)
         _safe_abort(benchmark)
-        return recorder.finalize(EpisodeTerminalStatus.ABORTED, {"failure_type": "KeyboardInterrupt"}), KeyboardInterrupt()
+        return _finalize(
+            recorder, EpisodeTerminalStatus.ABORTED,
+            {"failure_type": "KeyboardInterrupt"}, clock,
+        ), KeyboardInterrupt()
     except Exception as exc:
         if policy_active:
             _safe_end(policy, context)
         _safe_abort(benchmark)
         status = EpisodeTerminalStatus.POLICY_ERROR if failure_domain in ("policy", "runner") else EpisodeTerminalStatus.BENCHMARK_ERROR
-        return recorder.finalize(status, {"failure_type": type(exc).__name__, "failure_message": str(exc)[:240]}), exc
+        return _finalize(
+            recorder, status,
+            {"failure_type": type(exc).__name__, "failure_message": str(exc)[:240]}, clock,
+        ), exc
+
+
+def _finalize(recorder, status, metadata, clock):
+    details = dict(metadata)
+    details["episode_ended_wall_time_utc_ns"] = clock.wall_time_utc_ns()
+    return recorder.finalize(status, details)
 
 
 def pending_step_instruction(prediction, recorder):

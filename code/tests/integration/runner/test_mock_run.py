@@ -136,7 +136,21 @@ def test_mock_run_persists_trace_before_metrics_and_recomputes_identically() -> 
 def test_filesystem_run_round_trip_includes_trace_metrics_and_final_manifest(tmp_path) -> None:
     store = FilesystemRunArtifactStore(tmp_path)
     benchmark, policy = TrackingBenchmark(maximum_steps=3), TrackingPolicy()
-    runner = ExperimentRunner(runner_plan(), benchmark, policy, store, clock=DeterministicClock())
+    runner = ExperimentRunner(
+        runner_plan(metadata={
+            "experiment_id": "mock-episode-metadata",
+            "experiment_name": "Mock episode metadata regression",
+            "policy_configuration": {
+                "checkpoint_id": "mock-checkpoint-v1",
+                "unnorm_key": "mock_norm",
+                "runtime": {"dtype": "float32", "deterministic": True},
+            },
+        }),
+        benchmark,
+        policy,
+        store,
+        clock=DeterministicClock(),
+    )
     runner.connect(); runner.run()
     context = benchmark.reset_contexts[0]
     trace = store.read_episode_trace(context.run_id, context.task_id, context.episode_id)
@@ -146,16 +160,43 @@ def test_filesystem_run_round_trip_includes_trace_metrics_and_final_manifest(tmp
     completed = tuple(tmp_path.glob("*/manifest.completed.json"))
     assert len(completed) == 1
     episode_path = next(tmp_path.glob("*/tasks/*/episodes/*"))
+    metadata = json.loads((episode_path / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["schema_version"] == "ovlab-episode-metadata/1.0.0"
+    assert metadata["identity"]["run_id"] == str(context.run_id)
+    assert metadata["identity"]["episode_id"] == str(context.episode_id)
+    assert metadata["experiment"] == {
+        "id": "mock-episode-metadata",
+        "name": "Mock episode metadata regression",
+        "tags": [],
+    }
+    assert metadata["scenario"]["task_id"] == str(context.task_id)
+    assert metadata["scenario"]["task_name"]
+    assert metadata["mission"]["initial_instruction"] == context.initial_instruction.text
+    assert metadata["model"]["configuration"]["runtime"]["deterministic"] is True
+    assert metadata["checkpoint"]["checkpoint_id"] == "mock-checkpoint-v1"
+    assert metadata["checkpoint"]["normalization_key"] == "mock_norm"
+    assert metadata["datetime"]["episode_started_utc"].endswith("Z")
+    assert metadata["datetime"]["episode_ended_utc"].endswith("Z")
+    assert metadata["result"]["status"] in ("OK", "NOK")
+    assert metadata["result"]["success_rate"] in (0.0, 1.0)
+    assert metadata["result"]["executed_step_count"] == len(trace.executed_actions)
+    assert metadata["artifacts"]["trace"] == "trace.json"
+    assert metadata["source_of_truth"]["metrics"] == "metrics.episode.json"
     video = json.loads((episode_path / "video.json").read_text(encoding="utf-8"))
     assert video["camera"] == "camera.primary.rgb"
     assert video["frame_relationship"]["actual_frame_count"] == len(trace.observations)
     assert all(observation.images for observation in trace.observations)
     if video["status"] == "available":
         assert (episode_path / video["path"]).is_file()
+        assert video["container"] == "mp4"
+        assert video["codec"] == "h264"
+        assert video["codec_tag"] == "avc1"
+        assert video["pixel_format"] == "yuv420p"
+        assert video["faststart"] is True
         assert video["frame_count"] == len(trace.observations)
         assert video["decoded_frame_count"] == len(trace.observations)
     else:
-        assert video["reason"] == "OpenCV video runtime is unavailable"
+        assert video["reason"] == "H.264 video runtime is unavailable"
 
 
 def test_gate_a_configured_run_is_immutable_offline_reproducible_and_deterministic(tmp_path) -> None:

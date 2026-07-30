@@ -67,6 +67,15 @@ class EpisodeRecorder:
                 continue
             self.signals.append(signal)
 
+    def record_metadata(self, metadata) -> None:
+        """Add immutable episode evidence produced after recorder startup."""
+        self._require_recording()
+        values = dict(metadata)
+        duplicate = sorted(set(values) & set(self.metadata))
+        if duplicate:
+            raise RecorderError(f"episode metadata already recorded: {', '.join(duplicate)}")
+        self.metadata.update(values)
+
     def record_prediction(self, prediction: ActionPrediction) -> None:
         self._require_recording()
         if prediction.step_id not in {context.step_id for context in self.step_contexts}:

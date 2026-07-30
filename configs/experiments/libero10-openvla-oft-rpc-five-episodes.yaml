@@ -1,0 +1,18 @@
+schema_version: "0.1.0"
+kind: experiment
+
+experiment:
+  id: libero10-openvla-oft-rpc-five-episodes
+  name: Five complete native OpenVLA-OFT episodes across LIBERO-10 tasks
+  tags: [libero-10, openvla-oft, action-chunk, rpc, five-episodes, multi-task]
+
+components:
+  benchmark: benchmarks/libero/libero10-oft-five-tasks.yaml
+  policy: policies/openvla-oft/libero10-native.yaml
+  metrics: metrics/action-safe-v1.yaml
+  protocol: protocols/libero-oft-episode-v1.yaml
+  action_interface: interfaces/actions/libero-osc-pose-v1.yaml
+  artifacts: artifacts/filesystem.yaml
+
+resources:
+  registry: resources/registry.yaml

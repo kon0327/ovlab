@@ -162,6 +162,9 @@ class ResolvedExperimentConfig:
 
     def create_plan(self, run_context, selected_task_ids) -> ExperimentPlan:
         protocol = self.protocol_settings
+        experiment = self.scientific_config.get("experiment", {})
+        components = self.scientific_config.get("components", {})
+        policy = components.get("policy", {}) if hasattr(components, "get") else {}
         return ExperimentPlan(
             run_context=run_context,
             selected_task_ids=tuple(selected_task_ids),
@@ -178,6 +181,9 @@ class ResolvedExperimentConfig:
             artifact_store_settings=self.artifact_settings,
             metadata={
                 "experiment_id": self.experiment_id,
+                "experiment_name": experiment.get("name", self.experiment_id),
+                "experiment_tags": experiment.get("tags", ()),
+                "policy_configuration": policy.get("settings", {}),
                 "scientific_config_hash": self.scientific_config_hash,
                 "execution_config_hash": self.execution_config_hash,
             },
