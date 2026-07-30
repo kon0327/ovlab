@@ -10,7 +10,7 @@ from ovlab_metrics import MetricResult, MetricScope, MetricStatus
 from ..errors import ArtifactError
 from .base import RunArtifactStore
 from .codec import TraceCodec, _plain
-from .layout import safe_key
+from .layout import run_key, safe_key
 
 
 class FilesystemRunArtifactStore(RunArtifactStore):
@@ -18,7 +18,7 @@ class FilesystemRunArtifactStore(RunArtifactStore):
         self.root = Path(root)
         self.codec = TraceCodec()
 
-    def _run_path(self, run_id): return self.root / safe_key(str(run_id))
+    def _run_path(self, run_id): return self.root / run_key(str(run_id))
     def _task_path(self, run_id, task_id): return self._run_path(run_id) / "tasks" / safe_key(str(task_id))
     def _episode_path(self, run_id, task_id, episode_id): return self._task_path(run_id, task_id) / "episodes" / safe_key(str(episode_id))
 

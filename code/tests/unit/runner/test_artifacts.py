@@ -5,6 +5,7 @@ import json
 import pytest
 
 from helpers.metric_traces import synthetic_trace
+from ovlab_core.contracts import RunId
 from ovlab_runner import ArtifactError, FilesystemRunArtifactStore, RunConfigurationSnapshot, TraceCodec
 from ovlab_runner.artifacts.layout import safe_key
 
@@ -53,6 +54,13 @@ def test_filesystem_store_never_overwrites_finalized_trace_or_started_manifest(t
 def test_safe_keys_allow_stable_slash_ids_but_reject_traversal() -> None:
     assert "/" not in safe_key("libero/spatial/0")
     with pytest.raises(ArtifactError): safe_key("../escape")
+
+
+def test_readable_run_name_is_preserved_as_the_artifact_directory(tmp_path) -> None:
+    value = "libero10-openvla-oft-rpc-smoke_2026-07-29_14-05-09_a1b2c3d4"
+    store = FilesystemRunArtifactStore(tmp_path)
+    assert store._run_path(RunId(value)) == tmp_path / value
+    assert store._run_path(RunId("legacy/run")) == tmp_path / safe_key("legacy/run")
 
 
 def test_configuration_and_run_manifests_are_immutable_and_distinguish_partial_runs(tmp_path) -> None:

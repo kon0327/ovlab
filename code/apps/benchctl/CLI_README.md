@@ -52,6 +52,18 @@ containers, waits for policy readiness, runs the benchmark, propagates failure,
 and removes its containers and private RPC volume. Canonical artifacts remain in
 the host directory configured by `OVLAB_RUNS_ROOT`.
 
+Each run directory uses the readable host-local naming contract
+`<experiment-id>_YYYY-MM-DD_HH-MM-SS_<8-char-hash>`. The manifest retains the
+authoritative UTC nanosecond timestamp; the path timestamp is intended for
+operators and the short hash prevents collisions between runs started within
+the same second.
+
+LIBERO protocols record every canonical primary-camera observation by default.
+Finalization creates `video.mp4` and checksum-bearing `video.json` inside every
+episode directory; no timestep subsampling is applied. The original RGB arrays
+remain part of the immutable trace, so video provenance and frame counts can be
+verified offline.
+
 LIBERO datasets follow the same external-data convention. If
 `OVLAB_DATASETS_PATH` is unset, deployment derives
 `<OVLAB_RUNS_ROOT>/../datasets/libero`, creates the directory, and mounts it

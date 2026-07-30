@@ -79,7 +79,7 @@ Keep deployment evidence outside the source checkout:
 │   └── local/         # unpublished QuIC and experimental artifacts
 ├── datasets/
 │   └── libero/        # LIBERO demonstrations mounted read-only
-├── runs/              # canonical traces, metrics, video, config and provenance
+├── runs/              # canonical traces, per-episode videos, metrics, config and provenance
 ├── derived/           # regenerated reports, plots and tables
 └── exports/           # curated publication and sharing outputs
 ```

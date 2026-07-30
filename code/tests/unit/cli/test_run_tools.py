@@ -7,10 +7,12 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from datetime import datetime, timezone
 
 import pytest
 
 from helpers.runner_fixtures import TrackingBenchmark, TrackingPolicy, runner_plan
+from ovlab_benchctl.application import _readable_run_id
 from ovlab_runner import (
     DeterministicClock, ExperimentRunner, FilesystemRunArtifactStore,
     RunConfigurationSnapshot, RunIntegrityError, inspect_run, recompute_run_metrics,
@@ -21,6 +23,25 @@ from ovlab_runner import (
 HASH_A = "a" * 64
 HASH_B = "b" * 64
 REPOSITORY = Path(__file__).resolve().parents[4]
+
+
+def test_readable_run_id_uses_experiment_local_datetime_and_short_hash():
+    created = int(
+        datetime(2026, 7, 29, 14, 5, 9, tzinfo=timezone.utc).timestamp()
+    ) * 1_000_000_000
+    first = _readable_run_id(
+        "libero10/openvla oft", created, "nonce-a", timezone=timezone.utc
+    )
+    repeated = _readable_run_id(
+        "libero10/openvla oft", created, "nonce-a", timezone=timezone.utc
+    )
+    different = _readable_run_id(
+        "libero10/openvla oft", created, "nonce-b", timezone=timezone.utc
+    )
+    assert first == repeated
+    assert first.startswith("libero10-openvla-oft_2026-07-29_14-05-09_")
+    assert len(first.rsplit("_", 1)[1]) == 8
+    assert different.rsplit("_", 1)[1] != first.rsplit("_", 1)[1]
 
 
 @pytest.fixture

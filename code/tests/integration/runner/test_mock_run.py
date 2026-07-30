@@ -145,6 +145,17 @@ def test_filesystem_run_round_trip_includes_trace_metrics_and_final_manifest(tmp
     assert metrics
     completed = tuple(tmp_path.glob("*/manifest.completed.json"))
     assert len(completed) == 1
+    episode_path = next(tmp_path.glob("*/tasks/*/episodes/*"))
+    video = json.loads((episode_path / "video.json").read_text(encoding="utf-8"))
+    assert video["camera"] == "camera.primary.rgb"
+    assert video["frame_relationship"]["actual_frame_count"] == len(trace.observations)
+    assert all(observation.images for observation in trace.observations)
+    if video["status"] == "available":
+        assert (episode_path / video["path"]).is_file()
+        assert video["frame_count"] == len(trace.observations)
+        assert video["decoded_frame_count"] == len(trace.observations)
+    else:
+        assert video["reason"] == "OpenCV video runtime is unavailable"
 
 
 def test_gate_a_configured_run_is_immutable_offline_reproducible_and_deterministic(tmp_path) -> None:

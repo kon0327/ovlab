@@ -106,7 +106,7 @@ outside the source checkout:
 │   └── local/         # unpublished QuIC and experimental checkpoints
 ├── datasets/
 │   └── libero/        # LIBERO demonstration datasets, mounted read-only
-├── runs/              # immutable traces, metrics, video, config and provenance
+├── runs/              # immutable traces, per-episode videos, metrics, config and provenance
 ├── derived/           # regenerated reports, plots and tables
 └── exports/           # curated outputs prepared for papers and sharing
 ```

@@ -90,6 +90,15 @@ def test_every_versioned_component_is_schema_valid():
     validate(local, "profile.example.yaml", "local_profile")
 
 
+def test_every_libero_protocol_records_all_episode_video_frames_by_default():
+    for protocol in sorted((CONFIGS / "protocols").glob("libero-*.yaml")):
+        document = resolver().load_component(
+            str(protocol.relative_to(CONFIGS)), "protocol"
+        )
+        assert document["recording"]["observations"] is True, protocol.name
+        assert document["recording"]["images"] is True, protocol.name
+
+
 def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
     resolved = resolver().resolve(EXPERIMENT, local_profile=profile(tmp_path))
     assert isinstance(resolved.benchmark_settings, LiberoAdapterSettings)
@@ -112,6 +121,8 @@ def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
     repeated = resolved.metric_settings.configurations["failure.repeated_no_op_rate"]
     assert isinstance(repeated, RepeatedNoOpMetricConfig) and repeated.minimum_consecutive_run_length == 5
     assert resolved.protocol_settings.rollouts_per_task == 50
+    assert resolved.protocol_settings.trace_recording_policy.record_image_arrays is True
+    assert resolved.protocol_settings.trace_recording_policy.image_sampling_stride == 1
     assert resolved.artifact_settings.root.endswith("machine-a/runs")
 
 

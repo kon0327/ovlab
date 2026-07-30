@@ -16,7 +16,9 @@ execution:
 
 recording:
   observations: true
-  images: false
+  # Preserve every canonical RGB observation (stride 1). Run finalization uses
+  # these frames to create one immutable inference video per episode.
+  images: true
   proprioception: true
   predictions: true
   raw_policy_output: false

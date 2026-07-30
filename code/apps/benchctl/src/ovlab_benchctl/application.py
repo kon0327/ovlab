@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from enum import Enum
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -19,6 +21,27 @@ from .versioning import CLI_VERSION, repository_revision
 
 
 CLI_SCHEMA_VERSION = "ovlab-cli/1.0.0"
+
+
+def _readable_run_id(
+    experiment_name: str,
+    created_wall_time_utc_ns: int,
+    entropy: str,
+    *,
+    timezone=None,
+) -> str:
+    """Build a unique, host-local, human-readable run identifier."""
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", experiment_name).strip("._-")
+    slug = slug[:180] or "experiment"
+    seconds = created_wall_time_utc_ns // 1_000_000_000
+    moment = datetime.fromtimestamp(seconds, tz=timezone)
+    if timezone is None:
+        moment = moment.astimezone()
+    timestamp = moment.strftime("%Y-%m-%d_%H-%M-%S")
+    digest = hashlib.sha256(
+        f"{experiment_name}\0{created_wall_time_utc_ns}\0{entropy}".encode("utf-8")
+    ).hexdigest()[:8]
+    return f"{slug}_{timestamp}_{digest}"
 
 
 def _plain(value):
@@ -460,8 +483,18 @@ class OvlabApplication:
         from ovlab_runner import ExperimentRunner, FilesystemRunArtifactStore
 
         resolved = self._resolved_experiment(config)
-        run_id = RunId(f"{resolved.experiment_id}-{time.time_ns()}-{uuid.uuid4().hex[:8]}")
-        context = RunContext(run_id, time.time_ns(), resolved.experiment_id, resolved.protocol_settings.base_seed)
+        created_wall_time_utc_ns = time.time_ns()
+        run_id = RunId(_readable_run_id(
+            resolved.experiment_id,
+            created_wall_time_utc_ns,
+            uuid.uuid4().hex,
+        ))
+        context = RunContext(
+            run_id,
+            created_wall_time_utc_ns,
+            resolved.experiment_id,
+            resolved.protocol_settings.base_seed,
+        )
         plan = resolved.create_plan(context, self._selected_tasks(resolved))
         plan = replace(plan, metadata={
             **dict(plan.metadata),
