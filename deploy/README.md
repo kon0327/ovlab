@@ -14,7 +14,13 @@ For a command-oriented build and launch guide, see
 | Image | Runtime responsibility | Included heavy closure | Deliberately absent |
 |---|---|---|---|
 | `ovlab-benchmark-libero` | CLI, runner, LIBERO, Robosuite, MuJoCo, EGL and immutable trace output | LIBERO simulation stack; Torch only because pinned LIBERO imports it to load initial states | OpenVLA, Transformers, PEFT, FlashAttention and model weights |
-| `ovlab-policy-openvla` | Vanilla and merged-LoRA OpenVLA service | Torch 2.2.0/CUDA 12.1, Transformers 4.40.1, PEFT 0.11.1, FlashAttention 2.5.5 and pinned OpenVLA source | LIBERO, Robosuite, MuJoCo, datasets and run output |
+| `ovlab-policy-openvla` | Vanilla and merged-LoRA OpenVLA service | Torch 2.2.0/CUDA 12.1, Transformers 4.40.1, PEFT 0.11.1, BitsAndBytes 0.43.1, FlashAttention 2.5.5 and pinned OpenVLA source | LIBERO, Robosuite, MuJoCo, datasets and run output |
+
+Vanilla and merged-LoRA policies accept `runtime.quantization: none | 4bit`.
+The `4bit` identity denotes the pinned BitsAndBytes NF4 inference recipe with
+BF16 compute, FP16 storage and double quantization. Applying it to the published
+merged-LoRA full weights is quantized merged-LoRA inference; it is not evidence
+that the adapter was trained with QLoRA.
 | `ovlab-policy-openvla-oft` | OpenVLA-OFT service | The distinct OFT Transformers commit, Torch/CUDA, FlashAttention and pinned OFT source | LIBERO, Robosuite, MuJoCo, datasets and run output |
 
 QuIC remains descriptor-only. There is no QuIC image, Compose profile, provider
@@ -33,7 +39,9 @@ artifact; both requested revision and resolved commit are
 untracked build-relevant files, and content hashes deterministically. The build
 script embeds that manifest and adds OCI labels for repository revision, source
 hash, dirty state, lock hash, Dockerfile hash and image role. Dirty builds are
-allowed but never presented as clean.
+allowed but never presented as clean. Portable files below `configs/` are not
+image inputs: their identity belongs to the per-run configuration bundle, so
+adding or changing an experiment does not require rebuilding an image.
 
 Build all mandatory production images:
 
@@ -68,8 +76,10 @@ policy receives only its resolved snapshot at
 `/checkpoints/resolved/<checkpoint-id>:ro` and the shared socket volume. The
 benchmark receives `/datasets:ro`, the socket volume and the host-backed
 `/var/lib/ovlab/runs` directory as its only persistent writable mount. Canonical
-run evidence is therefore directly available outside the container. Configuration
-is baked into each image.
+run evidence is therefore directly available outside the container. Both runtime
+services receive the same minimal configuration bundle at `/opt/ovlab/configs:ro`.
+The host CLI validates and materializes this bundle for one deployment and removes
+the temporary host directory after project-scoped teardown.
 
 The benchmark image also contains a portable LIBERO path map at
 `/etc/ovlab/libero/config.yaml`. It points bundled BDDL, initial-state and asset
@@ -136,13 +146,13 @@ filename, byte progress, completion, and verification stages on stderr.
 Use strict offline resolution when downloads are forbidden:
 
 ```bash
-./ovlab deploy run EXPERIMENT --profile oft --offline
+./ovlab deploy run EXPERIMENT --offline
 ```
 
 For a custom checkpoint, pass a local profile explicitly:
 
 ```bash
-./ovlab deploy run EXPERIMENT --profile openvla \
+./ovlab deploy run EXPERIMENT \
   --local-profile configs/local/profile.yaml
 ```
 
@@ -174,9 +184,7 @@ Python 3, not an activated Conda environment:
 
 ```bash
 ./ovlab deploy run \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
-  --profile openvla \
-  --renderer egl
+  configs/experiments/libero10-lora-merged-rpc-smoke.yaml
 ```
 
 The CLI passes the selected experiment to both services, performs checkpoint
@@ -184,7 +192,9 @@ resolution and Compose preflight, propagates the benchmark status and reaps the
 project-scoped containers and RPC volume. It checks a versioned deployment
 contract on both selected images before hashing a large checkpoint, so stale
 images fail with an exact rebuild command instead of running old mount semantics.
-After changing packaged source, rebuild the selected topology, for example:
+New or changed YAML below `configs/` is resolved into a read-only per-run bundle
+and does not require a rebuild. After changing packaged Python source, dependency
+locks, Dockerfiles, or bundled external source, rebuild the selected topology:
 
 ```bash
 bash deploy/scripts/build-images.sh benchmark policy-openvla-oft

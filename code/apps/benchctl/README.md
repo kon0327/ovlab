@@ -14,8 +14,9 @@ merge; sequences and scalars replace their parent value.
 
 `ConfigResolver.resolve()` validates and composes all component documents,
 resolves logical checkpoint/device/artifact resources through an explicitly
-selected local profile, composes a separately selected renderer execution
-profile for LIBERO, constructs the existing immutable owner settings, and
+selected local profile, composes the experiment-selected (or explicitly
+overridden) renderer execution profile for LIBERO, constructs the existing
+immutable owner settings, and
 checks the shared action and observation interfaces. It returns separate
 scientific and execution hashes. The scientific hash excludes the local and
 renderer profiles plus resolved machine paths/devices; the execution hash
@@ -31,6 +32,12 @@ storage, verifies declared file sizes and SHA-256 values, and exposes only the
 resolved snapshot to the policy container. Missing artifacts are downloaded at
 their pinned revision unless `ovlab deploy run --offline` is used. This path uses
 the Python standard library and does not require a host Conda environment.
+
+Docker deployment also constructs a deterministic minimal configuration bundle
+from the selected experiment, its inheritance closure, referenced components,
+resource registry and renderer profile. The same bundle is mounted read-only into
+both runtime services and its SHA-256 is execution provenance. Portable config
+changes do not invalidate an otherwise compatible runtime image.
 
 `ResolvedExperimentConfig.write()` creates one deterministic
 `resolved_config.yaml` and refuses to overwrite an existing file.

@@ -8,8 +8,13 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
+
+from .schema import validate
+from .strict_yaml import load
+from .config_bundle import ConfigBundleBuilder
 
 
 class ComposeDeploymentError(RuntimeError):
@@ -21,6 +26,8 @@ class ComposeDeploymentPlan:
     experiment: str
     profile: str
     renderer: str
+    profile_source: str
+    renderer_source: str
     project_name: str
     env_file: str
     local_profile: str | None
@@ -38,6 +45,8 @@ class ComposeDeploymentPlan:
             "experiment": self.experiment,
             "profile": self.profile,
             "renderer": self.renderer,
+            "profile_source": self.profile_source,
+            "renderer_source": self.renderer_source,
             "project_name": self.project_name,
             "env_file": self.env_file,
             "local_profile": self.local_profile,
@@ -64,8 +73,22 @@ class ComposeDeployment:
         "oft": "policy-openvla-oft",
     }
     _RENDERERS = {"egl", "glfw"}
+    _POLICY_PROFILES = {
+        "openvla_vanilla": "openvla",
+        "openvla_lora_merged": "openvla",
+        "openvla_oft": "oft",
+    }
+    _RENDERER_EXECUTION_PROFILES = {
+        "egl": "profiles/libero-bench-egl.yaml",
+        "glfw": "profiles/libero-playground-glfw.yaml",
+    }
     _IMAGE_CONTRACT_LABEL = "cz.cvut.ovlab.deployment.contract"
-    _IMAGE_CONTRACT = "resolved-checkpoint-v1"
+    _SOURCE_MANIFEST_LABEL = "cz.cvut.ovlab.source-manifest.sha256"
+    _IMAGE_CONTRACTS = {
+        "benchmark": "resolved-checkpoint-config-bundle-v2",
+        "policy-openvla": "resolved-checkpoint-quantization-config-bundle-v2",
+        "policy-openvla-oft": "resolved-checkpoint-config-bundle-v2",
+    }
     _PROFILE_IMAGES = {
         "openvla": (
             ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
@@ -109,22 +132,52 @@ class ComposeDeployment:
         self,
         experiment: str | Path,
         *,
-        profile: str,
-        renderer: str,
+        profile: str | None = None,
+        renderer: str | None = None,
         env_file: str | Path | None = None,
         local_profile: str | Path | None = None,
         offline: bool = False,
         project_name: str | None = None,
     ) -> ComposeDeploymentPlan:
-        if profile not in self._PROFILES:
-            raise ValueError(f"deployment profile must be one of: {', '.join(sorted(self._PROFILES))}")
-        if renderer not in self._RENDERERS:
-            raise ValueError(f"renderer must be one of: {', '.join(sorted(self._RENDERERS))}")
         experiment_path = self._inside_repository(experiment, kind="experiment configuration")
         config_root = self.repository_root / "configs"
         if not experiment_path.is_relative_to(config_root / "experiments"):
             raise ValueError("Docker deployment requires an experiment below configs/experiments/")
         experiment_reference = str(experiment_path.relative_to(self.repository_root))
+
+        experiment_doc = load(experiment_path)
+        validate(experiment_doc, str(experiment_path), "experiment")
+        configured = experiment_doc.get("deployment")
+        if configured is None:
+            raise ValueError(
+                "experiment does not declare deployment.profile and deployment.renderer; "
+                "add the portable deployment block"
+            )
+        selected_profile = profile or configured["profile"]
+        selected_renderer = renderer or configured["renderer"]
+        if selected_profile not in self._PROFILES:
+            raise ValueError(f"deployment profile must be one of: {', '.join(sorted(self._PROFILES))}")
+        if selected_renderer not in self._RENDERERS:
+            raise ValueError(f"renderer must be one of: {', '.join(sorted(self._RENDERERS))}")
+
+        policy_reference = experiment_doc["components"]["policy"]
+        policy_path = (config_root / policy_reference).resolve()
+        if not policy_path.is_relative_to(config_root / "policies") or not policy_path.is_file():
+            raise ValueError(f"experiment policy must resolve below configs/policies/: {policy_reference}")
+        policy_type = load(policy_path).get("type")
+        required_profile = self._POLICY_PROFILES.get(policy_type)
+        if required_profile is None:
+            raise ValueError(f"policy type {policy_type!r} has no Docker deployment profile")
+        if selected_profile != required_profile:
+            raise ValueError(
+                f"deployment profile {selected_profile!r} is incompatible with policy type "
+                f"{policy_type!r}; expected {required_profile!r}"
+            )
+
+        profile_source = "cli" if profile is not None else "experiment"
+        renderer_source = "cli" if renderer is not None else "experiment"
+        profile = selected_profile
+        renderer = selected_renderer
 
         selected_env = env_file or self.repository_root / "deploy/compose/.env"
         env_path = self._inside_repository(selected_env, kind="Compose environment file")
@@ -157,6 +210,8 @@ class ComposeDeployment:
             experiment=experiment_reference,
             profile=profile,
             renderer=renderer,
+            profile_source=profile_source,
+            renderer_source=renderer_source,
             project_name=project,
             env_file=str(env_path),
             local_profile=local_profile_path,
@@ -272,14 +327,26 @@ class ComposeDeployment:
         if not runs.is_dir():
             raise ComposeDeploymentError(f"OVLAB_RUNS_ROOT is not a directory: {runs}")
 
+    def _current_source_sha256(self) -> str:
+        source_manifest = runpy.run_path(
+            str(self.repository_root / "deploy/scripts/source_manifest.py")
+        )
+        document = source_manifest["build_manifest"](self.repository_root)
+        return str(document["source_content_sha256"])
+
     def _preflight_images(self, plan: ComposeDeploymentPlan) -> None:
         rebuild_roles = []
+        expected_source_sha256 = self._current_source_sha256()
         for variable, default, role in self._PROFILE_IMAGES[plan.profile]:
             image = self._environment_value(plan, variable) or default
+            expected_contract = self._IMAGE_CONTRACTS[role]
             completed = self.runner(
                 [
                     "docker", "image", "inspect", "--format",
-                    f'{{{{ index .Config.Labels "{self._IMAGE_CONTRACT_LABEL}" }}}}',
+                    (
+                        f'{{{{ index .Config.Labels "{self._IMAGE_CONTRACT_LABEL}" }}}}'
+                        f'|{{{{ index .Config.Labels "{self._SOURCE_MANIFEST_LABEL}" }}}}'
+                    ),
                     image,
                 ],
                 cwd=self.repository_root,
@@ -294,15 +361,23 @@ class ComposeDeployment:
                     f"required image is unavailable: {image}; build it with "
                     f"bash deploy/scripts/build-images.sh {role}"
                 )
-            contract = (completed.stdout or "").strip()
-            if contract != self._IMAGE_CONTRACT:
-                rebuild_roles.append((image, role, contract or "missing"))
+            labels = (completed.stdout or "").strip().split("|", 1)
+            contract = labels[0]
+            source_sha256 = labels[1] if len(labels) == 2 else ""
+            if contract != expected_contract or source_sha256 != expected_source_sha256:
+                rebuild_roles.append((
+                    image,
+                    role,
+                    contract or "missing",
+                    source_sha256 or "missing",
+                ))
         if rebuild_roles:
             details = ", ".join(
-                f"{image} ({self._IMAGE_CONTRACT_LABEL}={observed!r})"
-                for image, _role, observed in rebuild_roles
+                f"{image} ({self._IMAGE_CONTRACT_LABEL}={contract!r}, "
+                f"{self._SOURCE_MANIFEST_LABEL}={source!r})"
+                for image, _role, contract, source in rebuild_roles
             )
-            roles = " ".join(role for _image, role, _observed in rebuild_roles)
+            roles = " ".join(role for _image, role, _contract, _source in rebuild_roles)
             raise ComposeDeploymentError(
                 f"local deployment images are stale or incompatible: {details}; rebuild with "
                 f"bash deploy/scripts/build-images.sh {roles}"
@@ -369,66 +444,85 @@ class ComposeDeployment:
         return {path.resolve() for path in root.iterdir() if path.is_dir()}
 
     def run(self, plan: ComposeDeploymentPlan, *, dry_run: bool = False) -> dict[str, object]:
+        bundle_builder = ConfigBundleBuilder(self.repository_root)
+        bundle = bundle_builder.build(
+            plan.experiment,
+            self._RENDERER_EXECUTION_PROFILES[plan.renderer],
+        )
         if dry_run:
-            return plan.document(side_effects_performed=False)
+            return {
+                **plan.document(side_effects_performed=False),
+                "config_bundle": bundle.summary(),
+            }
         self._preflight_bind_sources(plan)
         datasets_root = self._dataset_root(plan)
         self._preflight_images(plan)
         checkpoint = self._resolve_checkpoint(plan)
-        environment = {
-            **self.environment,
-            "OVLAB_EXPERIMENT_CONFIG": plan.experiment,
-            "OVLAB_DATASETS_PATH": str(datasets_root),
-            "OVLAB_HOST_ARTIFACT_GID": self.environment.get(
-                "OVLAB_HOST_ARTIFACT_GID", str(os.getgid())
-            ),
-            "OVLAB_RESOLVED_CHECKPOINT_ID": checkpoint.spec.resource_id,
-            "OVLAB_RESOLVED_CHECKPOINT_PATH": str(checkpoint.host_path),
-            "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH": checkpoint.container_path,
-            "OVLAB_CHECKPOINT_SOURCE_KIND": checkpoint.source_kind,
-            "OVLAB_CHECKPOINT_REPOSITORY": checkpoint.spec.repo_id,
-            "OVLAB_CHECKPOINT_REVISION": checkpoint.spec.revision,
-            "OVLAB_CHECKPOINT_SHA256": checkpoint.spec.expected_sha256,
-        }
-        runs_root = self._bind_source(plan, "OVLAB_RUNS_ROOT")
-        runs_before = self._run_directories(runs_root)
-        checked = self._execute(plan.config_command, environment)
-        if checked.returncode != 0:
-            raise ComposeDeploymentError(
-                f"Docker Compose configuration failed with exit code {checked.returncode}"
-            )
+        with bundle_builder.materialize(bundle) as bundle_root:
+            environment = {
+                **self.environment,
+                "OVLAB_EXPERIMENT_CONFIG": (
+                    f"/opt/ovlab/configs/{bundle.experiment}"
+                ),
+                "OVLAB_EXECUTION_PROFILE": (
+                    f"/opt/ovlab/configs/{bundle.execution_profile}"
+                ),
+                "OVLAB_CONFIG_BUNDLE_PATH": str(bundle_root),
+                "OVLAB_CONFIG_BUNDLE_SHA256": bundle.sha256,
+                "OVLAB_DEPLOYMENT_PROFILE": plan.profile,
+                "OVLAB_DATASETS_PATH": str(datasets_root),
+                "OVLAB_HOST_ARTIFACT_GID": self.environment.get(
+                    "OVLAB_HOST_ARTIFACT_GID", str(os.getgid())
+                ),
+                "OVLAB_RESOLVED_CHECKPOINT_ID": checkpoint.spec.resource_id,
+                "OVLAB_RESOLVED_CHECKPOINT_PATH": str(checkpoint.host_path),
+                "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH": checkpoint.container_path,
+                "OVLAB_CHECKPOINT_SOURCE_KIND": checkpoint.source_kind,
+                "OVLAB_CHECKPOINT_REPOSITORY": checkpoint.spec.repo_id,
+                "OVLAB_CHECKPOINT_REVISION": checkpoint.spec.revision,
+                "OVLAB_CHECKPOINT_SHA256": checkpoint.spec.expected_sha256,
+            }
+            runs_root = self._bind_source(plan, "OVLAB_RUNS_ROOT")
+            runs_before = self._run_directories(runs_root)
+            checked = self._execute(plan.config_command, environment)
+            if checked.returncode != 0:
+                raise ComposeDeploymentError(
+                    f"Docker Compose configuration failed with exit code {checked.returncode}"
+                )
 
-        run_error: ComposeDeploymentError | None = None
-        service_statuses: tuple[dict[str, object], ...] = ()
-        try:
-            completed = self._execute(plan.up_command, environment)
-            if completed.returncode != 0:
-                run_error = ComposeDeploymentError(
-                    f"Docker Compose benchmark failed with exit code {completed.returncode}"
-                )
+            run_error: ComposeDeploymentError | None = None
+            service_statuses: tuple[dict[str, object], ...] = ()
             try:
-                service_statuses = self._service_statuses(plan, environment)
-                status_error = self._status_failure(service_statuses)
-                if status_error is not None:
-                    run_error = status_error if run_error is None else ComposeDeploymentError(
-                        f"{run_error}; {status_error}"
+                completed = self._execute(plan.up_command, environment)
+                if completed.returncode != 0:
+                    run_error = ComposeDeploymentError(
+                        f"Docker Compose benchmark failed with exit code {completed.returncode}"
                     )
-            except ComposeDeploymentError as exc:
-                run_error = exc if run_error is None else ComposeDeploymentError(
-                    f"{run_error}; {exc}"
+                try:
+                    service_statuses = self._service_statuses(plan, environment)
+                    status_error = self._status_failure(service_statuses)
+                    if status_error is not None:
+                        run_error = status_error if run_error is None else ComposeDeploymentError(
+                            f"{run_error}; {status_error}"
+                        )
+                except ComposeDeploymentError as exc:
+                    run_error = exc if run_error is None else ComposeDeploymentError(
+                        f"{run_error}; {exc}"
+                    )
+            finally:
+                cleaned = self._execute(plan.down_command, environment)
+            if cleaned.returncode != 0:
+                cleanup_error = ComposeDeploymentError(
+                    f"Docker Compose cleanup failed with exit code {cleaned.returncode}"
                 )
-        finally:
-            cleaned = self._execute(plan.down_command, environment)
-        if cleaned.returncode != 0:
-            cleanup_error = ComposeDeploymentError(
-                f"Docker Compose cleanup failed with exit code {cleaned.returncode}"
-            )
+                if run_error is not None:
+                    raise ComposeDeploymentError(f"{run_error}; {cleanup_error}") from run_error
+                raise cleanup_error
             if run_error is not None:
-                raise ComposeDeploymentError(f"{run_error}; {cleanup_error}") from run_error
-            raise cleanup_error
-        if run_error is not None:
-            raise run_error
-        new_runs = sorted(str(path) for path in self._run_directories(runs_root) - runs_before)
+                raise run_error
+            new_runs = sorted(
+                str(path) for path in self._run_directories(runs_root) - runs_before
+            )
         result = {
             "deployment": "docker-compose",
             "experiment": plan.experiment,
@@ -443,6 +537,7 @@ class ComposeDeployment:
             "run_path": new_runs[0] if len(new_runs) == 1 else None,
             "service_statuses": list(service_statuses),
             "checkpoint": checkpoint.as_dict(),
+            "config_bundle": bundle.summary(),
             "side_effects_performed": True,
         }
         return result

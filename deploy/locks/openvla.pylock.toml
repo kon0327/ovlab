@@ -13,6 +13,17 @@ url = "https://files.pythonhosted.org/packages/e9/bb/1edd2c836071e91d2bd331b9542
 sha256 = "8dd4edd532a4dac72558c5fe6fe8cb70d0c8ec9e8733f48db97d51ee41cbe763"
 
 [[packages]]
+name = "bitsandbytes"
+version = "0.43.1"
+
+[[packages.wheels]]
+name = "bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/2f/a4/d8c8c1f69ceb3afdc285d62c65bec8d46900d70e81c9a8b24883001e23f8/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl"
+
+[packages.wheels.hashes]
+sha256 = "a81c826d576d6d691c7b4a7491c8fdc0f37f769795d6ca2e54afa605d2c260a3"
+
+[[packages]]
 name = "certifi"
 version = "2026.7.22"
 

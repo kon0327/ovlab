@@ -42,15 +42,21 @@ one command:
 
 ```bash
 ./ovlab deploy run \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
-  --profile openvla \
-  --renderer egl
+  configs/experiments/libero10-lora-merged-rpc-smoke.yaml
 ```
 
 The CLI validates the Compose model, passes the same experiment to both
 containers, waits for policy readiness, runs the benchmark, propagates failure,
 and removes its containers and private RPC volume. Canonical artifacts remain in
 the host directory configured by `OVLAB_RUNS_ROOT`.
+
+The selected experiment is not baked into an image. For every deployment the
+CLI validates and hashes the exact transitive YAML closure, materializes it as a
+temporary read-only bundle, and mounts the same bundle into benchmark and policy
+containers at `/opt/ovlab/configs`. The bundle is removed after teardown while
+the portable and resolved configuration remains in the canonical run artifacts.
+Adding or changing experiment YAML therefore does not require an image rebuild;
+changing packaged Python code, locked dependencies or external source does.
 
 Each run directory uses the readable host-local naming contract
 `<experiment-id>_YYYY-MM-DD_HH-MM-SS_<8-char-hash>`. The manifest retains the
@@ -69,13 +75,39 @@ LIBERO datasets follow the same external-data convention. If
 `<OVLAB_RUNS_ROOT>/../datasets/libero`, creates the directory, and mounts it
 read-only. An explicitly configured dataset path must already exist.
 
-Use `--profile oft` for an OpenVLA-OFT experiment. Use `--renderer glfw` only
-with an interactive display server. Preview the exact commands without touching
-Docker:
+Every deployable experiment explicitly declares its Compose topology and renderer:
+
+```yaml
+deployment:
+  profile: openvla  # openvla | oft
+  renderer: egl     # egl | glfw
+```
+
+OpenVLA Vanilla and merged OpenVLA-LoRA both use `profile: openvla` because
+they share the same policy image and Compose service. LoRA remains a distinct
+scientific method through its policy component; creating a duplicate Compose
+profile would not add isolation. OpenVLA-OFT uses `profile: oft`.
+
+`--profile` and `--renderer` are optional overrides with precedence over the
+experiment values. A profile override must remain compatible with the selected
+policy type. Use GLFW only with an interactive display server. Preview the
+resolved selection and exact commands without touching Docker:
 
 ```bash
-./ovlab deploy run CONFIG --profile openvla --renderer egl --dry-run
+./ovlab deploy run CONFIG --dry-run
+./ovlab deploy run CONFIG --renderer glfw --dry-run
 ```
+
+Run the five-task cross-suite Vanilla NF4 experiment with:
+
+```bash
+./ovlab deploy run \
+  configs/experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml
+```
+
+The selected policy component owns `runtime.quantization: none | 4bit`; there is
+no host-side quantization switch. This keeps the inference representation in the
+portable scientific configuration and its hash.
 
 Before Docker starts, the CLI resolves the policy's portable `checkpoint_id`.
 It checks `~/.cache/huggingface`, an optional local-profile `local_path`, and
@@ -87,14 +119,14 @@ stderr; `--json` stdout therefore remains machine-readable. Use `--offline` to
 prohibit the download path:
 
 ```bash
-./ovlab deploy run CONFIG --profile oft --offline
+./ovlab deploy run CONFIG --offline
 ```
 
 Custom unpublished checkpoints remain outside the repository and are selected
 through a gitignored local profile:
 
 ```bash
-./ovlab deploy run CONFIG --profile openvla \
+./ovlab deploy run CONFIG \
   --local-profile configs/local/profile.yaml
 ```
 
@@ -134,7 +166,7 @@ ovlab
 │   └── health --socket PATH [--json]
 ├── connect CONFIG [--json]
 ├── deploy
-│   └── run EXPERIMENT --profile openvla|oft [--renderer egl|glfw]
+│   └── run EXPERIMENT [--profile openvla|oft] [--renderer egl|glfw]
 │       [--env-file PATH] [--local-profile PATH] [--offline]
 │       [--project-name NAME] [--dry-run] [--json]
 ├── run CONFIG [--output-root PATH] [--dry-run] [--json]

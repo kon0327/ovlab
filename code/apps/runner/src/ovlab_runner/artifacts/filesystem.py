@@ -287,8 +287,10 @@ def _method_descriptor(started):
 
 def _method_summary(method):
     keys = (
-        "family", "id", "method_name", "version", "artifact_form",
+        "family", "id", "method_id", "method_name", "version", "method_version",
+        "artifact_form",
         "backbone_adaptation", "backbone_merge_status", "quantization",
+        "training_quantization",
         "action_chunk_size", "action_dimension", "normalization", "objective",
         "parameter_counts", "training_step",
     )

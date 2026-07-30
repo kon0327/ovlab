@@ -2,9 +2,12 @@
 
 from dataclasses import dataclass, field
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
+import sys
 import time
+import types
 from typing import Mapping, Protocol
 
 import numpy as np
@@ -20,7 +23,9 @@ from .errors import (
     OpenVlaLoadError,
     OpenVlaPreprocessingError,
 )
-from .settings import InferenceSynchronization, ModelDType, OpenVlaVanillaSettings
+from .settings import (
+    InferenceSynchronization, ModelDType, ModelQuantization, OpenVlaVanillaSettings,
+)
 
 OPENVLA_GIT_COMMIT = "c8f03f48af692657d3060c19588038c7220e9af9"
 
@@ -64,17 +69,107 @@ class HuggingFaceOpenVlaRuntime:
         self._runtime_metadata = {}
 
     @staticmethod
+    def _install_lightweight_prismatic_namespace() -> None:
+        """Expose prismatic.extern without importing the optional training stack."""
+        if "prismatic" in sys.modules:
+            return
+        spec = importlib.util.find_spec("prismatic")
+        locations = None if spec is None else spec.submodule_search_locations
+        if not locations:
+            raise ImportError("the pinned OpenVLA prismatic package is unavailable")
+        package = types.ModuleType("prismatic")
+        package.__package__ = "prismatic"
+        package.__path__ = list(locations)
+        package.__spec__ = spec
+        sys.modules["prismatic"] = package
+
+    @staticmethod
     def _runtime_imports():
         try:
             import torch
             from huggingface_hub import snapshot_download
             from PIL import Image
-            from transformers import AutoModelForVision2Seq, AutoProcessor
+            from transformers import (
+                AutoConfig, AutoImageProcessor, AutoModelForVision2Seq, AutoProcessor,
+                BitsAndBytesConfig,
+            )
+            HuggingFaceOpenVlaRuntime._install_lightweight_prismatic_namespace()
+            from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
+            from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
+            from prismatic.extern.hf.processing_prismatic import (
+                PrismaticImageProcessor, PrismaticProcessor,
+            )
         except (ImportError, OSError) as exc:
             raise OpenVlaDependencyError(
                 "the tested Torch/Transformers/Hugging Face/Pillow runtime is unavailable"
             ) from exc
-        return torch, snapshot_download, Image, AutoModelForVision2Seq, AutoProcessor
+        # Fine-tuned OpenVLA snapshots refer their AutoClass implementation back
+        # to openvla/openvla-7b. Register the exact implementation shipped in the
+        # pinned OpenVLA source so an offline container never needs that second
+        # Hub repository merely to load Python code.
+        AutoConfig.register("openvla", OpenVLAConfig, exist_ok=True)
+        AutoImageProcessor.register(
+            OpenVLAConfig, PrismaticImageProcessor, exist_ok=True
+        )
+        AutoProcessor.register(OpenVLAConfig, PrismaticProcessor, exist_ok=True)
+        AutoModelForVision2Seq.register(
+            OpenVLAConfig, OpenVLAForActionPrediction, exist_ok=True
+        )
+        return (
+            torch, snapshot_download, Image, AutoConfig, AutoModelForVision2Seq,
+            AutoProcessor, BitsAndBytesConfig,
+        )
+
+    @staticmethod
+    def _model_load_kwargs(settings, torch, bits_and_bytes_config):
+        dtype = {
+            ModelDType.BFLOAT16: torch.bfloat16,
+            ModelDType.FLOAT16: torch.float16,
+            ModelDType.FLOAT32: torch.float32,
+        }[settings.model_dtype]
+        kwargs = {
+            "torch_dtype": dtype,
+            "low_cpu_mem_usage": True,
+            # AutoClasses are bound to the pinned local OpenVLA implementation
+            # in _runtime_imports(); dynamic Hub code is neither needed nor
+            # permitted inside the offline policy service.
+            "trust_remote_code": False,
+            "local_files_only": True,
+        }
+        if settings.attention_implementation is not None:
+            kwargs["attn_implementation"] = settings.attention_implementation
+        if settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT:
+            kwargs["torch_dtype"] = torch.float16
+            kwargs["quantization_config"] = bits_and_bytes_config(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+        return kwargs
+
+    @staticmethod
+    def _prepare_model_for_inference(model, settings) -> None:
+        model.eval()
+        # BitsAndBytes owns placement during from_pretrained(). Calling .to()
+        # afterwards is unsupported for the pinned Transformers stack.
+        if settings.quantization is ModelQuantization.NONE:
+            model.to(settings.device)
+
+    @staticmethod
+    def _input_dtype(settings, model, torch):
+        if settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT:
+            try:
+                return next(model.vision_backbone.parameters()).dtype
+            except (AttributeError, StopIteration) as exc:
+                raise OpenVlaPreprocessingError(
+                    "4bit runtime cannot determine the vision-backbone input dtype"
+                ) from exc
+        return {
+            ModelDType.BFLOAT16: torch.bfloat16,
+            ModelDType.FLOAT16: torch.float16,
+            ModelDType.FLOAT32: torch.float32,
+        }[settings.model_dtype]
 
     @staticmethod
     def _resolve(source, snapshot_download, local_files_only: bool) -> Path:
@@ -101,7 +196,10 @@ class HuggingFaceOpenVlaRuntime:
     def load(self, settings: OpenVlaVanillaSettings) -> OpenVlaCheckpointIdentity:
         if self._model is not None or self._processor is not None:
             raise OpenVlaLoadError("OpenVLA runtime may load model and processor only once")
-        torch, snapshot_download, Image, AutoModel, AutoProcessor = self._runtime_imports()
+        (
+            torch, snapshot_download, Image, AutoConfig, AutoModel, AutoProcessor,
+            BitsAndBytesConfig,
+        ) = self._runtime_imports()
         model_path = self._resolve(settings.model, snapshot_download, settings.local_files_only)
         processor_path = self._resolve(settings.processor_source, snapshot_download, settings.local_files_only)
         artifact_metadata = None
@@ -110,25 +208,17 @@ class HuggingFaceOpenVlaRuntime:
                 artifact_metadata = settings.runtime_artifact.verify(model_path)
             except ValueError as exc:
                 raise OpenVlaCheckpointError(str(exc)) from exc
-        dtype = {
-            ModelDType.BFLOAT16: torch.bfloat16,
-            ModelDType.FLOAT16: torch.float16,
-            ModelDType.FLOAT32: torch.float32,
-        }[settings.model_dtype]
         try:
+            config = AutoConfig.from_pretrained(
+                str(model_path), trust_remote_code=False, local_files_only=True
+            )
             processor = AutoProcessor.from_pretrained(
-                str(processor_path), trust_remote_code=settings.trust_remote_code, local_files_only=True
+                str(processor_path), config=config, trust_remote_code=False,
+                local_files_only=True,
             )
             self.processor_load_count += 1
-            kwargs = {
-                "torch_dtype": dtype,
-                "low_cpu_mem_usage": True,
-                "trust_remote_code": settings.trust_remote_code,
-                "local_files_only": True,
-            }
-            if settings.attention_implementation is not None:
-                kwargs["attn_implementation"] = settings.attention_implementation
-            model = AutoModel.from_pretrained(str(model_path), **kwargs)
+            kwargs = self._model_load_kwargs(settings, torch, BitsAndBytesConfig)
+            model = AutoModel.from_pretrained(str(model_path), config=config, **kwargs)
             self.load_count += 1
             stats_file = model_path / "dataset_statistics.json"
             if stats_file.is_file():
@@ -139,13 +229,18 @@ class HuggingFaceOpenVlaRuntime:
                 raise OpenVlaCheckpointError(
                     f"unnorm_key {settings.unnorm_key!r} is unavailable; available keys: {available}"
                 )
-            model.eval()
-            model.to(settings.device)
+            self._prepare_model_for_inference(model, settings)
             peft_names = tuple(name for name, _ in model.named_parameters() if "lora_" in name.lower())
             if peft_names:
                 raise OpenVlaCheckpointError("full-weight runtime unexpectedly contains active LoRA parameters")
-            if bool(getattr(model, "is_loaded_in_4bit", False)) or bool(getattr(model, "is_loaded_in_8bit", False)):
-                raise OpenVlaCheckpointError("Gate D full-weight runtime must not be quantized")
+            loaded_in_4bit = bool(getattr(model, "is_loaded_in_4bit", False))
+            loaded_in_8bit = bool(getattr(model, "is_loaded_in_8bit", False))
+            if settings.quantization is ModelQuantization.NONE and (loaded_in_4bit or loaded_in_8bit):
+                raise OpenVlaCheckpointError("unquantized runtime unexpectedly loaded quantized weights")
+            if settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT and not loaded_in_4bit:
+                raise OpenVlaCheckpointError("4bit runtime did not load BitsAndBytes 4-bit weights")
+            if loaded_in_8bit:
+                raise OpenVlaCheckpointError("8-bit loading is not supported by this runtime contract")
             total_parameter_count = sum(parameter.numel() for parameter in model.parameters())
         except OpenVlaCheckpointError:
             raise
@@ -163,7 +258,9 @@ class HuggingFaceOpenVlaRuntime:
             "total_parameter_count": total_parameter_count,
             "active_peft_adapter": False,
             "runtime_peft_modules": False,
-            "quantized": False,
+            "code_loading": "pinned-local-openvla-autoclass-registration",
+            "quantized": settings.quantization is not ModelQuantization.NONE,
+            "quantization": settings.quantization.configuration(),
             "inference_parameter_trainability": "irrelevant",
             "timing_method": (
                 "time.perf_counter_ns around predict_action with torch.cuda.synchronize "
@@ -241,12 +338,8 @@ class HuggingFaceOpenVlaRuntime:
                 for key, value in inputs.items()
                 if hasattr(value, "detach")
             }
-            dtype = {
-                ModelDType.BFLOAT16: self._torch.bfloat16,
-                ModelDType.FLOAT16: self._torch.float16,
-                ModelDType.FLOAT32: self._torch.float32,
-            }[self._settings.model_dtype]
-            inputs = inputs.to(self._settings.device, dtype=dtype)
+            input_dtype = self._input_dtype(self._settings, self._model, self._torch)
+            inputs = inputs.to(self._settings.device, dtype=input_dtype)
         except OpenVlaPreprocessingError:
             raise
         except Exception as exc:

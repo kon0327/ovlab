@@ -338,6 +338,7 @@ class OvlabApplication:
             "python_version": "OVLAB_PYTHON_VERSION",
             "cuda_runtime_version": "OVLAB_CUDA_RUNTIME_VERSION",
             "deployment_manifest_sha256": "OVLAB_DEPLOYMENT_MANIFEST_SHA256",
+            "config_bundle_sha256": "OVLAB_CONFIG_BUNDLE_SHA256",
             "container_runtime_version": "OVLAB_CONTAINER_RUNTIME_VERSION",
             "service_topology": "OVLAB_SERVICE_TOPOLOGY",
             "offline_mode": "OVLAB_OFFLINE_MODE",

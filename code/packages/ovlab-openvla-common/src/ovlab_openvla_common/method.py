@@ -26,6 +26,9 @@ class OpenVlaMergeStatus(str, Enum):
     MERGED = "merged"
 
 
+SUPPORTED_RUNTIME_QUANTIZATIONS = frozenset({"none", "4bit"})
+
+
 def _plain(value):
     if isinstance(value, Enum):
         return value.value
@@ -49,6 +52,7 @@ class OpenVlaMethodDescriptor:
     declared_base_revision: str | None
     adaptation_suite: str | None
     quantization: str
+    training_quantization: str
     adapter_recoverability: str
     lora_configuration: Metadata = field(default_factory=dict)
     training_provenance: Metadata = field(default_factory=dict)
@@ -56,7 +60,7 @@ class OpenVlaMethodDescriptor:
     def __post_init__(self) -> None:
         for name in (
             "method_id", "method_version", "declared_base_model", "quantization",
-            "adapter_recoverability",
+            "training_quantization", "adapter_recoverability",
         ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
@@ -74,6 +78,13 @@ class OpenVlaMethodDescriptor:
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError(f"{name} must be a non-empty string or None")
         lora = dict(self.lora_configuration)
+        if self.quantization not in SUPPORTED_RUNTIME_QUANTIZATIONS:
+            raise ValueError(
+                "quantization must be one of: "
+                + ", ".join(sorted(SUPPORTED_RUNTIME_QUANTIZATIONS))
+            )
+        if self.training_quantization not in {"none", "unavailable"}:
+            raise ValueError("training_quantization must be none or unavailable")
         if self.family is OpenVlaMethodFamily.LORA:
             if self.artifact_form is not OpenVlaArtifactForm.MERGED_FULL_WEIGHTS:
                 raise ValueError("the supported LoRA reference must use merged_full_weights")
@@ -81,8 +92,6 @@ class OpenVlaMethodDescriptor:
                 raise ValueError("the supported LoRA reference must report merge_status=merged")
             if self.active_peft_adapter or self.runtime_peft_modules:
                 raise ValueError("merged LoRA runtime must not report active PEFT modules")
-            if self.quantization != "none":
-                raise ValueError("Gate D merged LoRA must not use QLoRA or quantization")
             required = {
                 "rank", "alpha", "scaling", "dropout", "bias", "target_policy",
                 "modules_to_save", "merge_procedure",
@@ -130,6 +139,7 @@ class OpenVlaMethodDescriptor:
             "declared_base_revision": self.declared_base_revision,
             "adaptation_suite": self.adaptation_suite,
             "quantization": self.quantization,
+            "training_quantization": self.training_quantization,
             "adapter_recoverability": self.adapter_recoverability,
             "lora_configuration": self.lora_configuration,
             "training_provenance": self.training_provenance,
@@ -159,6 +169,7 @@ def vanilla_base_method_descriptor() -> OpenVlaMethodDescriptor:
         declared_base_revision=None,
         adaptation_suite=None,
         quantization="none",
+        training_quantization="none",
         adapter_recoverability="not_applicable",
     )
 
@@ -180,6 +191,7 @@ def method_descriptor_from_registry(entry: dict[str, object]) -> OpenVlaMethodDe
         declared_base_revision=method["declared_base_revision"],
         adaptation_suite=method["adaptation_suite"],
         quantization=method["quantization"],
+        training_quantization=method["quantization"],
         adapter_recoverability=artifact["adapter_recoverability"],
         lora_configuration={
             "rank": lora["rank"],

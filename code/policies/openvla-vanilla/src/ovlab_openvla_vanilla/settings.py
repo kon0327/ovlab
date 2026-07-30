@@ -27,6 +27,30 @@ class ModelDType(str, Enum):
     FLOAT32 = "float32"
 
 
+class ModelQuantization(str, Enum):
+    """Supported inference-time weight representations.
+
+    ``4bit`` is the validated BitsAndBytes NF4 recipe. It describes runtime
+    inference and does not imply that a LoRA adapter was trained with QLoRA.
+    """
+
+    NONE = "none"
+    BITSANDBYTES_NF4_4BIT = "4bit"
+
+    def configuration(self) -> dict[str, object]:
+        if self is ModelQuantization.NONE:
+            return {"mode": "none"}
+        return {
+            "mode": self.value,
+            "backend": "bitsandbytes",
+            "bits": 4,
+            "quant_type": "nf4",
+            "compute_dtype": "bfloat16",
+            "storage_dtype": "float16",
+            "double_quantization": True,
+        }
+
+
 class InferenceSynchronization(str, Enum):
     IF_CUDA = "if_cuda"
     ALWAYS = "always"
@@ -67,6 +91,7 @@ class OpenVlaVanillaSettings:
     input_image_shape: tuple[int, int, int] = (256, 256, 3)
     device: str = "cuda:0"
     model_dtype: ModelDType = ModelDType.BFLOAT16
+    quantization: ModelQuantization = ModelQuantization.NONE
     attention_implementation: str | None = "flash_attention_2"
     local_files_only: bool = True
     trust_remote_code: bool = True
@@ -96,6 +121,8 @@ class OpenVlaVanillaSettings:
             raise ValueError("device must not be empty")
         if not isinstance(self.model_dtype, ModelDType):
             raise TypeError("model_dtype must be ModelDType")
+        if not isinstance(self.quantization, ModelQuantization):
+            raise TypeError("quantization must be ModelQuantization")
         if self.attention_implementation is not None and (
             not isinstance(self.attention_implementation, str) or not self.attention_implementation.strip()
         ):
@@ -113,6 +140,10 @@ class OpenVlaVanillaSettings:
             raise TypeError("action_codec must be LiberoActionCodecConfig")
         if not isinstance(self.method_descriptor, OpenVlaMethodDescriptor):
             raise TypeError("method_descriptor must be an OpenVlaMethodDescriptor")
+        if self.method_descriptor.quantization != self.quantization.value:
+            raise ValueError(
+                "method descriptor quantization differs from runtime quantization"
+            )
         if self.runtime_artifact is not None and not isinstance(self.runtime_artifact, OpenVlaRuntimeArtifact):
             raise TypeError("runtime_artifact must be an OpenVlaRuntimeArtifact or None")
         if self.runtime_artifact is not None:
@@ -139,6 +170,7 @@ class OpenVlaVanillaSettings:
             "unnorm_key": self.unnorm_key, "canonical_camera_name": self.canonical_camera_name,
             "input_image_shape": list(self.input_image_shape), "device": self.device,
             "model_dtype": self.model_dtype.value, "attention_implementation": self.attention_implementation,
+            "quantization": self.quantization.configuration(),
             "local_files_only": self.local_files_only, "trust_remote_code": self.trust_remote_code,
             "deterministic_inference": self.deterministic_inference, "prompt_template": self.prompt_template.value,
             "target_action_spec": _action_spec_dict(self.target_action_spec),

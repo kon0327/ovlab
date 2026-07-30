@@ -1,6 +1,10 @@
 schema_version: "0.1.0"
 kind: experiment
 
+deployment:
+  profile: openvla
+  renderer: egl
+
 experiment:
   id: libero10-openvla-lora-merged-rpc-smoke
   name: Merged OpenVLA-LoRA methodological reference on LIBERO-10 through local RPC

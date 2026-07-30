@@ -1,6 +1,10 @@
 schema_version: "0.1.0"
 kind: experiment
 
+deployment:
+  profile: openvla
+  renderer: egl
+
 experiment:
   id: libero10-openvla-production-qualification
   name: Complete merged OpenVLA LIBERO-10 production qualification episode

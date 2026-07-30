@@ -31,7 +31,7 @@ LABEL org.opencontainers.image.title="OVLAB OpenVLA-OFT policy service" \
       org.opencontainers.image.description="Offline OpenVLA-OFT service with its distinct dependency closure; no LIBERO" \
       cz.cvut.ovlab.role="policy-openvla-oft" \
       cz.cvut.ovlab.build-target="production" \
-      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-v1" \
+      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-config-bundle-v2" \
       cz.cvut.ovlab.python.version="3.10.20" \
       cz.cvut.ovlab.cuda.version="12.1" \
       cz.cvut.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1-oft-bc339d9;peft=0.11.1;flash-attn=2.5.5" \
@@ -69,7 +69,6 @@ RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
 COPY --from=wheel-builder /wheelhouse /wheelhouse
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /wheelhouse/*.whl && rm -rf /wheelhouse
 COPY code /opt/ovlab/code
-COPY configs /opt/ovlab/configs
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 COPY external/openvla-oft /opt/ovlab/external/openvla-oft

@@ -1,6 +1,10 @@
 schema_version: "0.1.0"
 kind: experiment
 
+deployment:
+  profile: oft
+  renderer: egl
+
 experiment:
   id: libero10-openvla-oft-rpc-episode
   name: One complete native OpenVLA-OFT episode on LIBERO-10 through local RPC

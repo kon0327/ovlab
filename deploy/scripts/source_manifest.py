@@ -10,7 +10,9 @@ from pathlib import Path
 import subprocess
 
 
-EXCLUDED_PREFIXES = (".git/", "runs/", "checkpoints/", "datasets/", "lab/reports/")
+EXCLUDED_PREFIXES = (
+    ".git/", "configs/", "runs/", "checkpoints/", "datasets/", "lab/reports/",
+)
 
 
 def _git(root: Path, *arguments: str, check: bool = True) -> str:
@@ -33,10 +35,20 @@ def _included(relative: str) -> bool:
     return not relative.startswith(EXCLUDED_PREFIXES) and relative != ".git"
 
 
+def _included_status(line: str) -> bool:
+    """Return whether a porcelain row can change built image contents."""
+    paths = line[3:].split(" -> ") if len(line) >= 4 else ()
+    return any(_included(path.strip('"')) for path in paths)
+
+
 def build_manifest(root: Path) -> dict[str, object]:
     root = root.resolve()
     head = _git(root, "rev-parse", "HEAD").strip()
-    status = tuple(line for line in _git(root, "status", "--short", "--untracked-files=all").splitlines() if line)
+    status = tuple(
+        line
+        for line in _git(root, "status", "--short", "--untracked-files=all").splitlines()
+        if line and _included_status(line)
+    )
     tracked = _git(root, "ls-files", "-z").split("\0")
     untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
     paths = sorted({item for item in (*tracked, *untracked) if item and _included(item)})

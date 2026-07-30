@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import runpy
 import subprocess
 
 from ovlab_benchctl.application import OvlabApplication
@@ -37,7 +38,12 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
         assert "cz.cvut.ovlab.dependency-lock.sha256" in text
         assert 'org.opencontainers.image.licenses="NOASSERTION"' in text
         assert 'cz.cvut.ovlab.build-target="production"' in text
-        assert 'cz.cvut.ovlab.deployment.contract="resolved-checkpoint-v1"' in text
+        expected_contract = (
+            "resolved-checkpoint-quantization-config-bundle-v2"
+            if name == "Dockerfile.openvla"
+            else "resolved-checkpoint-config-bundle-v2"
+        )
+        assert f'cz.cvut.ovlab.deployment.contract="{expected_contract}"' in text
 
 
 def test_role_closures_do_not_cross_heavy_runtime_boundaries():
@@ -72,6 +78,10 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     assert "OVLAB_DEPLOYMENT_MANIFEST_SHA256" in COMPOSE
     assert "OVLAB_CONTAINER_RUNTIME_VERSION" in COMPOSE
     assert "OVLAB_MOUNT_CONTRACT" in COMPOSE
+    assert COMPOSE.count("OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-") == 4
+    assert COMPOSE.count(
+        "OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver"
+    ) == 4
     assert "service, health, --socket, /run/ovlab/policy.sock" in COMPOSE
     assert COMPOSE.count("source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?") == 2
     assert "../../checkpoints" not in COMPOSE
@@ -80,7 +90,11 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     assert COMPOSE.count("source: ${OVLAB_DATASETS_PATH:?") == 2
     assert "../../datasets" not in COMPOSE
     assert "target: /datasets\n        read_only: true" in COMPOSE
-    assert COMPOSE.count("${OVLAB_EXPERIMENT_CONFIG:-") == 4
+    assert COMPOSE.count("${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver") == 4
+    assert COMPOSE.count("OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?") == 4
+    assert "source: ${OVLAB_CONFIG_BUNDLE_PATH:?" in COMPOSE
+    assert "target: /opt/ovlab/configs" in COMPOSE
+    assert "config-bundle-ro" in COMPOSE
 
 
 def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
@@ -116,6 +130,12 @@ def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
         assert 'sha256 = "' in pylock
         assert "--hash=sha256:" in requirements
     assert "rich==15.0.0" in (locks / "openvla.requirements.txt").read_text(encoding="utf-8")
+    openvla_lock = (locks / "openvla.requirements.txt").read_text(encoding="utf-8")
+    assert (
+        "bitsandbytes==0.43.1 "
+        "--hash=sha256:a81c826d576d6d691c7b4a7491c8fdc0f37f769795d6ca2e54afa605d2c260a3"
+    ) in openvla_lock
+    assert "bitsandbytes=0.43.1" in _dockerfile("Dockerfile.openvla")
     assert "rich==15.0.0" in (locks / "openvla-oft.requirements.txt").read_text(encoding="utf-8")
     assert "imageio-ffmpeg==0.6.0" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
     oft = (locks / "openvla-oft.pylock.toml").read_text(encoding="utf-8")
@@ -198,7 +218,47 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
-    assert document["dirty"] is bool(status.strip())
+    source_manifest = runpy.run_path(str(ROOT / "deploy/scripts/source_manifest.py"))
+    included_status = tuple(
+        line for line in status.splitlines()
+        if source_manifest["_included_status"](line)
+    )
+    assert document["dirty"] is bool(included_status)
+    assert not any(row["path"].startswith("configs/") for row in document["files"])
+    assert source_manifest["_included"]("code/apps/benchctl/pyproject.toml") is True
+    assert source_manifest["_included"]("configs/experiments/new.yaml") is False
+
+
+def test_production_images_require_runtime_configuration_bundle():
+    for name in ("Dockerfile.benchmark", "Dockerfile.openvla", "Dockerfile.openvla-oft"):
+        assert "COPY configs " not in _dockerfile(name)
+
+
+def test_portable_config_change_does_not_invalidate_image_source_hash(tmp_path):
+    repository = tmp_path / "repository"
+    (repository / "code").mkdir(parents=True)
+    (repository / "configs/experiments").mkdir(parents=True)
+    source = repository / "code/runtime.py"
+    config = repository / "configs/experiments/test.yaml"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    config.write_text("name: first\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.email", "ovlab@example.invalid"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.name", "OVLAB Test"], cwd=repository, check=True)
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repository, check=True)
+    build_manifest = runpy.run_path(
+        str(ROOT / "deploy/scripts/source_manifest.py")
+    )["build_manifest"]
+
+    initial = build_manifest(repository)["source_content_sha256"]
+    config.write_text("name: second\n", encoding="utf-8")
+    config_only = build_manifest(repository)["source_content_sha256"]
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    code_changed = build_manifest(repository)["source_content_sha256"]
+
+    assert config_only == initial
+    assert code_changed != initial
 
 
 def test_container_root_revision_and_deployment_provenance_are_explicit(monkeypatch):
@@ -222,6 +282,9 @@ def test_container_root_revision_and_deployment_provenance_are_explicit(monkeypa
     first = app._deployment_provenance({"OVLAB_IMAGE_DIGEST": "sha256:first"})
     second = app._deployment_provenance({"OVLAB_IMAGE_DIGEST": "sha256:second"})
     assert first != second
+    assert app._deployment_provenance({"OVLAB_CONFIG_BUNDLE_SHA256": "sha256:bundle"}) == {
+        "config_bundle_sha256": "sha256:bundle"
+    }
 
 
 def test_test_provider_is_excluded_from_every_production_dockerfile():

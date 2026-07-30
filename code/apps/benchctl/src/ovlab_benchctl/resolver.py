@@ -1,6 +1,7 @@
 """Explicit experiment composition and typed settings construction."""
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 import hashlib
 import json
@@ -22,10 +23,10 @@ from ovlab_metrics import (
 )
 from ovlab_openvla_common import (
     LiberoActionCodecConfig, OpenVlaModelSource, OpenVlaRuntimeArtifact, action_specs_match,
-    method_descriptor_from_registry,
+    method_descriptor_from_registry, vanilla_base_method_descriptor,
 )
 from ovlab_openvla_vanilla import (
-    InferenceSynchronization, ModelDType, OpenVlaVanillaSettings,
+    InferenceSynchronization, ModelDType, ModelQuantization, OpenVlaVanillaSettings,
 )
 from ovlab_openvla_oft import OpenVlaOftArtifact, OpenVlaOftSettings
 from ovlab_runner import (
@@ -197,7 +198,11 @@ class ConfigResolver:
         execution_profile_doc = None
         renderer = None
         if components["benchmark"]["type"] == "libero":
-            reference = execution_profile or "profiles/libero-bench-egl.yaml"
+            configured_renderer = experiment_doc.get("deployment", {}).get("renderer", "egl")
+            reference = execution_profile or {
+                "egl": "profiles/libero-bench-egl.yaml",
+                "glfw": "profiles/libero-playground-glfw.yaml",
+            }[configured_renderer]
             execution_profile_path = Path(reference)
             if execution_profile_path.is_absolute():
                 execution_profile_path = self._inside(execution_profile_path, self.config_root, "execution_profile")
@@ -239,6 +244,20 @@ class ConfigResolver:
             "resource_registry": registry,
         }
         execution = {"scientific_config": scientific, "resolved_resources": resources}
+        if "deployment" in experiment_doc:
+            configured_deployment = deepcopy(experiment_doc["deployment"])
+            resolved_profile = values.get(
+                "OVLAB_DEPLOYMENT_PROFILE", configured_deployment["profile"]
+            )
+            if resolved_profile not in ("openvla", "oft"):
+                raise ConfigSchemaError("OVLAB_DEPLOYMENT_PROFILE must be one of: openvla, oft")
+            execution["deployment"] = {
+                "configured": configured_deployment,
+                "resolved": {
+                    "profile": resolved_profile,
+                    "renderer": renderer.as_dict() if renderer is not None else None,
+                },
+            }
         if execution_profile_doc is not None:
             execution["execution_profile"] = execution_profile_doc
             execution["libero"] = {"renderer": renderer.as_dict()}
@@ -248,6 +267,22 @@ class ConfigResolver:
         )
 
     def _cross_validate_refs(self, experiment, components, paths, action_spec):
+        deployment = experiment.get("deployment")
+        if deployment is not None:
+            expected_profile = {
+                "openvla_vanilla": "openvla",
+                "openvla_lora_merged": "openvla",
+                "openvla_oft": "oft",
+            }.get(components["policy"]["type"])
+            if expected_profile is None:
+                raise ConfigCompatibilityError(
+                    f"policy type {components['policy']['type']!r} has no deployment profile"
+                )
+            if deployment["profile"] != expected_profile:
+                raise ConfigCompatibilityError(
+                    f"deployment profile {deployment['profile']!r} is incompatible with policy "
+                    f"type {components['policy']['type']!r}; expected {expected_profile!r}"
+                )
         expected = paths["action_interface"]
         for owner in ("benchmark", "policy"):
             reference = components[owner]["settings"]["action"]["interface_ref"]
@@ -381,7 +416,8 @@ class ConfigResolver:
                 target_action_spec=action_spec, record_raw_output=settings["raw_output"]["enabled"],
                 metadata={"execution_strategy": "open_loop_chunk"},
             )
-        method_descriptor = None
+        quantization = ModelQuantization(runtime["quantization"])
+        method_descriptor = vanilla_base_method_descriptor()
         runtime_artifact = None
         if doc["type"] == "openvla_lora_merged":
             if settings["checkpoint_id"] != settings["processor_id"]:
@@ -405,20 +441,24 @@ class ConfigResolver:
                 raise ConfigCompatibilityError("merged LIBERO-10 LoRA is not a cross-suite acceptance policy")
         elif "artifact" in model or "method" in model:
             raise ConfigCompatibilityError("merged LoRA full weights cannot be classified as OpenVLA Vanilla")
-        kwargs = {}
-        if method_descriptor is not None:
-            kwargs["method_descriptor"] = method_descriptor
-            kwargs["runtime_artifact"] = runtime_artifact
+        method_descriptor = replace(
+            method_descriptor,
+            quantization=quantization.value,
+            declared_base_revision=(
+                method_descriptor.declared_base_revision or model["revision"]
+            ),
+        )
         return OpenVlaVanillaSettings(
             source(model), settings["unnorm_key"], processor=source(processor),
             canonical_camera_name=settings["input"]["camera"], input_image_shape=(obs["height"], obs["width"], 3),
             device=device, model_dtype=ModelDType(runtime["dtype"]),
+            quantization=quantization,
             attention_implementation=runtime["attention_implementation"], local_files_only=runtime["local_files_only"],
             trust_remote_code=runtime["trust_remote_code"], deterministic_inference=runtime["deterministic"],
             target_action_spec=action_spec, action_codec=LiberoActionCodecConfig(),
             synchronization=InferenceSynchronization.IF_CUDA if runtime["synchronize_inference"] else InferenceSynchronization.NONE,
             record_raw_output=settings["raw_output"]["enabled"],
-            **kwargs,
+            method_descriptor=method_descriptor, runtime_artifact=runtime_artifact,
         )
 
     @staticmethod

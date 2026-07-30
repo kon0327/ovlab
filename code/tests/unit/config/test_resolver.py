@@ -9,7 +9,7 @@ from ovlab_benchmarks.libero import LiberoAdapterSettings, LiberoRendererBackend
 from ovlab_core.contracts import GripperConvention
 from ovlab_metrics import ActionModificationMetricConfig, RepeatedNoOpMetricConfig
 from ovlab_openvla_common import OpenVlaArtifactForm, OpenVlaMethodFamily, action_specs_match
-from ovlab_openvla_vanilla import ModelDType, OpenVlaVanillaSettings
+from ovlab_openvla_vanilla import ModelDType, ModelQuantization, OpenVlaVanillaSettings
 from ovlab_benchctl import (
     ConfigCompatibilityError, ConfigReferenceError, ConfigResolver, ConfigSchemaError,
     MockBenchmarkSettings, MockPolicySettings, ResolvedConfigWriteError, load,
@@ -63,10 +63,13 @@ def test_every_versioned_component_is_schema_valid():
         "benchmarks/libero/spatial-smoke.yaml": "benchmark",
         "benchmarks/libero/libero10-smoke.yaml": "benchmark",
         "benchmarks/libero/libero10-oft-five-tasks.yaml": "benchmark",
+        "benchmarks/libero/libero10-five-tasks.yaml": "benchmark",
         "policies/mock/base.yaml": "policy",
         "policies/mock/libero-noop.yaml": "policy",
         "policies/openvla-vanilla/base.yaml": "policy",
+        "policies/openvla-vanilla/4bit.yaml": "policy",
         "policies/openvla-lora/merged-libero10.yaml": "policy",
+        "policies/openvla-lora/merged-libero10-4bit.yaml": "policy",
         "interfaces/actions/mock-delta-gripper-v1.yaml": "action_interface",
         "interfaces/actions/libero-osc-pose-v1.yaml": "action_interface",
         "metrics/action-safe-v1.yaml": "metric_set",
@@ -84,6 +87,10 @@ def test_every_versioned_component_is_schema_valid():
         "experiments/libero-vanilla-smoke.yaml": "experiment",
         "experiments/libero10-vanilla-rpc-smoke.yaml": "experiment",
         "experiments/libero10-lora-merged-rpc-smoke.yaml": "experiment",
+        "experiments/libero10-lora-merged-4bit-rpc-smoke.yaml": "experiment",
+        "experiments/libero10-lora-merged-4bit-five-episodes.yaml": "experiment",
+        "experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml": "experiment",
+        "experiments/libero10-openvla-vanilla-4bit-rpc-smoke.yaml": "experiment",
         "experiments/libero10-openvla-oft-rpc-episode.yaml": "experiment",
         "experiments/libero10-openvla-oft-rpc-five-episodes.yaml": "experiment",
     }
@@ -130,6 +137,77 @@ def test_oft_five_episode_experiment_selects_five_distinct_tasks(tmp_path):
     assert resolved.protocol_settings.rollouts_per_task == 1
     assert resolved.protocol_settings.maximum_episode_steps == 520
     assert resolved.protocol_settings.action_execution_policy.mode.value == "open_loop_chunk"
+
+
+def test_vanilla_4bit_five_episode_experiment_is_cross_suite_and_complete(tmp_path):
+    resolved = resolver().resolve(
+        "configs/experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml",
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-bench-egl.yaml",
+        environment={},
+    )
+    assert resolved.benchmark_settings.suite_names == ("LIBERO-10",)
+    assert resolved.benchmark_settings.task_indices == (0, 1, 2, 3, 4)
+    assert resolved.protocol_settings.rollouts_per_task == 1
+    assert resolved.protocol_settings.maximum_episode_steps == 520
+    assert resolved.protocol_settings.action_execution_policy.mode.value == "receding_horizon"
+    assert resolved.policy_settings.model.source == "openvla/openvla-7b"
+    assert resolved.policy_settings.unnorm_key == "bridge_orig"
+    assert resolved.policy_settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT
+    assert resolved.policy_settings.method_descriptor.family is OpenVlaMethodFamily.VANILLA
+    assert resolved.policy_settings.method_descriptor.quantization == "4bit"
+    assert resolved.policy_settings.method_descriptor.training_quantization == "none"
+
+
+def test_merged_lora_4bit_preserves_training_and_artifact_identity(tmp_path):
+    resolved = resolver().resolve(
+        "configs/experiments/libero10-lora-merged-4bit-rpc-smoke.yaml",
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-bench-egl.yaml",
+        environment={},
+    )
+    settings = resolved.policy_settings
+    assert settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT
+    assert settings.method_descriptor.family is OpenVlaMethodFamily.LORA
+    assert settings.method_descriptor.merge_status.value == "merged"
+    assert settings.method_descriptor.quantization == "4bit"
+    assert settings.method_descriptor.training_quantization == "none"
+    assert settings.runtime_artifact is not None
+
+
+def test_merged_lora_4bit_five_episode_experiment_uses_standard_observations(tmp_path):
+    resolved = resolver().resolve(
+        "configs/experiments/libero10-lora-merged-4bit-five-episodes.yaml",
+        local_profile=profile(tmp_path),
+        execution_profile="profiles/libero-bench-egl.yaml",
+        environment={},
+    )
+    assert resolved.benchmark_settings.task_indices == (0, 1, 2, 3, 4)
+    assert resolved.benchmark_settings.observation_profile.value == "primary_rgb"
+    assert resolved.protocol_settings.rollouts_per_task == 1
+    assert resolved.protocol_settings.maximum_episode_steps == 520
+    assert resolved.protocol_settings.action_execution_policy.mode.value == "receding_horizon"
+    assert resolved.policy_settings.method_descriptor.family is OpenVlaMethodFamily.LORA
+    assert resolved.policy_settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT
+
+
+def test_runtime_quantization_changes_scientific_hash(tmp_path):
+    root = copied_configs(tmp_path)
+    experiment = root / "experiments/libero10-lora-merged-rpc-smoke.yaml"
+    selected_profile = profile(tmp_path, suffix="same-machine")
+    configured = ConfigResolver(root, repository_root=tmp_path)
+    full = configured.resolve(experiment, local_profile=selected_profile, environment={})
+    policy = root / "policies/openvla-lora/merged-libero10.yaml"
+    policy.write_text(
+        policy.read_text(encoding="utf-8").replace(
+            "quantization: none", "quantization: 4bit"
+        ),
+        encoding="utf-8",
+    )
+    quantized = configured.resolve(experiment, local_profile=selected_profile, environment={})
+    assert full.scientific_config_hash != quantized.scientific_config_hash
+    assert full.policy_settings.method_descriptor.quantization == "none"
+    assert quantized.policy_settings.method_descriptor.quantization == "4bit"
 
 
 def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
@@ -343,6 +421,51 @@ def test_renderer_profiles_are_execution_only_and_preserve_scientific_contracts(
     assert egl.benchmark_settings.base_seed == glfw.benchmark_settings.base_seed
     assert action_specs_match(egl.action_spec, glfw.action_spec)
     assert egl.metric_settings == glfw.metric_settings
+
+
+def test_experiment_renderer_default_is_execution_only_and_cli_profile_can_override_it(tmp_path):
+    root = copied_configs(tmp_path)
+    experiment = root / "experiments/libero-spatial-vanilla.yaml"
+    selected_profile = profile(tmp_path, suffix="deployment-default")
+    selected_resolver = ConfigResolver(root, repository_root=tmp_path)
+
+    egl = selected_resolver.resolve(
+        experiment,
+        local_profile=selected_profile,
+        environment={},
+    )
+    experiment.write_text(
+        experiment.read_text(encoding="utf-8").replace("renderer: egl", "renderer: glfw"),
+        encoding="utf-8",
+    )
+    glfw = selected_resolver.resolve(
+        experiment,
+        local_profile=selected_profile,
+        environment={"OVLAB_DEPLOYMENT_PROFILE": "openvla"},
+    )
+
+    assert egl.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.EGL
+    assert glfw.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.GLFW
+    assert egl.scientific_config_hash == glfw.scientific_config_hash
+    assert egl.execution_config_hash != glfw.execution_config_hash
+    assert glfw.execution_config["deployment"]["configured"]["renderer"] == "glfw"
+    assert glfw.execution_config["deployment"]["resolved"]["profile"] == "openvla"
+
+
+def test_experiment_rejects_deployment_profile_incompatible_with_policy(tmp_path):
+    root = copied_configs(tmp_path)
+    experiment = root / "experiments/libero10-openvla-oft-rpc-smoke.yaml"
+    experiment.write_text(
+        experiment.read_text(encoding="utf-8").replace("profile: oft", "profile: openvla"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigCompatibilityError, match="incompatible with policy type"):
+        ConfigResolver(root, repository_root=tmp_path).resolve(
+            experiment,
+            local_profile=profile(tmp_path, suffix="profile-mismatch"),
+            environment={},
+        )
 
 
 def test_unsupported_renderer_backend_is_rejected_without_native_imports(tmp_path):

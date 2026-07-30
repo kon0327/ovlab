@@ -73,8 +73,14 @@ def _parser() -> argparse.ArgumentParser:
     deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
     deploy_run = deploy_commands.add_parser("run", help="run one experiment through Docker Compose")
     deploy_run.add_argument("experiment")
-    deploy_run.add_argument("--profile", choices=("openvla", "oft"), required=True)
-    deploy_run.add_argument("--renderer", choices=("egl", "glfw"), default="egl")
+    deploy_run.add_argument(
+        "--profile", choices=("openvla", "oft"),
+        help="override deployment.profile from the experiment",
+    )
+    deploy_run.add_argument(
+        "--renderer", choices=("egl", "glfw"),
+        help="override deployment.renderer from the experiment",
+    )
     deploy_run.add_argument("--env-file", default="deploy/compose/.env")
     deploy_run.add_argument(
         "--local-profile",

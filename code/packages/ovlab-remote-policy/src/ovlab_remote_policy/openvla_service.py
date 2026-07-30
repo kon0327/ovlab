@@ -7,14 +7,16 @@ import importlib.metadata
 import os
 import platform
 import sys
+from dataclasses import replace
 from collections.abc import Mapping
 
 import numpy as np
 
-from ovlab_openvla_common import OpenVlaModelSource
+from ovlab_openvla_common import OpenVlaModelSource, vanilla_base_method_descriptor
 from ovlab_openvla_vanilla import (
     InferenceSynchronization,
     ModelDType,
+    ModelQuantization,
     OpenVlaVanillaAdapter,
     OpenVlaVanillaSettings,
 )
@@ -31,6 +33,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--dtype", choices=("bfloat16",), default="bfloat16")
     parser.add_argument("--attention-implementation", choices=("flash_attention_2",), default="flash_attention_2")
+    parser.add_argument("--quantization", choices=("none", "4bit"), default="none")
     return parser.parse_args()
 
 
@@ -44,6 +47,16 @@ def _version(distribution: str) -> str:
 def _identity_provider(capabilities) -> Mapping[str, object]:
     metadata = capabilities.metadata
     checkpoint = dict(metadata["checkpoint_identity"])
+    runtime = dict(metadata.get("runtime", {}))
+    method = dict(metadata["method_descriptor"])
+    if "total_parameter_count" in runtime:
+        method["total_runtime_parameter_count"] = runtime["total_parameter_count"]
+    if "load_counts" in runtime:
+        method["load_counts"] = dict(runtime["load_counts"])
+    if "inference_parameter_trainability" in runtime:
+        method["runtime_parameter_trainability"] = runtime[
+            "inference_parameter_trainability"
+        ]
     return {
         "model_identity": checkpoint,
         "normalization_identity": {
@@ -63,10 +76,12 @@ def _identity_provider(capabilities) -> Mapping[str, object]:
             "torch": _version("torch"),
             "transformers": _version("transformers"),
             "flash_attn": _version("flash-attn"),
+            "bitsandbytes": _version("bitsandbytes"),
             "ovlab_remote_policy": _version("ovlab-remote-policy"),
             "policy_component": f"{capabilities.component_name}@{capabilities.component_version}",
             "protocol_component": "ovlab-remote-policy@0.1.0",
         },
+        "method_descriptor": method,
     }
 
 
@@ -79,18 +94,26 @@ def main() -> int:
             "the Vanilla service is reserved for openvla/openvla-7b; use the merged-LoRA "
             "service for openvla/openvla-7b-finetuned-libero-10"
         )
+    quantization = ModelQuantization(args.quantization)
+    descriptor = replace(
+        vanilla_base_method_descriptor(),
+        declared_base_revision=args.revision,
+        quantization=quantization.value,
+    )
     settings = OpenVlaVanillaSettings(
         model=OpenVlaModelSource(args.checkpoint, revision=args.revision),
         processor=OpenVlaModelSource(args.checkpoint, revision=args.revision),
         unnorm_key=args.unnorm_key,
         device=args.device,
         model_dtype=ModelDType.BFLOAT16,
+        quantization=quantization,
         attention_implementation=args.attention_implementation,
         local_files_only=True,
         trust_remote_code=True,
         deterministic_inference=True,
         synchronization=InferenceSynchronization.IF_CUDA,
         record_raw_output=False,
+        method_descriptor=descriptor,
         metadata={"reference": "unadapted OpenVLA base model"},
     )
     service = PolicyService(

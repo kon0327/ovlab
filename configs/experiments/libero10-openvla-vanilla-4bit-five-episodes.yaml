@@ -1,0 +1,22 @@
+schema_version: "0.1.0"
+kind: experiment
+
+deployment:
+  profile: openvla
+  renderer: egl
+
+experiment:
+  id: libero10-openvla-vanilla-4bit-five-episodes
+  name: Five cross-suite OpenVLA Vanilla NF4 episodes across LIBERO-10 tasks
+  tags: [libero-10, vanilla, base-model, 4bit, nf4, rpc, five-episodes, cross-suite]
+
+components:
+  benchmark: benchmarks/libero/libero10-five-tasks.yaml
+  policy: policies/openvla-vanilla/4bit.yaml
+  metrics: metrics/action-safe-v1.yaml
+  protocol: protocols/libero-official-episode-v1.yaml
+  action_interface: interfaces/actions/libero-osc-pose-v1.yaml
+  artifacts: artifacts/filesystem.yaml
+
+resources:
+  registry: resources/registry.yaml

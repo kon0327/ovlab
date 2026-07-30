@@ -60,7 +60,12 @@ def header(doc: dict[str, Any], path: str, kind: str, *, typed: bool = False, id
 
 def validate_experiment(doc, path):
     header(doc, path, "experiment")
-    mapping(doc, path, required=("schema_version", "kind", "experiment", "components", "resources"))
+    mapping(
+        doc,
+        path,
+        required=("schema_version", "kind", "experiment", "components", "resources"),
+        optional=("deployment",),
+    )
     experiment = mapping(doc["experiment"], f"{path}.experiment", required=("id", "name", "tags"))
     non_empty_string(experiment["id"], f"{path}.experiment.id")
     non_empty_string(experiment["name"], f"{path}.experiment.name")
@@ -72,6 +77,14 @@ def validate_experiment(doc, path):
     resources = mapping(doc["resources"], f"{path}.resources", required=("registry",))
     for key, value in components.items(): exact_type(value, str, f"{path}.components.{key}")
     exact_type(resources["registry"], str, f"{path}.resources.registry")
+    if "deployment" in doc:
+        deployment = mapping(
+            doc["deployment"],
+            f"{path}.deployment",
+            required=("profile", "renderer"),
+        )
+        enum(deployment["profile"], ("openvla", "oft"), f"{path}.deployment.profile")
+        enum(deployment["renderer"], ("egl", "glfw"), f"{path}.deployment.renderer")
 
 
 def validate_benchmark(doc, path):
@@ -171,11 +184,19 @@ def validate_policy(doc, path):
     else:
         input_ = mapping(settings["input"], f"{path}.settings.input", required=("camera",))
         exact_type(input_["camera"], str, f"{path}.settings.input.camera")
-    runtime = mapping(settings["runtime"], f"{path}.settings.runtime", required=(
-        "device_resource", "dtype", "attention_implementation", "local_files_only", "trust_remote_code",
-        "deterministic", "synchronize_inference"))
+    runtime_keys = (
+        "device_resource", "dtype", "attention_implementation", "local_files_only",
+        "trust_remote_code", "deterministic", "synchronize_inference",
+    )
+    if doc["type"] != "openvla_oft":
+        runtime_keys += ("quantization",)
+    runtime = mapping(
+        settings["runtime"], f"{path}.settings.runtime", required=runtime_keys
+    )
     exact_type(runtime["device_resource"], str, f"{path}.settings.runtime.device_resource")
     enum(runtime["dtype"], ("bfloat16", "float16", "float32"), f"{path}.settings.runtime.dtype")
+    if doc["type"] != "openvla_oft":
+        enum(runtime["quantization"], ("none", "4bit"), f"{path}.settings.runtime.quantization")
     if runtime["attention_implementation"] is not None: exact_type(runtime["attention_implementation"], str, f"{path}.settings.runtime.attention_implementation")
     for key in ("local_files_only", "trust_remote_code", "deterministic", "synchronize_inference"):
         exact_type(runtime[key], bool, f"{path}.settings.runtime.{key}")

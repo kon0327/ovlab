@@ -11,10 +11,12 @@ from .errors import (
     OpenVlaVanillaError,
 )
 from .runtime import HuggingFaceOpenVlaRuntime, OpenVlaRuntime, RuntimePrediction
-from .settings import InferenceSynchronization, ModelDType, OpenVlaVanillaSettings
+from .settings import (
+    InferenceSynchronization, ModelDType, ModelQuantization, OpenVlaVanillaSettings,
+)
 
 __all__ = [
-    "HuggingFaceOpenVlaRuntime", "InferenceSynchronization", "ModelDType",
+    "HuggingFaceOpenVlaRuntime", "InferenceSynchronization", "ModelDType", "ModelQuantization",
     "OpenVlaActionDecodeError", "OpenVlaCheckpointError", "OpenVlaDependencyError",
     "OpenVlaInferenceError", "OpenVlaLoadError", "OpenVlaPreprocessingError",
     "OpenVlaRuntime", "OpenVlaVanillaAdapter", "OpenVlaVanillaError",

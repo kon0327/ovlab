@@ -8,8 +8,9 @@ from ovlab_core.contracts import GripperConvention
 from ovlab_openvla_common import (
     LiberoActionCodec, OpenVlaActionCodecError, OpenVlaDecodedAction,
     OpenVlaModelSource, OpenVlaPromptFormatter, libero_target_action_spec,
+    vanilla_base_method_descriptor,
 )
-from ovlab_openvla_vanilla import ModelDType, OpenVlaVanillaSettings
+from ovlab_openvla_vanilla import ModelDType, ModelQuantization, OpenVlaVanillaSettings
 
 
 def test_exact_prompt_regression_and_empty_rejection():
@@ -53,6 +54,34 @@ def test_settings_are_immutable_validated_and_hash_deterministic(tmp_path):
     wrong = replace(libero_target_action_spec(), gripper_convention=GripperConvention.OPEN_POSITIVE)
     with pytest.raises(ValueError, match="incompatible"):
         OpenVlaVanillaSettings(source, "bridge_orig", target_action_spec=wrong)
+
+
+def test_quantization_is_explicit_and_part_of_settings_identity(tmp_path):
+    source = OpenVlaModelSource(str(tmp_path), revision="abc")
+    full = OpenVlaVanillaSettings(source, "bridge_orig")
+    descriptor = replace(vanilla_base_method_descriptor(), quantization="4bit")
+    quantized = OpenVlaVanillaSettings(
+        source,
+        "bridge_orig",
+        quantization=ModelQuantization.BITSANDBYTES_NF4_4BIT,
+        method_descriptor=descriptor,
+    )
+    assert full.settings_hash != quantized.settings_hash
+    assert quantized.canonical_dict()["quantization"] == {
+        "backend": "bitsandbytes",
+        "bits": 4,
+        "compute_dtype": "bfloat16",
+        "double_quantization": True,
+        "mode": "4bit",
+        "quant_type": "nf4",
+        "storage_dtype": "float16",
+    }
+    with pytest.raises(ValueError, match="descriptor quantization"):
+        OpenVlaVanillaSettings(
+            source,
+            "bridge_orig",
+            quantization=ModelQuantization.BITSANDBYTES_NF4_4BIT,
+        )
 
 
 def test_import_is_torch_free():

@@ -58,7 +58,8 @@ bash deploy/scripts/build-images.sh policy-openvla-oft
 
 The build uses pinned base-image digests and hash-locked Python artifacts. It
 embeds a source manifest and marks an image as dirty when the source worktree is
-dirty. Building does not modify the host Conda environments.
+dirty. Building does not modify the host Conda environments. Experiment YAML is
+not copied into production images.
 
 Inspect the resulting identities:
 
@@ -135,10 +136,13 @@ Preview the resolved orchestration without starting containers:
 ```
 
 The real command performs its own `docker compose config --quiet` preflight. It
-also verifies a versioned deployment-contract label on both selected images, so
-a stale image fails with an exact `build-images.sh` command before checkpoint
-verification or container startup. After changing packaged source, rebuild the
-selected topology, for example:
+also verifies the versioned deployment contract and exact source-manifest label
+on both selected images. The CLI validates the selected experiment and its
+transitive `extends`, component, registry and renderer-profile closure, hashes
+that closure and mounts it into both services at `/opt/ovlab/configs:ro`. The
+temporary host bundle is removed after Compose teardown. New or changed YAML
+therefore needs no image rebuild; packaged Python source, dependency locks,
+Dockerfiles and bundled external source still do. Rebuild those changes with:
 
 ```bash
 bash deploy/scripts/build-images.sh benchmark policy-openvla-oft

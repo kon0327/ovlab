@@ -10,7 +10,7 @@ environment. The authoritative source is pinned at OpenVLA commit
 
 `OpenVlaVanillaSettings` is immutable and records the model and optional
 processor source, revision/checksum metadata, `unnorm_key`, device, explicit
-BF16/FP16/FP32 dtype, attention implementation, canonical camera, codec,
+BF16/FP16/FP32 dtype, inference quantization, attention implementation, canonical camera, codec,
 synchronization, and raw-output policy. Its canonical JSON representation has
 a deterministic SHA-256 hash. `local_files_only=True` is the default and the
 production adapter currently rejects disabling it. Repository identifiers are
@@ -20,18 +20,34 @@ called; OVLAB never downloads or copies checkpoints.
 Initialization uses the pinned API:
 
 ```python
-AutoProcessor.from_pretrained(local_snapshot, trust_remote_code=True, local_files_only=True)
+# Register OpenVLAConfig, PrismaticProcessor and OpenVLAForActionPrediction
+# from the pinned external/openvla source before loading.
+config = AutoConfig.from_pretrained(
+    local_snapshot, trust_remote_code=False, local_files_only=True
+)
+AutoProcessor.from_pretrained(
+    local_snapshot, config=config, trust_remote_code=False, local_files_only=True
+)
 AutoModelForVision2Seq.from_pretrained(
     local_snapshot,
+    config=config,
     torch_dtype=torch.bfloat16,
     low_cpu_mem_usage=True,
-    trust_remote_code=True,
+    trust_remote_code=False,
     local_files_only=True,
     attn_implementation="flash_attention_2",
 )
 ```
 
-The model is put in evaluation mode and moved to the configured device. Each
+Fine-tuned OpenVLA snapshots refer their AutoClass implementation to the base
+`openvla/openvla-7b` Hub repository. Registering the matching classes from the
+pinned local source avoids a hidden second Hub-code dependency in the offline
+container without modifying the immutable checkpoint.
+
+With `quantization: none`, the model is put in evaluation mode and moved to the
+configured device. With `quantization: 4bit`, the pinned BitsAndBytes 0.43.1
+NF4 recipe uses BF16 compute, FP16 storage and double quantization; BitsAndBytes
+owns model placement and OVLAB must not call `model.to(...)`. Each
 prediction calls the processor as `processor(prompt, PIL.Image)` and then calls
 `model.predict_action(..., unnorm_key=..., do_sample=False)` under
 `torch.inference_mode()`. The configured normalization statistics are checked
@@ -119,5 +135,6 @@ legacy regression; otherwise its deterministic synthetic image is useful only
 as a load/inference smoke input. `OVLAB_RUN_LIBERO_INTEGRATION=1` additionally
 enables the bounded task-0 runner test and requires existing LIBERO assets.
 
-RPC, Docker, quantization, LoRA, OFT, QuIC, training, and checkpoint acquisition
-are deliberately deferred.
+LoRA, OFT, QuIC and training remain separate policy-method contracts. Docker
+deployments use the same quantization setting and record it in scientific
+configuration and policy-service provenance.

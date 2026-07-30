@@ -1,6 +1,10 @@
 schema_version: "0.1.0"
 kind: experiment
 
+deployment:
+  profile: openvla
+  renderer: egl
+
 experiment:
   id: libero-spatial-openvla-vanilla
   name: OpenVLA Vanilla on LIBERO-Spatial

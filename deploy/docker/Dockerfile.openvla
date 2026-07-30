@@ -25,10 +25,10 @@ LABEL org.opencontainers.image.title="OVLAB OpenVLA policy service" \
       org.opencontainers.image.description="Offline Vanilla and merged-LoRA OpenVLA service; no LIBERO" \
       cz.cvut.ovlab.role="policy-openvla" \
       cz.cvut.ovlab.build-target="production" \
-      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-v1" \
+      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-quantization-config-bundle-v2" \
       cz.cvut.ovlab.python.version="3.10.20" \
       cz.cvut.ovlab.cuda.version="12.1" \
-      cz.cvut.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1;peft=0.11.1;flash-attn=2.5.5" \
+      cz.cvut.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1;peft=0.11.1;bitsandbytes=0.43.1;flash-attn=2.5.5" \
       cz.cvut.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
       cz.cvut.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
       cz.cvut.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
@@ -63,7 +63,6 @@ RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
 COPY --from=flash-builder /wheelhouse /wheelhouse
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /wheelhouse/*.whl && rm -rf /wheelhouse
 COPY code /opt/ovlab/code
-COPY configs /opt/ovlab/configs
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 COPY external/openvla /opt/ovlab/external/openvla

@@ -7,6 +7,7 @@ import importlib.metadata
 import os
 import platform
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,7 @@ from ovlab_openvla_lora_merged import OpenVlaMergedLoraAdapter, method_descripto
 from ovlab_openvla_vanilla import (
     InferenceSynchronization,
     ModelDType,
+    ModelQuantization,
     OpenVlaVanillaSettings,
 )
 from ovlab_remote_policy.service import PolicyService
@@ -35,6 +37,7 @@ def _arguments() -> argparse.Namespace:
         choices=("flash_attention_2",),
         default="flash_attention_2",
     )
+    parser.add_argument("--quantization", choices=("none", "4bit"), default="none")
     return parser.parse_args()
 
 
@@ -69,6 +72,7 @@ def _identity_provider(capabilities):
             "transformers": _version("transformers"),
             "flash_attn": _version("flash-attn"),
             "peft": _version("peft"),
+            "bitsandbytes": _version("bitsandbytes"),
             "policy_component": f"{capabilities.component_name}@{capabilities.component_version}",
             "protocol_component": "ovlab-remote-policy@0.1.0",
             "openvla_git_commit": checkpoint["openvla_git_commit"],
@@ -96,7 +100,10 @@ def main() -> int:
     except KeyError as exc:
         raise RuntimeError(f"unknown merged LoRA resource: {args.resource_id}") from exc
     artifact = OpenVlaRuntimeArtifact.from_registry_entry(args.resource_id, entry)
-    method = method_descriptor_from_registry(entry)
+    quantization = ModelQuantization(args.quantization)
+    method = replace(
+        method_descriptor_from_registry(entry), quantization=quantization.value
+    )
     source = OpenVlaModelSource(entry["repo_id"], entry["revision"], entry["expected_sha256"])
     settings = OpenVlaVanillaSettings(
         model=source,
@@ -104,6 +111,7 @@ def main() -> int:
         unnorm_key=args.unnorm_key,
         device=args.device,
         model_dtype=ModelDType.BFLOAT16,
+        quantization=quantization,
         attention_implementation=args.attention_implementation,
         local_files_only=True,
         trust_remote_code=True,

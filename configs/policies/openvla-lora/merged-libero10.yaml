@@ -13,6 +13,7 @@ settings:
   runtime:
     device_resource: primary_gpu
     dtype: bfloat16
+    quantization: none
     attention_implementation: flash_attention_2
     local_files_only: true
     trust_remote_code: true

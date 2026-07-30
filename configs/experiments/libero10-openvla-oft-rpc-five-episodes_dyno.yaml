@@ -7,7 +7,7 @@ deployment:
 
 experiment:
   id: libero10-openvla-oft-rpc-five-episodes
-  name: Five complete native OpenVLA-OFT episodes across LIBERO-10 tasks
+  name: Five complete native OpenVLA-OFT episodes across LIBERO-10 tasks (dynamic config)
   tags: [libero-10, openvla-oft, action-chunk, rpc, five-episodes, multi-task]
 
 components:

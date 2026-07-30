@@ -17,13 +17,22 @@ x-policy-health: &policy-health
   retries: 6
   start_period: 15m
 
+x-config-bundle: &config-bundle
+  type: bind
+  source: ${OVLAB_CONFIG_BUNDLE_PATH:?configuration bundle resolver did not set a host path}
+  target: /opt/ovlab/configs
+  read_only: true
+
 services:
   policy-openvla:
     <<: *policy-security
     profiles: [openvla]
     image: ${OVLAB_OPENVLA_IMAGE:-ovlab-policy-openvla:local}
-    command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-lora-merged-rpc-smoke.yaml}", --socket, /run/ovlab/policy.sock]
+    command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --socket, /run/ovlab/policy.sock]
     environment:
+      OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-openvla}
+      OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
+      OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HOME: /tmp/ovlab-huggingface
@@ -40,11 +49,12 @@ services:
       OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla
       OVLAB_OFFLINE_MODE: hf-hub-offline,transformers-offline,network-none
-      OVLAB_MOUNT_CONTRACT: resolved-checkpoint-ro,rpc-rw
+      OVLAB_MOUNT_CONTRACT: config-bundle-ro,resolved-checkpoint-ro,rpc-rw
       NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     gpus: all
     volumes:
+      - *config-bundle
       - rpc-openvla:/run/ovlab
       - type: bind
         source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?checkpoint resolver did not set a host path}
@@ -56,8 +66,11 @@ services:
     <<: *policy-security
     profiles: [openvla]
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-lora-merged-rpc-smoke.yaml}", --output-root, /var/lib/ovlab/runs]
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs]
     environment:
+      OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-openvla}
+      OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
+      OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
       MUJOCO_GL: egl
       MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
       OVLAB_IMAGE_DIGEST: ${OVLAB_BENCHMARK_IMAGE_DIGEST:-unavailable}
@@ -65,7 +78,7 @@ services:
       OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla
       OVLAB_OFFLINE_MODE: network-none
-      OVLAB_MOUNT_CONTRACT: datasets-ro,runs-rw,rpc-rw
+      OVLAB_MOUNT_CONTRACT: config-bundle-ro,datasets-ro,runs-rw,rpc-rw
       OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
       OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
       OVLAB_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
@@ -84,6 +97,7 @@ services:
         condition: service_healthy
         restart: false
     volumes:
+      - *config-bundle
       - rpc-openvla:/run/ovlab
       - type: bind
         source: ${OVLAB_DATASETS_PATH:?dataset resolver did not set a host path}
@@ -97,8 +111,11 @@ services:
     <<: *policy-security
     profiles: [oft]
     image: ${OVLAB_OFT_IMAGE:-ovlab-policy-openvla-oft:local}
-    command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-openvla-oft-rpc-smoke.yaml}", --socket, /run/ovlab/policy.sock]
+    command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --socket, /run/ovlab/policy.sock]
     environment:
+      OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-oft}
+      OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
+      OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HOME: /tmp/ovlab-huggingface
@@ -116,11 +133,12 @@ services:
       OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-oft
       OVLAB_OFFLINE_MODE: hf-hub-offline,transformers-offline,network-none
-      OVLAB_MOUNT_CONTRACT: resolved-checkpoint-ro,rpc-rw
+      OVLAB_MOUNT_CONTRACT: config-bundle-ro,resolved-checkpoint-ro,rpc-rw
       NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     gpus: all
     volumes:
+      - *config-bundle
       - rpc-oft:/run/ovlab
       - type: bind
         source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?checkpoint resolver did not set a host path}
@@ -132,8 +150,11 @@ services:
     <<: *policy-security
     profiles: [oft]
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:-configs/experiments/libero10-openvla-oft-rpc-smoke.yaml}", --output-root, /var/lib/ovlab/runs]
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs]
     environment:
+      OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-oft}
+      OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
+      OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
       MUJOCO_GL: egl
       MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
       OVLAB_IMAGE_DIGEST: ${OVLAB_BENCHMARK_IMAGE_DIGEST:-unavailable}
@@ -141,7 +162,7 @@ services:
       OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-oft
       OVLAB_OFFLINE_MODE: network-none
-      OVLAB_MOUNT_CONTRACT: datasets-ro,runs-rw,rpc-rw
+      OVLAB_MOUNT_CONTRACT: config-bundle-ro,datasets-ro,runs-rw,rpc-rw
       OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
       OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
       OVLAB_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
@@ -160,6 +181,7 @@ services:
         condition: service_healthy
         restart: false
     volumes:
+      - *config-bundle
       - rpc-oft:/run/ovlab
       - type: bind
         source: ${OVLAB_DATASETS_PATH:?dataset resolver did not set a host path}

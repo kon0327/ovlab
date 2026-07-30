@@ -16,7 +16,7 @@ LABEL org.opencontainers.image.title="OVLAB LIBERO benchmark runner" \
       org.opencontainers.image.description="Isolated LIBERO runner; no OpenVLA model runtime" \
       cz.cvut.ovlab.role="benchmark-libero" \
       cz.cvut.ovlab.build-target="production" \
-      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-v1" \
+      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-config-bundle-v2" \
       cz.cvut.ovlab.python.version="3.10.20" \
       cz.cvut.ovlab.cuda.version="12.1" \
       cz.cvut.ovlab.runtime.components="torch=2.2.0;mujoco=3.9.0;robosuite=1.4.1" \
@@ -61,7 +61,6 @@ RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 COPY code /opt/ovlab/code
-COPY configs /opt/ovlab/configs
 COPY deploy/config /opt/ovlab/deploy/config
 RUN install -d -o root -g root -m 0755 /etc/ovlab/libero
 COPY --chmod=0444 deploy/config/libero/config.yaml /etc/ovlab/libero/config.yaml

@@ -1,4 +1,6 @@
 from dataclasses import replace
+import importlib.machinery
+import sys
 
 import numpy as np
 import pytest
@@ -11,8 +13,9 @@ from ovlab_openvla_common import OpenVlaModelSource
 from ovlab_openvla_vanilla import (
     HuggingFaceOpenVlaRuntime, OpenVlaCheckpointError, OpenVlaDependencyError,
     OpenVlaInferenceError, OpenVlaPreprocessingError, OpenVlaVanillaAdapter,
-    OpenVlaVanillaSettings,
+    ModelQuantization, OpenVlaVanillaSettings,
 )
+from ovlab_openvla_common import vanilla_base_method_descriptor
 from ovlab_policy_sdk import PolicyLifecycleError
 
 from helpers.fake_openvla import FakeOpenVlaRuntime, SequenceClock
@@ -32,6 +35,16 @@ def test_capabilities_and_checkpoint_identity(settings, runtime):
     assert caps.supports_dynamic_instructions and not caps.exposes_raw_policy_output
     assert caps.metadata["checkpoint_identity"]["settings_hash"] == settings.settings_hash
     assert runtime.loaded
+
+
+def test_service_identity_preserves_vanilla_method_and_quantization(settings, runtime):
+    from ovlab_remote_policy.openvla_service import _identity_provider
+
+    capabilities = OpenVlaVanillaAdapter(settings, runtime).initialize(make_run_context())
+    identity = _identity_provider(capabilities)
+    assert identity["method_descriptor"]["family"] == "vanilla"
+    assert identity["method_descriptor"]["quantization"] == "none"
+    assert identity["method_descriptor"]["training_quantization"] == "none"
 
 
 def test_prediction_contract_prompt_camera_unnorm_timing_and_no_mutation(settings, runtime, observation):
@@ -162,3 +175,99 @@ def test_runtime_dependency_error_preserves_cause(monkeypatch):
     with pytest.raises(OpenVlaDependencyError) as caught:
         HuggingFaceOpenVlaRuntime._runtime_imports()
     assert isinstance(caught.value.__cause__, ImportError)
+
+
+def test_lightweight_prismatic_namespace_skips_training_package_initializer(
+    monkeypatch, tmp_path,
+):
+    package_root = tmp_path / "prismatic"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text(
+        "raise AssertionError('training initializer must not run')\n", encoding="utf-8"
+    )
+    spec = importlib.machinery.ModuleSpec("prismatic", loader=None, is_package=True)
+    spec.submodule_search_locations = [str(package_root)]
+    original = sys.modules.pop("prismatic", None)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: spec)
+    try:
+        HuggingFaceOpenVlaRuntime._install_lightweight_prismatic_namespace()
+        package = sys.modules["prismatic"]
+        assert package.__path__ == [str(package_root)]
+    finally:
+        sys.modules.pop("prismatic", None)
+        if original is not None:
+            sys.modules["prismatic"] = original
+
+
+def test_nf4_loader_recipe_and_quantized_placement_avoid_model_to(tmp_path):
+    class Torch:
+        bfloat16 = "bf16"
+        float16 = "fp16"
+        float32 = "fp32"
+
+    class QuantizationConfig:
+        def __init__(self, **kwargs):
+            self.values = kwargs
+
+    class Model:
+        is_loaded_in_4bit = True
+
+        def __init__(self):
+            self.eval_count = 0
+            self.to_calls = []
+
+        def eval(self):
+            self.eval_count += 1
+
+        def to(self, device):
+            self.to_calls.append(device)
+
+    descriptor = replace(vanilla_base_method_descriptor(), quantization="4bit")
+    settings = OpenVlaVanillaSettings(
+        OpenVlaModelSource(str(tmp_path)),
+        "bridge_orig",
+        quantization=ModelQuantization.BITSANDBYTES_NF4_4BIT,
+        method_descriptor=descriptor,
+    )
+    kwargs = HuggingFaceOpenVlaRuntime._model_load_kwargs(
+        settings, Torch, QuantizationConfig
+    )
+    assert kwargs["trust_remote_code"] is False
+    assert kwargs["torch_dtype"] == "fp16"
+    assert kwargs["quantization_config"].values == {
+        "load_in_4bit": True,
+        "bnb_4bit_quant_type": "nf4",
+        "bnb_4bit_compute_dtype": "bf16",
+        "bnb_4bit_use_double_quant": True,
+    }
+    model = Model()
+    HuggingFaceOpenVlaRuntime._prepare_model_for_inference(model, settings)
+    assert model.eval_count == 1
+    assert model.to_calls == []
+
+
+def test_quantized_input_dtype_comes_from_vision_backbone(tmp_path):
+    class Parameter:
+        dtype = "vision-fp16"
+
+    class Backbone:
+        @staticmethod
+        def parameters():
+            return iter((Parameter(),))
+
+    class Model:
+        vision_backbone = Backbone()
+
+    class Torch:
+        bfloat16 = "bf16"
+        float16 = "fp16"
+        float32 = "fp32"
+
+    descriptor = replace(vanilla_base_method_descriptor(), quantization="4bit")
+    settings = OpenVlaVanillaSettings(
+        OpenVlaModelSource(str(tmp_path)),
+        "bridge_orig",
+        quantization=ModelQuantization.BITSANDBYTES_NF4_4BIT,
+        method_descriptor=descriptor,
+    )
+    assert HuggingFaceOpenVlaRuntime._input_dtype(settings, Model(), Torch) == "vision-fp16"

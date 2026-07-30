@@ -2,8 +2,9 @@
 
 OVLAB composes experiments from explicit, versioned component documents. There
 is no implicit search path, Hydra defaults list, environment-variable expansion,
-or runtime mutation. An experiment names every component and the resource
-registry; a machine-local profile is selected separately by the caller.
+or runtime mutation. An experiment names every component, the resource registry,
+and—when it is deployable—its portable deployment topology and renderer. A
+machine-local resource profile is selected separately by the caller.
 
 Inheritance is opt-in through a relative `extends` path. Mappings deep-merge,
 while scalar and sequence values replace the parent. Every composed document is
@@ -16,12 +17,15 @@ LIBERO adapter contract. Canonical camera names are checked in the same way.
 
 ## LIBERO renderer execution profiles
 
-Renderer selection is execution-only and is not part of a scientific
-experiment document. Select `profiles/libero-bench-egl.yaml` for headless
-benchmarking or `profiles/libero-playground-glfw.yaml` for an interactive
-playground. The selected profile and resolved renderer are included in the
-execution configuration hash; changing profiles leaves the scientific hash,
-tasks, seeds, observation/action contracts, and metrics unchanged.
+Renderer selection is declared in the execution-only `deployment` block of a
+deployable experiment. `renderer: egl` selects
+`profiles/libero-bench-egl.yaml` for headless benchmarking; `renderer: glfw`
+selects `profiles/libero-playground-glfw.yaml` for an interactive playground.
+The selected profile and resolved renderer are included in the execution
+configuration hash; changing them leaves the scientific hash, tasks, seeds,
+observation/action contracts, and metrics unchanged. The CLI's `--renderer`
+option and the lower-level `OVLAB_EXECUTION_PROFILE` diagnostic override take
+precedence over the experiment default.
 
 The EGL profile resolves its device from the local profile's optional
 `execution.libero.renderer.device_id`, falling back to the index in

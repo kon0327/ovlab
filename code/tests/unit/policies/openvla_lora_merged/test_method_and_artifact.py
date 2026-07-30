@@ -57,6 +57,7 @@ def test_registered_identity_is_merged_lora_not_vanilla_or_qp():
     assert metadata["active_peft_adapter"] is False
     assert metadata["runtime_peft_modules"] is False
     assert metadata["quantization"] == "none"
+    assert metadata["training_quantization"] == "none"
     assert not any(key.lower().startswith("qp") for key in metadata)
     assert metadata["lora_configuration"] == {
         "alpha": 16,
@@ -70,15 +71,25 @@ def test_registered_identity_is_merged_lora_not_vanilla_or_qp():
     }
 
 
+def test_merged_lora_allows_runtime_quantization_without_claiming_qlora_training():
+    descriptor = replace(
+        method_descriptor_from_registry(registered_entry()), quantization="4bit"
+    )
+    assert descriptor.quantization == "4bit"
+    assert descriptor.training_quantization == "none"
+    assert descriptor.merge_status.value == "merged"
+    assert descriptor.active_peft_adapter is False
+
+
 @pytest.mark.parametrize(
     "change,match",
     [
-        ({"quantization": "4bit"}, "QLoRA or quantization"),
         ({"active_peft_adapter": True}, "must not report active PEFT"),
         ({"artifact_form": OpenVlaArtifactForm.FULL_WEIGHTS}, "merged_full_weights"),
+        ({"quantization": "int3"}, "quantization must be one of"),
     ],
 )
-def test_method_identity_rejects_qlora_active_peft_and_full_weight_misclassification(change, match):
+def test_method_identity_rejects_active_peft_full_weight_and_unknown_quantization(change, match):
     descriptor = method_descriptor_from_registry(registered_entry())
     with pytest.raises(ValueError, match=match):
         replace(descriptor, **change)

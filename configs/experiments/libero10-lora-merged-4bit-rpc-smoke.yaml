@@ -6,13 +6,13 @@ deployment:
   renderer: egl
 
 experiment:
-  id: libero-openvla-vanilla-smoke
-  name: Cross-suite OpenVLA Vanilla diagnostic on LIBERO-Spatial
-  tags: [libero-spatial, vanilla, smoke, cross-suite-diagnostic]
+  id: libero10-openvla-lora-merged-4bit-rpc-smoke
+  name: Quantized merged OpenVLA-LoRA methodological smoke on LIBERO-10
+  tags: [libero-10, lora, merged-full-weights, 4bit, nf4, rpc, smoke]
 
 components:
-  benchmark: benchmarks/libero/spatial-smoke.yaml
-  policy: policies/openvla-vanilla/base.yaml
+  benchmark: benchmarks/libero/libero10-smoke.yaml
+  policy: policies/openvla-lora/merged-libero10-4bit.yaml
   metrics: metrics/action-safe-v1.yaml
   protocol: protocols/libero-smoke-v1.yaml
   action_interface: interfaces/actions/libero-osc-pose-v1.yaml
