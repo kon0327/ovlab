@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from ovlab_benchctl import ConfigResolver
+from ovlab_core.contracts import OVLAB_VERSION
 from ovlab_openvla_common import OpenVlaModelSource, OpenVlaRuntimeArtifact
 from ovlab_openvla_lora_merged import OpenVlaMergedLoraAdapter, method_descriptor_from_registry
 from ovlab_openvla_vanilla import (
@@ -74,7 +75,7 @@ def _identity_provider(capabilities):
             "peft": _version("peft"),
             "bitsandbytes": _version("bitsandbytes"),
             "policy_component": f"{capabilities.component_name}@{capabilities.component_version}",
-            "protocol_component": "ovlab-remote-policy@0.1.0",
+            "protocol_component": f"ovlab-remote-policy@{OVLAB_VERSION}",
             "openvla_git_commit": checkpoint["openvla_git_commit"],
         },
         "method_descriptor": {

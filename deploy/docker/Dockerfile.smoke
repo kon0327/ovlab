@@ -1,9 +1,13 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.10.20-slim-bookworm@sha256:5cc3381b18ec240e4462510648ed7970917ac8eff4c3463320429fec285491be AS smoke
 
-LABEL cz.cvut.ovlab.role="test-only-transport-smoke" \
+ARG OVLAB_VERSION=0.2.0
+
+LABEL org.opencontainers.image.version="$OVLAB_VERSION" \
+      cz.cvut.ovlab.role="test-only-transport-smoke" \
       cz.cvut.ovlab.production="false"
 ENV OVLAB_ROOT=/opt/ovlab \
+    OVLAB_VERSION=$OVLAB_VERSION \
     OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \
     OVLAB_POLICY_SOCKET=/run/ovlab/policy.sock \
     PYTHONDONTWRITEBYTECODE=1 \

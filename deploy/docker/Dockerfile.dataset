@@ -7,11 +7,12 @@ ARG OVLAB_SOURCE_DIRTY
 ARG OVLAB_LOCK_SHA256
 ARG OVLAB_DOCKERFILE_SHA256
 ARG OVLAB_IMAGE_REFERENCE=ovlab-dataset:local
+ARG OVLAB_VERSION=0.2.0
 
 LABEL org.opencontainers.image.title="OVLAB dataset acquisition and finalization" \
       org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
       org.opencontainers.image.revision="$OVLAB_REVISION" \
-      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.version="$OVLAB_VERSION" \
       org.opencontainers.image.licenses="NOASSERTION" \
       cz.cvut.ovlab.role="dataset" \
       cz.cvut.ovlab.deployment.contract="dataset-write-only-or-finalizer-v1" \
@@ -23,6 +24,7 @@ LABEL org.opencontainers.image.title="OVLAB dataset acquisition and finalization
 ENV OVLAB_ROOT=/opt/ovlab \
     OVLAB_IMAGE_ROLE=dataset \
     OVLAB_IMAGE_REFERENCE=$OVLAB_IMAGE_REFERENCE \
+    OVLAB_VERSION=$OVLAB_VERSION \
     OVLAB_SOURCE_MANIFEST_SHA256=$OVLAB_SOURCE_MANIFEST_SHA256 \
     OVLAB_SOURCE_DIRTY=$OVLAB_SOURCE_DIRTY \
     OVLAB_LOCK_SHA256=$OVLAB_LOCK_SHA256 \

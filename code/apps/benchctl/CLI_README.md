@@ -29,6 +29,19 @@ The source-tree launcher does not install or update packages. `deploy` commands
 need only system Python 3, Docker Engine and Docker Compose; they do not require
 an activated Conda environment.
 
+## Output modes
+
+Structured commands use one consistent output contract:
+
+- no output flag: compact operator-oriented rows or `key  value` summaries;
+- `--detail`: the complete result document as readable indented JSON;
+- `--json`: one stable `ovlab-cli-output/1.0.0` JSON envelope for scripts.
+
+`--detail` and `--json` are mutually exclusive. Operational progress and
+diagnostics remain on stderr, so `--json` stdout stays machine-readable. The
+`config resolve` command is intentionally different: its result is the complete
+resolved configuration and `--format yaml|json` selects its serialization.
+
 ## Recommended Docker workflow
 
 Copy the deployment environment template once and set the host paths:
@@ -156,53 +169,53 @@ ovlab
 ├── --help
 ├── --version
 ├── config
-│   ├── validate CONFIG [--mode descriptor|runtime] [--json]
+│   ├── validate CONFIG [--mode descriptor|runtime] [--detail | --json]
 │   └── resolve CONFIG [--mode descriptor|runtime] [--format yaml|json]
 ├── policy
-│   ├── list [--json]
-│   └── describe CONFIG [--json]
+│   ├── list [--detail | --json]
+│   └── describe CONFIG [--detail | --json]
 ├── service
-│   ├── serve CONFIG [--socket PATH]
-│   └── health --socket PATH [--json]
-├── connect CONFIG [--json]
+│   ├── serve CONFIG [--socket PATH] [--detail | --json]
+│   └── health --socket PATH [--detail | --json]
+├── connect CONFIG [--detail | --json]
 ├── deploy
 │   └── run EXPERIMENT [--profile openvla|oft] [--renderer egl|glfw]
 │       [--env-file PATH] [--local-profile PATH] [--offline]
-│       [--project-name NAME] [--dry-run] [--json]
-├── run CONFIG [--output-root PATH] [--dry-run] [--json]
-├── run inspect RUN_PATH [--json]
-├── run verify RUN_PATH [--json]
-├── metrics recompute RUN_PATH [--json]
-├── report profiles [--json]
-├── report generate --run RUN_ID [--task TASK_ID] [--profile PROFILE] [--json]
-├── report publish --run RUN_ID [--profile PROFILE] [--report-enabled true|false] [--json]
-├── report verify --run RUN_ID [--profile PROFILE] [--build BUILD_ID] [--json]
-├── export isolated --run RUN_ID [--episode EPISODE_ID] [--template TEMPLATE] [--json]
+│       [--project-name NAME] [--dry-run] [--detail | --json]
+├── run CONFIG [--output-root PATH] [--dry-run] [--detail | --json]
+├── run inspect RUN_PATH [--detail | --json]
+├── run verify RUN_PATH [--detail | --json]
+├── metrics recompute RUN_PATH [--detail | --json]
+├── report profiles [--detail | --json]
+├── report generate --run RUN_ID [--task TASK_ID] [--profile PROFILE] [--detail | --json]
+├── report publish --run RUN_ID [--profile PROFILE] [--report-enabled true|false] [--detail | --json]
+├── report verify --run RUN_ID [--profile PROFILE] [--build BUILD_ID] [--detail | --json]
+├── export isolated --run RUN_ID [--episode EPISODE_ID] [--template TEMPLATE] [--detail | --json]
 ├── export grouped --name GROUP (--all-runs | --same-model-as RUN_ID | --runs RUN_ID...)
-│   [--suite SUITE] [--template TEMPLATE] [--json]
-├── export verify --kind isolated|grouped --name NAME [--json]
-├── export generate --spec SPEC.yaml [--json]  # legacy grouped bridge
+│   [--suite SUITE] [--template TEMPLATE] [--detail | --json]
+├── export verify --kind isolated|grouped --name NAME [--detail | --json]
+├── export generate --spec SPEC.yaml [--detail | --json]  # legacy grouped bridge
 ├── dataset
-│   ├── providers [--json]
-│   ├── resolve --benchmark libero --suite SUITE [--json]
-│   ├── fetch --source libero|url --name NAME [URL OPTIONS] [--json]
-│   ├── import --name NAME --version VERSION --path PATH [--json]
-│   ├── prepare --dataset DATASET_ID --format FORMAT [--json]
-│   ├── list [--json]
-│   ├── inspect --dataset DATASET_ID [--json]
-│   └── verify --dataset DATASET_ID [--json]
+│   ├── providers [--detail | --json]
+│   ├── resolve --benchmark libero --suite SUITE [--detail | --json]
+│   ├── fetch --source libero|url --name NAME [URL OPTIONS] [--detail | --json]
+│   ├── import --name NAME --version VERSION --path PATH [--detail | --json]
+│   ├── prepare --dataset DATASET_ID --format FORMAT [--detail | --json]
+│   ├── list [--detail | --json]
+│   ├── inspect --dataset DATASET_ID [--detail | --json]
+│   └── verify --dataset DATASET_ID [--detail | --json]
 ├── train
-│   ├── profiles [--json]
-│   ├── validate --profile PROFILE [--json]
-│   ├── plan --profile PROFILE [--json]
-│   ├── run --profile PROFILE [--allow-dataset-download] [--json]
-│   ├── status --run TRAINING_RUN_ID [--json]
-│   ├── inspect --run TRAINING_RUN_ID [--json]
-│   └── verify --run TRAINING_RUN_ID [--json]
+│   ├── profiles [--detail | --json]
+│   ├── validate --profile PROFILE [--detail | --json]
+│   ├── plan --profile PROFILE [--detail | --json]
+│   ├── run --profile PROFILE [--allow-dataset-download] [--detail | --json]
+│   ├── status --run TRAINING_RUN_ID [--detail | --json]
+│   ├── inspect --run TRAINING_RUN_ID [--detail | --json]
+│   └── verify --run TRAINING_RUN_ID [--detail | --json]
 └── checkpoint
-    ├── list [--json]
-    ├── inspect --checkpoint CHECKPOINT_ID [--json]
-    └── verify --checkpoint CHECKPOINT_ID [--json]
+    ├── list [--detail | --json]
+    ├── inspect --checkpoint CHECKPOINT_ID [--detail | --json]
+    └── verify --checkpoint CHECKPOINT_ID [--detail | --json]
 ```
 
 Dataset and training commands use separate least-privilege images and never

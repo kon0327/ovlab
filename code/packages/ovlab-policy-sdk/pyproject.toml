@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ovlab-policy-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "Abstract policy adapter boundary for OpenVLABenchmark"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["ovlab-core>=0.1.0"]
+dependencies = ["ovlab-core>=0.2.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

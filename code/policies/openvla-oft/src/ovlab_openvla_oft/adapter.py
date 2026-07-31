@@ -9,7 +9,7 @@ import numpy as np
 
 from ovlab_core.contracts import (
     ActionPrediction, ColorSpace, ImageEncoding, ImageObservationSpec, ObservationRequirements,
-    OVLAB_CONTRACT_VERSION, PolicyCapabilities, PredictionId, PredictionValidity,
+    OVLAB_CONTRACT_VERSION, OVLAB_VERSION, PolicyCapabilities, PredictionId, PredictionValidity,
     ProprioceptiveObservationSpec, RawPolicyOutput,
 )
 from ovlab_openvla_common import LiberoActionChunkCodec
@@ -57,7 +57,7 @@ class OpenVlaOftAdapter(PolicyAdapter):
             "timing_method": self._runtime_identity["timing_method"],
         }}
         return PolicyCapabilities(
-            self.component_name, "0.1.0", OVLAB_CONTRACT_VERSION,
+            self.component_name, OVLAB_VERSION, OVLAB_CONTRACT_VERSION,
             ObservationRequirements(image_specs, (proprio,), 2, 2, 1, 1),
             self.settings.target_action_spec,
             False, True, 8, 8, True, True, self.settings.record_raw_output,

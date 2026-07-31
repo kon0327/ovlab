@@ -4,20 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ovlab-benchctl"
-version = "0.1.0"
+version = "0.2.0"
 description = "Strict configuration composition root for OpenVLABenchmark"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "ovlab-core>=0.1.0",
-  "ovlab-benchmarks>=0.1.0",
-  "ovlab-metrics>=0.1.0",
-  "ovlab-openvla-common>=0.1.0",
-  "ovlab-openvla-vanilla>=0.1.0",
-  "ovlab-openvla-oft>=0.1.0",
-  "ovlab-openvla-quic>=0.1.0",
-  "ovlab-remote-policy>=0.1.0",
-  "ovlab-runner>=0.1.0",
+  "ovlab-core>=0.2.0",
+  "ovlab-benchmarks>=0.2.0",
+  "ovlab-metrics>=0.2.0",
+  "ovlab-openvla-common>=0.2.0",
+  "ovlab-openvla-vanilla>=0.2.0",
+  "ovlab-openvla-oft>=0.2.0",
+  "ovlab-openvla-quic>=0.2.0",
+  "ovlab-remote-policy>=0.2.0",
+  "ovlab-runner>=0.2.0",
   "numpy>=1.24",
 ]
 

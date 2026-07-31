@@ -3,6 +3,7 @@
 from collections import Counter
 import warnings
 
+from ovlab_core.contracts import OVLAB_VERSION
 from ovlab_metrics import (
     MetricEvaluator, MetricRegistry, MetricStatus, TaskMetricPlugin, aggregate_episode_results,
 )
@@ -17,7 +18,7 @@ from .provenance import StaticProvenanceProvider
 
 
 class ExperimentRunner:
-    version = "0.1.0"
+    version = OVLAB_VERSION
 
     def __init__(self, plan, benchmark, policy, artifact_store, *, metric_registry=None, clock=None, provenance_provider=None, configuration_snapshot=None, postprocessor=None, postprocessor_failure_policy="warn"):
         self.plan = plan

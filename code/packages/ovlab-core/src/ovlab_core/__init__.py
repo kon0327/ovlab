@@ -8,6 +8,7 @@ from .compatibility import (
 )
 from .contracts import (
     OVLAB_CONTRACT_VERSION,
+    OVLAB_VERSION,
     AdapterState,
     BenchmarkCapabilities,
     ImageObservationSpec,
@@ -19,6 +20,7 @@ from .contracts import (
 
 __all__ = [
     "OVLAB_CONTRACT_VERSION",
+    "OVLAB_VERSION",
     "AdapterState",
     "BenchmarkCapabilities",
     "CompatibilityIssue",

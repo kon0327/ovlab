@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 import re
 
-CLI_VERSION = "0.1.0"
+CLI_VERSION = "0.2.0"
 
 
 def repository_revision(repository_root: str | Path) -> str | None:

@@ -13,6 +13,7 @@ from ovlab_core.contracts import (
     ImageObservationSpec,
     ObservationRequirements,
     OVLAB_CONTRACT_VERSION,
+    OVLAB_VERSION,
     PolicyCapabilities,
     PolicyObservation,
     PredictionId,
@@ -90,7 +91,7 @@ class OpenVlaVanillaAdapter(PolicyAdapter):
         }
         return PolicyCapabilities(
             component_name=self.component_name,
-            component_version="0.1.0",
+            component_version=OVLAB_VERSION,
             contract_version=OVLAB_CONTRACT_VERSION,
             observation_requirements=ObservationRequirements(
                 images=(image_spec,), minimum_image_count=1, maximum_image_count=1,

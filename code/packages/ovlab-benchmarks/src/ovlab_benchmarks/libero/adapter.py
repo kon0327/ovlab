@@ -9,6 +9,7 @@ from ovlab_benchmarks.adapter import BenchmarkAdapter
 from ovlab_benchmarks.contracts import BenchmarkActionRequest, BenchmarkResetResult, BenchmarkStepResult, TaskDescriptor
 from ovlab_core.contracts import (
     OVLAB_CONTRACT_VERSION,
+    OVLAB_VERSION,
     BenchmarkCapabilities,
     EpisodeContext,
     ExecutedAction,
@@ -256,7 +257,7 @@ def configured_capabilities(
     )
     return BenchmarkCapabilities(
         "libero-benchmark-adapter",
-        "0.1.0",
+        OVLAB_VERSION,
         OVLAB_CONTRACT_VERSION,
         observation_spec(settings),
         libero_action_spec(),

@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ovlab-openvla-vanilla"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local OpenVLA Vanilla policy adapter for OVLAB"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "ovlab-core>=0.1.0",
-  "ovlab-policy-sdk>=0.1.0",
-  "ovlab-openvla-common>=0.1.0",
+  "ovlab-core>=0.2.0",
+  "ovlab-policy-sdk>=0.2.0",
+  "ovlab-openvla-common>=0.2.0",
   "numpy>=1.24",
 ]
 

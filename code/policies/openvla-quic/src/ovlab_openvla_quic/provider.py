@@ -9,6 +9,7 @@ from typing import Protocol, runtime_checkable
 
 from ovlab_core.contracts import (
     OVLAB_CONTRACT_VERSION,
+    OVLAB_VERSION,
     ObservationRequirements,
     PolicyCapabilities,
 )
@@ -84,7 +85,7 @@ class QuICCapabilityDeclaration:
     ) -> PolicyCapabilities:
         return PolicyCapabilities(
             component_name=f"ovlab-openvla-{descriptor.variant.value}",
-            component_version="0.1.0",
+            component_version=OVLAB_VERSION,
             contract_version=OVLAB_CONTRACT_VERSION,
             observation_requirements=ObservationRequirements(
                 images=self.images,

@@ -362,5 +362,6 @@ def test_public_import_surface_contains_expected_contracts() -> None:
         "PolicyObservation",
         "SignalRegistry",
         "OVLAB_CONTRACT_VERSION",
+        "OVLAB_VERSION",
     }
     assert expected <= set(contracts.__all__)

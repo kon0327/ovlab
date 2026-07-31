@@ -162,7 +162,7 @@ def test_real_libero_runner_produces_recomputable_immutable_trace() -> None:
     assert started["execution_config_hash"] == resolved.execution_config_hash
     assert started["recording_policy_hash"] == plan.trace_recording_policy.hash
     assert started["provenance"]["external_commits"]["libero"] == LIBERO_COMMIT
-    assert started["benchmark"] == {"name": "libero-benchmark-adapter", "version": "0.1.0"}
+    assert started["benchmark"] == {"name": "libero-benchmark-adapter", "version": "0.2.0"}
     assert started["policy"] == {"name": "deterministic-libero-noop", "version": "1.0.0"}
     started_renderer = started["runtime"]["benchmark"]["libero_renderer"]
     assert started_renderer["requested_backend"] == "egl"

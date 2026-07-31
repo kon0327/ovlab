@@ -16,11 +16,12 @@ ARG OVLAB_SOURCE_DIRTY
 ARG OVLAB_LOCK_SHA256
 ARG OVLAB_DOCKERFILE_SHA256
 ARG OVLAB_IMAGE_REFERENCE=ovlab-policy-openvla:local
+ARG OVLAB_VERSION=0.2.0
 
 LABEL org.opencontainers.image.title="OVLAB OpenVLA policy service" \
       org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
       org.opencontainers.image.revision="$OVLAB_REVISION" \
-      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.version="$OVLAB_VERSION" \
       org.opencontainers.image.licenses="NOASSERTION" \
       org.opencontainers.image.description="Offline Vanilla and merged-LoRA OpenVLA service; no LIBERO" \
       cz.cvut.ovlab.role="policy-openvla" \
@@ -40,6 +41,7 @@ ENV OVLAB_ROOT=/opt/ovlab \
     OVLAB_REVISION=$OVLAB_REVISION \
     OVLAB_IMAGE_ROLE=policy-openvla \
     OVLAB_IMAGE_REFERENCE=$OVLAB_IMAGE_REFERENCE \
+    OVLAB_VERSION=$OVLAB_VERSION \
     OVLAB_BUILD_TARGET=production \
     OVLAB_PYTHON_VERSION=3.10.20 \
     OVLAB_CUDA_RUNTIME_VERSION=12.1 \

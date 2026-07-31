@@ -26,8 +26,6 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
     model_data_root="${OVLAB_MODEL_DATA_ROOT:-${OVLAB_DATA_ROOT:-$repository_root/../ovlab-data}}"
     model_data_root="$(realpath -m -- "$model_data_root")"
     datasets_root="$model_data_root/datasets"
-    mkdir -p -- "$datasets_root"
-    chmod 2770 -- "$datasets_root"
     dataset_image="${OVLAB_DATASET_IMAGE:-ovlab-dataset:local}"
     if ! docker image inspect "$dataset_image" >/dev/null 2>&1; then
         echo "ovlab: dataset image is unavailable: $dataset_image" >&2
@@ -42,22 +40,32 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
             break
         fi
     done
-    mount_mode="readonly"
+    mount_dataset=false
+    writable_dataset=false
+    require_dataset=false
     network="none"
     case "$dataset_command" in
-        fetch) mount_mode=""; network="bridge" ;;
-        import|prepare) mount_mode="" ;;
-        providers|resolve|list|inspect|verify|--help|-h) ;;
+        fetch) mount_dataset=true; writable_dataset=true; network="bridge" ;;
+        import) mount_dataset=true; writable_dataset=true ;;
+        prepare|inspect|verify) mount_dataset=true; require_dataset=true ;;
+        list) mount_dataset=true ;;
+        providers|resolve|--help|-h) ;;
         *) echo "ovlab: unsupported dataset command: $dataset_command" >&2; exit 2 ;;
     esac
     if [[ "$help_requested" == "true" ]]; then
-        mount_mode="readonly"
+        mount_dataset=false
+        writable_dataset=false
+        require_dataset=false
         network="none"
     fi
     args=("$@")
     import_mount=()
     dataset_source=""
     dataset_name=""
+    if [[ "$writable_dataset" == "true" ]]; then
+        mkdir -p -- "$datasets_root"
+        chmod 2770 -- "$datasets_root"
+    fi
     if [[ "$help_requested" == "false" && "$dataset_command" == "fetch" ]]; then
         for ((index=0; index<${#args[@]}; index++)); do
             if [[ "${args[$index]}" == "--source" && $((index + 1)) -lt ${#args[@]} ]]; then
@@ -103,9 +111,16 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
         fi
         import_mount=(--mount "type=bind,source=$source_path,target=/imports/source,readonly")
     fi
-    dataset_mount="type=bind,source=$datasets_root,target=/var/lib/ovlab/model-data/datasets"
-    if [[ "$mount_mode" == "readonly" ]]; then
-        dataset_mount+=",readonly"
+    dataset_mount=()
+    if [[ "$mount_dataset" == "true" && -d "$datasets_root" ]]; then
+        dataset_mount_spec="type=bind,source=$datasets_root,target=/var/lib/ovlab/model-data/datasets"
+        if [[ "$writable_dataset" != "true" ]]; then
+            dataset_mount_spec+=",readonly"
+        fi
+        dataset_mount=(--mount "$dataset_mount_spec")
+    elif [[ "$require_dataset" == "true" ]]; then
+        echo "ovlab: dataset registry does not exist: $datasets_root" >&2
+        exit 4
     fi
     echo "ovlab: dataset: using isolated image $dataset_image (network=$network)." >&2
     exec docker run --rm \
@@ -114,7 +129,7 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
         --tmpfs /tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700 \
         --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data \
         --env "OVLAB_MODEL_DATA_DISPLAY_ROOT=$model_data_root" \
-        --mount "$dataset_mount" "${import_mount[@]}" \
+        "${dataset_mount[@]}" "${import_mount[@]}" \
         "$dataset_image" "${args[@]}"
 fi
 
@@ -145,15 +160,67 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
             echo "ovlab: portable config directory does not exist: $configs_root" >&2
             exit 3
         fi
-        mkdir -p -- "$runs_root" "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"
-        if ! chmod 2770 -- "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"; then
-            echo "ovlab: cannot establish group-writable reporting output directories." >&2
-            exit 6
-        fi
         reporting_image="${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}"
         if ! docker image inspect "$reporting_image" >/dev/null 2>&1; then
             echo "ovlab: reporting image is unavailable: $reporting_image" >&2
             echo "ovlab: build it with: bash deploy/scripts/build-images.sh reporting" >&2
+            exit 6
+        fi
+        if [[ "${1:-}" == "report" && "${2:-}" == "profiles" ]]; then
+            echo "ovlab: reporting: using isolated image $reporting_image (read-only registry)." >&2
+            exec docker run --rm \
+                --network none \
+                --read-only \
+                --user 10001:10001 \
+                --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+                "$reporting_image" "$@"
+        fi
+        verification_kind=""
+        if [[ "${1:-}" == "report" && "${2:-}" == "verify" ]]; then
+            verification_kind="report"
+        elif [[ "${1:-}" == "export" && "${2:-}" == "verify" ]]; then
+            verification_kind="export"
+        fi
+        if [[ -n "$verification_kind" ]]; then
+            verification_mounts=(
+                --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly"
+                --mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly"
+            )
+            if [[ "$verification_kind" == "report" ]]; then
+                if [[ ! -d "$derived_root" ]]; then
+                    echo "ovlab: derived report directory does not exist: $derived_root" >&2
+                    exit 4
+                fi
+                verification_mounts+=(
+                    --mount "type=bind,source=$derived_root,target=/var/lib/ovlab/derived,readonly"
+                )
+            else
+                if [[ ! -d "$exports_root" ]]; then
+                    echo "ovlab: export directory does not exist: $exports_root" >&2
+                    exit 4
+                fi
+                verification_mounts+=(
+                    --mount "type=bind,source=$exports_root,target=/var/lib/ovlab/exports,readonly"
+                )
+            fi
+            echo "ovlab: reporting: using isolated image $reporting_image (read-only $verification_kind verification)." >&2
+            exec docker run --rm \
+                --network none \
+                --read-only \
+                --user 10001:10001 \
+                --group-add "$(id -g)" \
+                --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
+                --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
+                --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
+                --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
+                --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
+                --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
+                "${verification_mounts[@]}" \
+                "$reporting_image" "$@"
+        fi
+        mkdir -p -- "$runs_root" "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"
+        if ! chmod 2770 -- "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"; then
+            echo "ovlab: cannot establish group-writable reporting output directories." >&2
             exit 6
         fi
         echo "ovlab: reporting: using isolated image $reporting_image." >&2

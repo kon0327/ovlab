@@ -12,6 +12,8 @@ import re
 import time
 import uuid
 
+from ovlab_core.contracts import OVLAB_VERSION
+
 from .catalog import registered_policies
 from .errors import ConfigCompatibilityError, ConfigReferenceError
 from .models import MockPolicySettings, ResolvedExperimentConfig
@@ -378,7 +380,7 @@ class OvlabApplication:
             },
             "runtime_versions": {
                 "policy_component": f"{capabilities.component_name}@{capabilities.component_version}",
-                "protocol_component": "ovlab-remote-policy@0.1.0",
+                "protocol_component": f"ovlab-remote-policy@{OVLAB_VERSION}",
             },
             **({"method_descriptor": _plain(method)} if method is not None else {}),
         })

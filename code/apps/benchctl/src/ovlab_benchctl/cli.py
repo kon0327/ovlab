@@ -31,6 +31,20 @@ class ExitCode:
     INTERRUPTED = 130
 
 
+def _output_options(parser: argparse.ArgumentParser, *, detail: bool = True) -> None:
+    """Add consistent human-detail and machine-readable output controls."""
+    output = parser.add_mutually_exclusive_group()
+    if detail:
+        output.add_argument(
+            "--detail", action="store_true",
+            help="print the complete result document instead of the compact summary",
+        )
+    output.add_argument(
+        "--json", action="store_true",
+        help="print one stable machine-readable JSON envelope",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ovlab", description="OpenVLABenchmark orchestration CLI")
     parser.add_argument(
@@ -45,7 +59,7 @@ def _parser() -> argparse.ArgumentParser:
     validate = config_commands.add_parser("validate", help="validate a configuration")
     validate.add_argument("config")
     validate.add_argument("--mode", choices=("descriptor", "runtime"), default="descriptor")
-    validate.add_argument("--json", action="store_true")
+    _output_options(validate)
     resolve = config_commands.add_parser("resolve", help="print deterministic resolved configuration")
     resolve.add_argument("config")
     resolve.add_argument("--mode", choices=("descriptor", "runtime"), default="descriptor")
@@ -54,23 +68,24 @@ def _parser() -> argparse.ArgumentParser:
     policy = commands.add_parser("policy", help="inspect registered policy identities")
     policy_commands = policy.add_subparsers(dest="policy_command", required=True)
     listing = policy_commands.add_parser("list", help="list policy variants without loading providers")
-    listing.add_argument("--json", action="store_true")
+    _output_options(listing)
     describe = policy_commands.add_parser("describe", help="describe a configured policy without loading it")
     describe.add_argument("config")
-    describe.add_argument("--json", action="store_true")
+    _output_options(describe)
 
     service = commands.add_parser("service", help="run an isolated policy service")
     service_commands = service.add_subparsers(dest="service_command", required=True)
     serve = service_commands.add_parser("serve", help="serve one policy over a foreground AF_UNIX socket")
     serve.add_argument("config")
     serve.add_argument("--socket")
+    _output_options(serve)
     health = service_commands.add_parser("health", help="probe protocol readiness without model inference")
     health.add_argument("--socket", required=True)
-    health.add_argument("--json", action="store_true")
+    _output_options(health)
 
     connect = commands.add_parser("connect", help="probe policy handshake and capability compatibility")
     connect.add_argument("config")
-    connect.add_argument("--json", action="store_true")
+    _output_options(connect)
 
     deploy = commands.add_parser("deploy", help="orchestrate isolated OVLAB containers")
     deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
@@ -96,20 +111,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     deploy_run.add_argument("--project-name")
     deploy_run.add_argument("--dry-run", action="store_true")
-    deploy_run.add_argument("--json", action="store_true")
+    _output_options(deploy_run)
 
     run = commands.add_parser("run", help="execute, inspect, or verify a run")
     run.add_argument("target", help="CONFIG, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH for inspect or verify")
     run.add_argument("--output-root")
     run.add_argument("--dry-run", action="store_true")
-    run.add_argument("--json", action="store_true")
+    _output_options(run)
 
     metrics = commands.add_parser("metrics", help="offline metric operations")
     metrics_commands = metrics.add_subparsers(dest="metrics_command", required=True)
     recompute = metrics_commands.add_parser("recompute", help="recompute metrics from immutable traces")
     recompute.add_argument("run_path")
-    recompute.add_argument("--json", action="store_true")
+    _output_options(recompute)
 
     report = commands.add_parser("report", help="generate and verify offline reports from immutable runs")
     report_commands = report.add_subparsers(dest="report_command", required=True)
@@ -121,7 +136,7 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--task", help="optional canonical task ID")
     generate.add_argument("--profile", default="libero-task-default", help="built-in profile ID or local YAML path")
     generate.add_argument("--output", help="legacy output path; cannot be combined with --run")
-    generate.add_argument("--json", action="store_true")
+    _output_options(generate)
     publish = report_commands.add_parser(
         "publish", help="publish the HTML report and isolated export for one finalized run",
     )
@@ -131,14 +146,14 @@ def _parser() -> argparse.ArgumentParser:
         "--report-enabled", choices=("true", "false"), default="true",
         help="generate derived HTML in addition to the always-generated isolated export",
     )
-    publish.add_argument("--json", action="store_true")
+    _output_options(publish)
     verify_report = report_commands.add_parser("verify", help="verify a derived report and its canonical inputs")
     verify_report.add_argument("--run", dest="run_id", required=True)
     verify_report.add_argument("--profile", default="libero-task-default")
     verify_report.add_argument("--build")
-    verify_report.add_argument("--json", action="store_true")
+    _output_options(verify_report)
     profiles = report_commands.add_parser("profiles", help="list built-in report profiles")
-    profiles.add_argument("--json", action="store_true")
+    _output_options(profiles)
 
     export = commands.add_parser("export", help="generate readable isolated or grouped exports from canonical runs")
     export_commands = export.add_subparsers(dest="export_command", required=True)
@@ -146,7 +161,7 @@ def _parser() -> argparse.ArgumentParser:
     isolated.add_argument("--run", dest="run_id", required=True, help="canonical run ID")
     isolated.add_argument("--episode", dest="episode_id", help="optional canonical episode ID")
     isolated.add_argument("--template", default="isolated-default-v1")
-    isolated.add_argument("--json", action="store_true")
+    _output_options(isolated)
     grouped = export_commands.add_parser("grouped", help="compare an explicitly selected group of runs")
     grouped.add_argument("--name", required=True, help="portable group name")
     selectors = grouped.add_mutually_exclusive_group(required=True)
@@ -155,24 +170,24 @@ def _parser() -> argparse.ArgumentParser:
     selectors.add_argument("--runs", nargs="+", metavar="RUN_ID", help="select these run IDs manually")
     grouped.add_argument("--suite", help="optional benchmark-suite filter")
     grouped.add_argument("--template", default="grouped-default-v1")
-    grouped.add_argument("--json", action="store_true")
+    _output_options(grouped)
     export_generate = export_commands.add_parser("generate", help="legacy: generate a grouped export from ovlab.export-spec/v1")
     export_generate.add_argument("--spec", required=True)
-    export_generate.add_argument("--json", action="store_true")
+    _output_options(export_generate)
     export_verify = export_commands.add_parser("verify", help="verify an export build and source checksums")
     export_verify.add_argument("--kind", choices=("isolated", "grouped"), default="grouped")
     export_verify.add_argument("--name", dest="export_name")
     export_verify.add_argument("--export", dest="legacy_export_id", help="legacy alias for --kind grouped --name")
-    export_verify.add_argument("--json", action="store_true")
+    _output_options(export_verify)
 
     dataset = commands.add_parser("dataset", help="resolve, acquire, prepare, and verify immutable datasets")
     dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
     dataset_providers = dataset_commands.add_parser("providers", help="list registered dataset bridges without model imports")
-    dataset_providers.add_argument("--json", action="store_true")
+    _output_options(dataset_providers)
     dataset_resolve = dataset_commands.add_parser("resolve", help="resolve a known benchmark dataset without downloading")
     dataset_resolve.add_argument("--benchmark", choices=("libero",), required=True)
     dataset_resolve.add_argument("--suite", required=True)
-    dataset_resolve.add_argument("--json", action="store_true")
+    _output_options(dataset_resolve)
     dataset_fetch = dataset_commands.add_parser("fetch", help="explicitly acquire and prepare a verified dataset")
     dataset_fetch.add_argument("--source", choices=("libero", "url"), required=True)
     dataset_fetch.add_argument("--name", required=True)
@@ -182,59 +197,55 @@ def _parser() -> argparse.ArgumentParser:
     dataset_fetch.add_argument("--archive", default="auto", choices=("auto", "none", "zip", "tar", "tar.gz", "tgz", "tar.zst"))
     dataset_fetch.add_argument("--format", dest="preparation")
     dataset_fetch.add_argument("--allow-local-http", action="store_true", help=argparse.SUPPRESS)
-    dataset_fetch.add_argument("--json", action="store_true")
+    _output_options(dataset_fetch)
     dataset_import = dataset_commands.add_parser("import", help="copy and register an existing local dataset immutably")
     dataset_import.add_argument("--name", required=True)
     dataset_import.add_argument("--version", required=True)
     dataset_import.add_argument("--path", required=True)
     dataset_import.add_argument("--format", dest="preparation")
-    dataset_import.add_argument("--json", action="store_true")
+    _output_options(dataset_import)
     dataset_prepare = dataset_commands.add_parser("prepare", help="verify the selected immutable preparation")
     dataset_prepare.add_argument("--dataset", dest="dataset_id", required=True)
     dataset_prepare.add_argument("--format", dest="preparation", required=True)
-    dataset_prepare.add_argument("--json", action="store_true")
+    _output_options(dataset_prepare)
     dataset_list = dataset_commands.add_parser("list", help="list locally ready immutable datasets")
-    dataset_list.add_argument(
-        "--detail", action="store_true",
-        help="print the complete dataset-list document instead of the compact listing",
-    )
-    dataset_list.add_argument("--json", action="store_true")
+    _output_options(dataset_list)
     dataset_inspect = dataset_commands.add_parser("inspect", help="inspect one immutable dataset manifest")
     dataset_inspect.add_argument("--dataset", dest="dataset_id", required=True)
-    dataset_inspect.add_argument("--json", action="store_true")
+    _output_options(dataset_inspect)
     dataset_verify = dataset_commands.add_parser("verify", help="verify dataset bytes without network access")
     dataset_verify.add_argument("--dataset", dest="dataset_id", required=True)
-    dataset_verify.add_argument("--json", action="store_true")
+    _output_options(dataset_verify)
 
     train = commands.add_parser("train", help="validate, plan, execute, and inspect isolated training")
     train_commands = train.add_subparsers(dest="train_command", required=True)
     train_profiles = train_commands.add_parser("profiles", help="list portable training profiles")
-    train_profiles.add_argument("--json", action="store_true")
+    _output_options(train_profiles)
     train_validate = train_commands.add_parser("validate", help="strictly validate a profile without resolving resources")
     train_validate.add_argument("--profile", required=True)
-    train_validate.add_argument("--json", action="store_true")
+    _output_options(train_validate)
     train_plan = train_commands.add_parser("plan", help="resolve immutable resources without model initialization")
     train_plan.add_argument("--profile", required=True)
-    train_plan.add_argument("--json", action="store_true")
+    _output_options(train_plan)
     train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
     train_run.add_argument("--profile", required=True)
     train_run.add_argument("--allow-dataset-download", action="store_true")
-    train_run.add_argument("--json", action="store_true")
+    _output_options(train_run)
     for command_name in ("status", "inspect", "verify"):
         command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
         command.add_argument("--run", dest="run_id", required=True)
-        command.add_argument("--json", action="store_true")
+        _output_options(command)
 
     checkpoint = commands.add_parser("checkpoint", help="inspect finalized immutable training checkpoints")
     checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_command", required=True)
     checkpoint_list = checkpoint_commands.add_parser("list", help="list finalized training checkpoints")
-    checkpoint_list.add_argument("--json", action="store_true")
+    _output_options(checkpoint_list)
     checkpoint_inspect = checkpoint_commands.add_parser("inspect", help="inspect checkpoint identity and compatibility")
     checkpoint_inspect.add_argument("--checkpoint", dest="checkpoint_id", required=True)
-    checkpoint_inspect.add_argument("--json", action="store_true")
+    _output_options(checkpoint_inspect)
     checkpoint_verify = checkpoint_commands.add_parser("verify", help="verify checkpoint files and tensor structure")
     checkpoint_verify.add_argument("--checkpoint", dest="checkpoint_id", required=True)
-    checkpoint_verify.add_argument("--json", action="store_true")
+    _output_options(checkpoint_verify)
     return parser
 
 
@@ -275,9 +286,272 @@ def _json_output(command: str, status: str, result=None, errors=()) -> None:
 
 def _human(value) -> None:
     if isinstance(value, str):
-        sys.stdout.write(value.rstrip() + "\n")
+        if value:
+            sys.stdout.write(value.rstrip() + "\n")
     else:
         sys.stdout.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+_MISSING = object()
+
+
+def _nested(document, path: str):
+    value = document
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return _MISSING
+        value = value[part]
+    return value
+
+
+def _first(document, paths: tuple[str, ...]):
+    for path in paths:
+        value = _nested(document, path)
+        if value is not _MISSING and value is not None:
+            return value
+    return _MISSING
+
+
+def _scalar(value) -> str:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (list, tuple)) and all(not isinstance(item, (dict, list, tuple)) for item in value):
+        return ", ".join(_scalar(item) for item in value) if value else "none"
+    if isinstance(value, dict):
+        for key in ("id", "checkpoint_id", "resource_id", "name", "repository"):
+            candidate = value.get(key)
+            if isinstance(candidate, (str, int, float)):
+                return str(candidate)
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if value is None:
+        return "none"
+    return str(value)
+
+
+def _columns(rows, fields: tuple[tuple[str, ...], ...], *, empty: str) -> str:
+    lines = []
+    for row in rows:
+        if not isinstance(row, dict):
+            lines.append(_scalar(row))
+            continue
+        values = []
+        for alternatives in fields:
+            value = _first(row, alternatives)
+            values.append("-" if value is _MISSING else _scalar(value))
+        lines.append(" ".join(values))
+    return "\n".join(lines) if lines else empty
+
+
+_SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "config validate": (
+        ("valid", ("valid",)), ("kind", ("kind",)), ("mode", ("mode",)),
+        ("experiment", ("experiment_id",)),
+        ("scientific hash", ("scientific_config_hash",)),
+        ("execution hash", ("execution_config_hash",)),
+    ),
+    "policy describe": (
+        ("method", ("method",)), ("family", ("family",)),
+        ("checkpoint", ("artifact.checkpoint_id", "artifact.id")),
+        ("runtime ready", ("readiness.runtime_ready",)),
+        ("implementation", ("readiness.implementation_status",)),
+        ("scientific hash", ("scientific_config_hash",)),
+        ("execution hash", ("execution_config_hash",)),
+    ),
+    "service serve": (("socket", ("socket",)), ("closed", ("closed",))),
+    "service health": (
+        ("state", ("state",)), ("ready", ("ready",)),
+        ("protocol", ("protocol_version",)), ("predictions", ("prediction_count",)),
+    ),
+    "connect": (
+        ("compatible", ("compatible",)), ("protocol", ("protocol_version",)),
+        ("policy", ("policy",)), ("action horizon", ("minimum_action_horizon",)),
+        ("compatibility issues", ("compatibility_issues",)),
+        ("scientific hash", ("scientific_config_hash",)),
+        ("execution hash", ("execution_config_hash",)),
+    ),
+    "deploy run": (
+        ("status", ("status",)), ("deployment", ("deployment",)),
+        ("experiment", ("experiment",)), ("profile", ("profile",)),
+        ("renderer", ("renderer",)), ("run", ("run_path",)),
+        ("cleanup", ("cleanup",)), ("side effects", ("side_effects_performed",)),
+    ),
+    "run": (
+        ("status", ("status",)), ("run", ("run_id",)), ("path", ("run_path",)),
+        ("experiment", ("experiment_id",)), ("policy", ("policy",)),
+        ("benchmark", ("benchmark",)), ("compatible", ("compatible",)),
+        ("output", ("output_root",)), ("side effects", ("side_effects_performed",)),
+        ("scientific hash", ("scientific_config_hash",)),
+        ("execution hash", ("execution_config_hash",)),
+    ),
+    "run inspect": (
+        ("run", ("run_id",)), ("status", ("status",)), ("policy", ("policy",)),
+        ("benchmark", ("benchmark",)), ("tasks", ("task_count",)),
+        ("rollouts", ("rollout_count",)), ("failure", ("failure_type",)),
+    ),
+    "run verify": (
+        ("run", ("run_id",)), ("status", ("status",)), ("integrity", ("integrity",)),
+        ("episodes", ("verified_episode_count",)), ("files", ("verified_file_count",)),
+        ("failure", ("failure_type",)),
+    ),
+    "metrics recompute": (
+        ("results agree", ("all_results_agree",)), ("episodes", ("episode_count",)),
+        ("trace modified", ("original_trace_modified",)), ("metric API", ("metric_api",)),
+    ),
+    "report generate": (
+        ("run", ("run_id", "source_run")), ("profile", ("profile_id",)),
+        ("build", ("derived_build_id",)), ("status", ("status",)),
+        ("integrity", ("integrity",)), ("output", ("output",)), ("reused", ("reused",)),
+    ),
+    "report publish": (
+        ("status", ("status",)), ("run", ("run_id",)),
+        ("report", ("report.output",)), ("export", ("isolated_export.output",)),
+        ("canonical run modified", ("canonical_run_modified",)),
+    ),
+    "report verify": (
+        ("run", ("run_id",)), ("profile", ("profile_id",)),
+        ("build", ("derived_build_id",)), ("status", ("status",)),
+        ("integrity", ("integrity",)), ("files", ("verified_file_count",)),
+        ("output", ("output",)),
+    ),
+    "export isolated": (
+        ("type", ("export_type",)), ("name", ("name",)),
+        ("integrity", ("integrity",)), ("files", ("verified_file_count",)),
+        ("runs", ("source_run_ids",)), ("output", ("output",)),
+    ),
+    "export grouped": (
+        ("type", ("export_type",)), ("name", ("name",)),
+        ("integrity", ("integrity",)), ("files", ("verified_file_count",)),
+        ("runs", ("source_run_ids",)), ("output", ("output",)),
+    ),
+    "export generate": (
+        ("type", ("export_type",)), ("name", ("name",)),
+        ("integrity", ("integrity",)), ("files", ("verified_file_count",)),
+        ("runs", ("source_run_ids",)), ("output", ("output",)),
+    ),
+    "export verify": (
+        ("type", ("export_type",)), ("name", ("name",)),
+        ("integrity", ("integrity",)), ("files", ("verified_file_count",)),
+        ("runs", ("source_run_ids",)), ("output", ("output",)),
+    ),
+    "dataset resolve": (
+        ("provider", ("provider",)), ("dataset", ("logical_name",)),
+        ("revision", ("source_revision",)), ("resolution", ("resolution_id",)),
+        ("format", ("preparation_format",)), ("state", ("state",)),
+    ),
+    "dataset fetch": (
+        ("dataset", ("logical_name",)), ("version", ("dataset_version",)),
+        ("id", ("dataset_id",)), ("state", ("state",)),
+        ("path", ("host_path",)), ("reused", ("reused",)),
+        ("samples", ("sample_count",)),
+    ),
+    "dataset import": (
+        ("dataset", ("logical_name",)), ("version", ("dataset_version",)),
+        ("id", ("dataset_id",)), ("state", ("state",)),
+        ("path", ("host_path",)), ("reused", ("reused",)),
+    ),
+    "dataset prepare": (
+        ("dataset", ("dataset_id",)), ("status", ("status",)),
+        ("format", ("preparation_format",)), ("files", ("verified_file_count",)),
+        ("path", ("host_path",)), ("reused", ("reused",)),
+    ),
+    "dataset inspect": (
+        ("dataset", ("logical_name",)), ("version", ("dataset_version",)),
+        ("id", ("dataset_id",)), ("provider", ("provider",)),
+        ("state", ("state",)), ("format", ("preparation.format",)),
+        ("path", ("host_path",)), ("revision", ("source_revision",)),
+    ),
+    "dataset verify": (
+        ("dataset", ("dataset_id",)), ("status", ("status",)),
+        ("files", ("verified_file_count",)), ("path", ("host_path",)),
+    ),
+    "train validate": (
+        ("valid", ("valid",)), ("profile", ("profile_id",)),
+        ("profile identity", ("normalized_profile_id",)), ("source", ("source",)),
+        ("model initialized", ("model_initialized",)), ("network used", ("network_used",)),
+    ),
+    "train plan": (
+        ("profile", ("profile_id",)), ("compatible", ("capabilities.compatible",)),
+        ("mode", ("capabilities.training_mode",)),
+        ("scientific plan", ("scientific_training_id",)),
+        ("execution plan", ("execution_plan_id",)),
+        ("estimated VRAM GiB", ("execution.estimated_vram_gib",)),
+        ("network", ("execution.network",)),
+    ),
+    "train run": (
+        ("status", ("status", "result.status")), ("run", ("run_id",)),
+        ("checkpoint", ("checkpoint_id", "result.checkpoint_id", "checkpoint.checkpoint_id")),
+        ("path", ("checkpoint_path", "host_path")), ("reused", ("reused",)),
+    ),
+    "train status": (
+        ("run", ("run_id",)), ("status", ("status",)),
+        ("checkpoint", ("checkpoint_id",)), ("failure", ("failure",)),
+    ),
+    "train inspect": (
+        ("run", ("run_id",)), ("status", ("result.status",)),
+        ("checkpoint", ("result.checkpoint_id",)), ("path", ("host_path",)),
+        ("profile", ("plan.profile_id",)),
+    ),
+    "train verify": (
+        ("run", ("run_id",)), ("status", ("status",)),
+        ("files", ("verified_file_count",)),
+    ),
+    "checkpoint inspect": (
+        ("checkpoint", ("checkpoint.checkpoint_id", "manifest.checkpoint_id")),
+        ("kind", ("checkpoint.kind", "manifest.kind")),
+        ("state", ("manifest.state",)), ("merge status", ("checkpoint.merge_status", "manifest.merge_status")),
+        ("base checkpoint", ("checkpoint.base_checkpoint.resource_id", "manifest.base_checkpoint.resource_id")),
+        ("path", ("host_path",)),
+    ),
+    "checkpoint verify": (
+        ("checkpoint", ("checkpoint_id",)), ("status", ("status",)),
+        ("files", ("verified_file_count",)), ("path", ("host_path",)),
+    ),
+}
+
+
+def _compact(command: str, result) -> str:
+    if command == "policy list":
+        return _columns(
+            result, (("id",), ("family",), ("config_type",), ("quic_profile",)),
+            empty="No policy variants found.",
+        )
+    list_contracts = {
+        "report profiles": (
+            "profiles", (("id",), ("source",), ("template",)), "No report profiles found.",
+        ),
+        "dataset providers": (
+            "providers", (("id",), ("version",)), "No dataset providers found.",
+        ),
+        "dataset list": (
+            "datasets", (("logical_name",), ("dataset_version",), ("path",)), "No datasets found.",
+        ),
+        "train profiles": (
+            "profiles", (("id",), ("valid",), ("path",)), "No training profiles found.",
+        ),
+        "checkpoint list": (
+            "checkpoints", (("checkpoint_id",), ("kind",), ("merge_status",), ("host_path",)),
+            "No checkpoints found.",
+        ),
+    }
+    if command in list_contracts:
+        key, fields, empty = list_contracts[command]
+        rows = result.get(key, ()) if isinstance(result, dict) else ()
+        return _columns(rows, fields, empty=empty)
+    fields = _SUMMARY_FIELDS.get(command)
+    if fields is None or not isinstance(result, dict):
+        return json.dumps(result, indent=2, sort_keys=True)
+    rendered = []
+    for label, paths in fields:
+        value = _first(result, paths)
+        if value is _MISSING:
+            continue
+        if label == "compatibility issues" and isinstance(value, list):
+            value = len(value)
+        rendered.append((label, _scalar(value)))
+    if not rendered:
+        return json.dumps(result, indent=2, sort_keys=True)
+    width = max(len(label) for label, _ in rendered)
+    return "\n".join(f"{label:<{width}}  {value}" for label, value in rendered)
 
 
 def _error_context(exc: BaseException) -> dict[str, object]:
@@ -367,7 +641,7 @@ def _dispatch(args):
             result = _application().serve(args.config, socket_path=args.socket)
         finally:
             _restore_handlers(previous)
-        return result, False, None
+        return result, args.json, None
     if args.command == "connect":
         return _application().connect(args.config), args.json, None
     if args.command == "deploy":
@@ -459,14 +733,7 @@ def _dispatch(args):
         if args.dataset_command == "prepare":
             return app.dataset_prepare(args.dataset_id, args.preparation), args.json, None
         if args.dataset_command == "list":
-            result = app.dataset_list()
-            if args.detail or args.json:
-                return result, args.json, None
-            lines = (
-                f"{dataset['logical_name']} {dataset['dataset_version']} {dataset['path']}"
-                for dataset in result["datasets"]
-            )
-            return "\n".join(lines), False, "raw"
+            return app.dataset_list(), args.json, None
         if args.dataset_command == "inspect":
             return app.dataset_inspect(args.dataset_id), args.json, None
         return app.dataset_verify(args.dataset_id), args.json, None
@@ -514,8 +781,10 @@ def main(argv=None) -> int:
         result, json_mode, render = _dispatch(args)
         if json_mode:
             _json_output(command, "success", result, ())
-        else:
+        elif render == "raw" or bool(getattr(args, "detail", False)):
             _human(result)
+        else:
+            _human(_compact(command, result))
         return ExitCode.SUCCESS
     except KeyboardInterrupt as exc:
         code, category = _classify(exc)

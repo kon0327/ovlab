@@ -33,10 +33,11 @@ from .observation import (
 )
 from .signals import SignalAccess, SignalRegistry, SignalSpec, SignalValue
 from .trace import EpisodeTerminalStatus, EpisodeTrace
-from .version import OVLAB_CONTRACT_VERSION
+from .version import OVLAB_CONTRACT_VERSION, OVLAB_VERSION
 
 __all__ = [
     "OVLAB_CONTRACT_VERSION",
+    "OVLAB_VERSION",
     "AdapterState",
     "ActionPrediction",
     "ActionRepresentation",

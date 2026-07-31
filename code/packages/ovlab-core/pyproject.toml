@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ovlab-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Dependency-light core data contracts for OpenVLABenchmark"
 readme = "README.md"
 requires-python = ">=3.10"

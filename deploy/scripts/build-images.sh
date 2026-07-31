@@ -11,6 +11,7 @@ python deploy/scripts/source_manifest.py --root "$repository_root" --output "$ma
 revision="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["repository_revision"])' "$manifest")"
 source_sha="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_content_sha256"])' "$manifest")"
 dirty="$(python -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["dirty"]).lower())' "$manifest")"
+version="$(tr -d '[:space:]' < VERSION)"
 
 build_role() {
   local role="$1"
@@ -28,6 +29,7 @@ build_role() {
     --build-arg "OVLAB_LOCK_SHA256=$lock_sha" \
     --build-arg "OVLAB_DOCKERFILE_SHA256=$dockerfile_sha" \
     --build-arg "OVLAB_IMAGE_REFERENCE=$image" \
+    --build-arg "OVLAB_VERSION=$version" \
     .
   printf '%s image=%s id=%s source=%s dirty=%s lock=%s dockerfile=%s\n' \
     "$role" "$image" "$(docker image inspect --format '{{.Id}}' "$image")" \

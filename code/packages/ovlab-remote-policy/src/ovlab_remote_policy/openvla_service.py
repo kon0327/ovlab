@@ -12,6 +12,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
+from ovlab_core.contracts import OVLAB_VERSION
 from ovlab_openvla_common import OpenVlaModelSource, vanilla_base_method_descriptor
 from ovlab_openvla_vanilla import (
     InferenceSynchronization,
@@ -79,7 +80,7 @@ def _identity_provider(capabilities) -> Mapping[str, object]:
             "bitsandbytes": _version("bitsandbytes"),
             "ovlab_remote_policy": _version("ovlab-remote-policy"),
             "policy_component": f"{capabilities.component_name}@{capabilities.component_version}",
-            "protocol_component": "ovlab-remote-policy@0.1.0",
+            "protocol_component": f"ovlab-remote-policy@{OVLAB_VERSION}",
         },
         "method_descriptor": method,
     }
