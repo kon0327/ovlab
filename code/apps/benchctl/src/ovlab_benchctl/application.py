@@ -115,7 +115,18 @@ class OvlabApplication:
         self.repository_root = root
         self.config_root = root / "configs"
         self.environment = values
-        self.resolver = ConfigResolver(self.config_root, repository_root=root)
+        self._resolver = None
+
+    @property
+    def resolver(self) -> ConfigResolver:
+        """Construct the experiment resolver only for configuration operations.
+
+        Dataset and finalized-artifact inspection are valid in purpose-built
+        images that intentionally contain no portable experiment tree.
+        """
+        if self._resolver is None:
+            self._resolver = ConfigResolver(self.config_root, repository_root=self.repository_root)
+        return self._resolver
 
     def _config_path(self, config: str | Path) -> Path:
         path = Path(config).expanduser()
@@ -156,6 +167,25 @@ class OvlabApplication:
             self.environment.get("OVLAB_EXPORTS_ROOT", runs.parent / "exports")
         ).expanduser().resolve()
         return runs, derived, exports
+
+    def _model_data_root(self) -> Path:
+        """Host-visible model data; never part of a scientific identity."""
+        return Path(
+            self.environment.get(
+                "OVLAB_MODEL_DATA_ROOT",
+                self.environment.get("OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data"),
+            )
+        ).expanduser().resolve()
+
+    def _training_profile(self, reference):
+        from .training_profiles import TrainingProfile
+
+        path = Path(reference).expanduser()
+        if not path.is_absolute():
+            path = self.repository_root / path
+        if not path.is_file():
+            raise ConfigReferenceError(f"training profile does not exist: {path.resolve()}")
+        return path.resolve(), TrainingProfile.from_document(load(path.resolve()))
 
     def _report_profile(self, reference):
         from ovlab_runner import ArtifactError, ReportProfile, builtin_profile
@@ -683,3 +713,115 @@ class OvlabApplication:
         from ovlab_runner import ExportEngine
         runs, _, exports = self._data_roots()
         return ExportEngine(runs, exports).verify(kind, name)
+
+    # Gate I dataset, training, and checkpoint application services. These
+    # compose domain owners but never import model runtimes during read-only work.
+    @staticmethod
+    def dataset_providers():
+        from .datasets import DatasetBridgeRegistry
+        return {"schema_version": "ovlab.dataset-providers/v1", "providers": DatasetBridgeRegistry().providers()}
+
+    def dataset_resolve(self, *, source, name, version="1", url=None, sha256=None, archive="auto", preparation=None, local_path=None, allow_local_http=False):
+        from .datasets import DatasetRequest, DatasetStore
+        request = DatasetRequest(
+            source=source, name=name, version=version, url=url, sha256=sha256,
+            archive=archive, preparation=preparation,
+            local_path=None if local_path is None else Path(local_path),
+            allow_local_http=allow_local_http,
+        )
+        return DatasetStore(self._model_data_root()).resolve(request).as_dict()
+
+    def dataset_fetch(self, *, source, name, version="1", url=None, sha256=None, archive="auto", preparation=None, allow_dataset_download=False, allow_local_http=False):
+        from .datasets import DatasetRequest, DatasetStore
+        request = DatasetRequest(
+            source=source, name=name, version=version, url=url, sha256=sha256,
+            archive=archive, preparation=preparation, allow_local_http=allow_local_http,
+        )
+        return DatasetStore(self._model_data_root()).fetch(
+            request, allow_download=allow_dataset_download,
+            progress=lambda message: print(f"ovlab: dataset: {message}", file=__import__("sys").stderr),
+        )
+
+    def dataset_import(self, *, name, version, path, preparation=None):
+        from .datasets import DatasetRequest, DatasetStore
+        return DatasetStore(self._model_data_root()).import_local(DatasetRequest(
+            source="local", name=name, version=version, local_path=Path(path), preparation=preparation,
+        ))
+
+    def dataset_prepare(self, dataset_id, preparation_format):
+        from .datasets import DatasetStore
+        return DatasetStore(self._model_data_root()).prepare(dataset_id, preparation_format)
+
+    def dataset_list(self):
+        from .datasets import DatasetStore
+        return {"schema_version": "ovlab.dataset-list/v1", "datasets": DatasetStore(self._model_data_root()).list()}
+
+    def dataset_inspect(self, dataset_id):
+        from .datasets import DatasetStore
+        return DatasetStore(self._model_data_root()).inspect(dataset_id)
+
+    def dataset_verify(self, dataset_id):
+        from .datasets import DatasetStore
+        return DatasetStore(self._model_data_root()).verify(dataset_id)
+
+    def train_profiles(self):
+        from .training_profiles import TrainingProfile
+        profiles = []
+        for path in sorted((self.config_root / "training").glob("*.yaml")):
+            try:
+                profile = TrainingProfile.from_document(load(path))
+            except Exception as exc:
+                profiles.append({"path": str(path), "valid": False, "error": str(exc)})
+            else:
+                profiles.append({"id": profile.profile_id, "path": str(path), "valid": True})
+        return {"schema_version": "ovlab.training-profiles/v1", "profiles": profiles}
+
+    def train_validate(self, profile):
+        from .training_identity import identity
+        path, parsed = self._training_profile(profile)
+        return {
+            "schema_version": "ovlab.training-validation/v1",
+            "valid": True,
+            "profile_id": parsed.profile_id,
+            "normalized_profile_id": identity("training-profile", parsed.document, 32),
+            "source": str(path),
+            "model_initialized": False,
+            "network_used": False,
+        }
+
+    def train_plan(self, profile, *, allow_dataset_download=False):
+        from .training_profiles import TrainingPlanner
+        _, parsed = self._training_profile(profile)
+        gpu_count = self.environment.get("OVLAB_AVAILABLE_GPU_COUNT")
+        vram = self.environment.get("OVLAB_AVAILABLE_VRAM_GIB")
+        return TrainingPlanner(self.repository_root, self._model_data_root()).plan(
+            parsed,
+            allow_dataset_download=allow_dataset_download,
+            available_gpu_count=None if gpu_count is None else int(gpu_count),
+            available_vram_gib=None if vram is None else float(vram),
+            image_identity=self.environment.get("OVLAB_TRAINING_IMAGE_DIGEST", "unavailable"),
+        )
+
+    def train_inspect(self, run_id):
+        from .training_runs import TrainingRunStore
+        return TrainingRunStore(self._model_data_root()).inspect(run_id)
+
+    def train_status(self, run_id):
+        inspected = self.train_inspect(run_id)
+        return {"schema_version": "ovlab.training-status/v1", "run_id": run_id, **inspected["result"]}
+
+    def train_verify(self, run_id):
+        from .training_runs import TrainingRunStore
+        return TrainingRunStore(self._model_data_root()).verify(run_id)
+
+    def checkpoint_list(self):
+        from .training_runs import CheckpointBundleStore
+        return {"schema_version": "ovlab.checkpoint-list/v1", "checkpoints": CheckpointBundleStore(self._model_data_root()).list()}
+
+    def checkpoint_inspect(self, checkpoint_id):
+        from .training_runs import CheckpointBundleStore
+        return CheckpointBundleStore(self._model_data_root()).inspect(checkpoint_id)
+
+    def checkpoint_verify(self, checkpoint_id):
+        from .training_runs import CheckpointBundleStore
+        return CheckpointBundleStore(self._model_data_root()).verify(checkpoint_id)

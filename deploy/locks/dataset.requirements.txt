@@ -1,0 +1,4 @@
+# Generated from dataset.pylock.toml; do not edit.
+numpy==1.26.4 --hash=sha256:ffa75af20b44f8dba823498024771d5ac50620e6915abac414251bd971b4529f
+pyyaml==6.0.3 --hash=sha256:9c7708761fccb9397fe64bbc0395abcae8c4bf7b0eac081e12b809bf47700d0b
+zstandard==0.24.0 --hash=sha256:92be52ca4e6e604f03d5daa079caec9e04ab4cbf6972b995aaebb877d3d24e13

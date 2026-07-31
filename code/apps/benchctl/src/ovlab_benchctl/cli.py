@@ -33,7 +33,10 @@ class ExitCode:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ovlab", description="OpenVLABenchmark orchestration CLI")
-    parser.add_argument("--version", action="store_true", help="show OVLAB CLI and repository revision")
+    parser.add_argument(
+        "--version", dest="show_version", action="store_true",
+        help="show OVLAB CLI and repository revision",
+    )
     parser.add_argument("--debug", action="store_true", help="include a traceback for unexpected failures")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
@@ -161,6 +164,77 @@ def _parser() -> argparse.ArgumentParser:
     export_verify.add_argument("--name", dest="export_name")
     export_verify.add_argument("--export", dest="legacy_export_id", help="legacy alias for --kind grouped --name")
     export_verify.add_argument("--json", action="store_true")
+
+    dataset = commands.add_parser("dataset", help="resolve, acquire, prepare, and verify immutable datasets")
+    dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
+    dataset_providers = dataset_commands.add_parser("providers", help="list registered dataset bridges without model imports")
+    dataset_providers.add_argument("--json", action="store_true")
+    dataset_resolve = dataset_commands.add_parser("resolve", help="resolve a known benchmark dataset without downloading")
+    dataset_resolve.add_argument("--benchmark", choices=("libero",), required=True)
+    dataset_resolve.add_argument("--suite", required=True)
+    dataset_resolve.add_argument("--json", action="store_true")
+    dataset_fetch = dataset_commands.add_parser("fetch", help="explicitly acquire and prepare a verified dataset")
+    dataset_fetch.add_argument("--source", choices=("libero", "url"), required=True)
+    dataset_fetch.add_argument("--name", required=True)
+    dataset_fetch.add_argument("--version", default="1")
+    dataset_fetch.add_argument("--url")
+    dataset_fetch.add_argument("--sha256")
+    dataset_fetch.add_argument("--archive", default="auto", choices=("auto", "none", "zip", "tar", "tar.gz", "tgz", "tar.zst"))
+    dataset_fetch.add_argument("--format", dest="preparation")
+    dataset_fetch.add_argument("--allow-local-http", action="store_true", help=argparse.SUPPRESS)
+    dataset_fetch.add_argument("--json", action="store_true")
+    dataset_import = dataset_commands.add_parser("import", help="copy and register an existing local dataset immutably")
+    dataset_import.add_argument("--name", required=True)
+    dataset_import.add_argument("--version", required=True)
+    dataset_import.add_argument("--path", required=True)
+    dataset_import.add_argument("--format", dest="preparation")
+    dataset_import.add_argument("--json", action="store_true")
+    dataset_prepare = dataset_commands.add_parser("prepare", help="verify the selected immutable preparation")
+    dataset_prepare.add_argument("--dataset", dest="dataset_id", required=True)
+    dataset_prepare.add_argument("--format", dest="preparation", required=True)
+    dataset_prepare.add_argument("--json", action="store_true")
+    dataset_list = dataset_commands.add_parser("list", help="list locally ready immutable datasets")
+    dataset_list.add_argument(
+        "--detail", action="store_true",
+        help="print the complete dataset-list document instead of the compact listing",
+    )
+    dataset_list.add_argument("--json", action="store_true")
+    dataset_inspect = dataset_commands.add_parser("inspect", help="inspect one immutable dataset manifest")
+    dataset_inspect.add_argument("--dataset", dest="dataset_id", required=True)
+    dataset_inspect.add_argument("--json", action="store_true")
+    dataset_verify = dataset_commands.add_parser("verify", help="verify dataset bytes without network access")
+    dataset_verify.add_argument("--dataset", dest="dataset_id", required=True)
+    dataset_verify.add_argument("--json", action="store_true")
+
+    train = commands.add_parser("train", help="validate, plan, execute, and inspect isolated training")
+    train_commands = train.add_subparsers(dest="train_command", required=True)
+    train_profiles = train_commands.add_parser("profiles", help="list portable training profiles")
+    train_profiles.add_argument("--json", action="store_true")
+    train_validate = train_commands.add_parser("validate", help="strictly validate a profile without resolving resources")
+    train_validate.add_argument("--profile", required=True)
+    train_validate.add_argument("--json", action="store_true")
+    train_plan = train_commands.add_parser("plan", help="resolve immutable resources without model initialization")
+    train_plan.add_argument("--profile", required=True)
+    train_plan.add_argument("--json", action="store_true")
+    train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
+    train_run.add_argument("--profile", required=True)
+    train_run.add_argument("--allow-dataset-download", action="store_true")
+    train_run.add_argument("--json", action="store_true")
+    for command_name in ("status", "inspect", "verify"):
+        command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
+        command.add_argument("--run", dest="run_id", required=True)
+        command.add_argument("--json", action="store_true")
+
+    checkpoint = commands.add_parser("checkpoint", help="inspect finalized immutable training checkpoints")
+    checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_command", required=True)
+    checkpoint_list = checkpoint_commands.add_parser("list", help="list finalized training checkpoints")
+    checkpoint_list.add_argument("--json", action="store_true")
+    checkpoint_inspect = checkpoint_commands.add_parser("inspect", help="inspect checkpoint identity and compatibility")
+    checkpoint_inspect.add_argument("--checkpoint", dest="checkpoint_id", required=True)
+    checkpoint_inspect.add_argument("--json", action="store_true")
+    checkpoint_verify = checkpoint_commands.add_parser("verify", help="verify checkpoint files and tensor structure")
+    checkpoint_verify.add_argument("--checkpoint", dest="checkpoint_id", required=True)
+    checkpoint_verify.add_argument("--json", action="store_true")
     return parser
 
 
@@ -178,6 +252,7 @@ def _command_name(args) -> str:
     for name in (
         "config_command", "policy_command", "service_command", "deploy_command",
         "metrics_command", "report_command", "export_command",
+        "dataset_command", "train_command", "checkpoint_command",
     ):
         value = getattr(args, name, None)
         if value:
@@ -229,6 +304,16 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.POLICY_UNAVAILABLE, "source_unavailable"
     if name == "ReportingRendererError":
         return ExitCode.RUNTIME, "report_renderer_error"
+    if name in {"DatasetIntegrityError", "CheckpointBundleError"}:
+        return ExitCode.INTEGRITY, "artifact_integrity_error"
+    if name in {"DatasetRequestError", "TrainingProfileError"}:
+        return ExitCode.CONFIGURATION, "configuration_error"
+    if name in {"DatasetUnavailableError"}:
+        return ExitCode.POLICY_UNAVAILABLE, "dataset_unavailable"
+    if name in {"DatasetInterruptedError", "TrainingInterruptedError"}:
+        return ExitCode.INTERRUPTED, "interrupted"
+    if name.startswith("Training"):
+        return ExitCode.RUNTIME, "training_error"
     if name in {"RunIntegrityError", "ArtifactError"}:
         return ExitCode.INTEGRITY, "run_integrity_error"
     if name.startswith("QuIC") and ("Incomplete" in name or "Unavailable" in name or "Provider" in name):
@@ -353,13 +438,70 @@ def _dispatch(args):
             raise CliUsageError("export verify accepts either --name or legacy --export, not both")
         kind = "grouped" if args.legacy_export_id is not None else args.kind
         return app.export_verify(kind, name), args.json, None
+    if args.command == "dataset":
+        app = _application()
+        if args.dataset_command == "providers":
+            return app.dataset_providers(), args.json, None
+        if args.dataset_command == "resolve":
+            return app.dataset_resolve(source=args.benchmark, name=args.suite), args.json, None
+        if args.dataset_command == "fetch":
+            return app.dataset_fetch(
+                source=args.source, name=args.name, version=args.version,
+                url=args.url, sha256=args.sha256, archive=args.archive,
+                preparation=args.preparation, allow_dataset_download=True,
+                allow_local_http=args.allow_local_http,
+            ), args.json, None
+        if args.dataset_command == "import":
+            return app.dataset_import(
+                name=args.name, version=args.version, path=args.path,
+                preparation=args.preparation,
+            ), args.json, None
+        if args.dataset_command == "prepare":
+            return app.dataset_prepare(args.dataset_id, args.preparation), args.json, None
+        if args.dataset_command == "list":
+            result = app.dataset_list()
+            if args.detail or args.json:
+                return result, args.json, None
+            lines = (
+                f"{dataset['logical_name']} {dataset['dataset_version']} {dataset['path']}"
+                for dataset in result["datasets"]
+            )
+            return "\n".join(lines), False, "raw"
+        if args.dataset_command == "inspect":
+            return app.dataset_inspect(args.dataset_id), args.json, None
+        return app.dataset_verify(args.dataset_id), args.json, None
+    if args.command == "train":
+        app = _application()
+        if args.train_command == "profiles":
+            return app.train_profiles(), args.json, None
+        if args.train_command == "validate":
+            return app.train_validate(args.profile), args.json, None
+        if args.train_command == "plan":
+            return app.train_plan(args.profile), args.json, None
+        if args.train_command == "run":
+            from .training_deployment import TrainingDeployment
+            return TrainingDeployment(_repository_root()).run(
+                args.profile, allow_dataset_download=args.allow_dataset_download,
+            ), args.json, None
+        if args.train_command == "status":
+            return app.train_status(args.run_id), args.json, None
+        if args.train_command == "inspect":
+            return app.train_inspect(args.run_id), args.json, None
+        return app.train_verify(args.run_id), args.json, None
+    if args.command == "checkpoint":
+        app = _application()
+        if args.checkpoint_command == "list":
+            return app.checkpoint_list(), args.json, None
+        if args.checkpoint_command == "inspect":
+            return app.checkpoint_inspect(args.checkpoint_id), args.json, None
+        return app.checkpoint_verify(args.checkpoint_id), args.json, None
     raise AssertionError("unhandled CLI command")
 
 
 def main(argv=None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.version:
+    if args.show_version:
         value = repository_revision(_repository_root())
         _human(f"ovlab {CLI_VERSION} (revision {value or 'unavailable'})")
         return ExitCode.SUCCESS

@@ -98,6 +98,34 @@ class ResolvedCheckpoint:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedTrainingCheckpoint:
+    """Verified base-plus-artifact handoff for a finalized Gate I checkpoint."""
+
+    checkpoint_id: str
+    kind: str
+    bundle_host_path: Path
+    bundle_container_path: str
+    base: ResolvedCheckpoint
+    merge_status: str
+    expected_loader: str
+    training_run_id: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "checkpoint_id": self.checkpoint_id,
+            "kind": self.kind,
+            "bundle_host_path": str(self.bundle_host_path),
+            "bundle_container_path": self.bundle_container_path,
+            "base_checkpoint": self.base.as_dict(),
+            "merge_status": self.merge_status,
+            "expected_loader": self.expected_loader,
+            "training_run_id": self.training_run_id,
+            "dataset_required": False,
+            "training_runtime_started": False,
+        }
+
+
 def _merge(parent: dict[str, object], child: dict[str, object]) -> dict[str, object]:
     result = dict(parent)
     for key, value in child.items():
@@ -157,6 +185,30 @@ def checkpoint_spec(repository_root: Path, experiment: str | Path) -> Checkpoint
         files = tuple(
             (str(name), int(identity["size"]), str(identity["sha256"]))
             for name, identity in artifact_files.items()
+        )
+        return CheckpointSpec(
+            resource_id=resource_id,
+            repo_id=str(entry["repo_id"]),
+            revision=str(entry["revision"]),
+            expected_sha256=str(entry["expected_sha256"]),
+            files=files,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CheckpointResolutionError(
+            f"registry entry {resource_id!r} lacks a complete immutable artifact identity"
+        ) from exc
+
+
+def checkpoint_spec_by_id(repository_root: Path, resource_id: str) -> CheckpointSpec:
+    """Resolve one portable registry checkpoint without an experiment wrapper."""
+    root = repository_root.resolve()
+    registry = _composed(root / "configs" / "resources" / "registry.yaml", root / "configs", "resource_registry")
+    try:
+        entry = registry["checkpoints"][resource_id]  # type: ignore[index]
+        artifact_files = entry.get("files") or entry["artifact"]["files"]
+        files = tuple(
+            (str(name), int(file_identity["size"]), str(file_identity["sha256"]))
+            for name, file_identity in artifact_files.items()
         )
         return CheckpointSpec(
             resource_id=resource_id,
@@ -559,3 +611,83 @@ def default_global_cache(environment: Mapping[str, str]) -> Path:
         or environment.get("HF_HOME")
     )
     return Path(value).expanduser() if value else Path.home() / ".cache/huggingface"
+
+
+def resolve_finalized_training_checkpoint(
+    repository_root: Path,
+    model_data_root: Path,
+    checkpoint_id: str,
+    *,
+    global_cache: Path | None = None,
+    local_base_path: Path | None = None,
+    progress: ProgressCallback | None = None,
+) -> ResolvedTrainingCheckpoint:
+    """Resolve an immutable training bundle and its pinned base without network.
+
+    This is the deployment handoff boundary: it accepts only content-derived
+    finalized IDs, independently verifies the bundle, and delegates base-model
+    resolution to the pre-existing checkpoint resolver in strict offline mode.
+    It never examines training staging directories or starts a trainer.
+    """
+    if re.fullmatch(r"checkpoint-[0-9a-f]{32}", checkpoint_id) is None:
+        raise CheckpointResolutionError(
+            "trained checkpoint selection requires an immutable checkpoint-<32 hex> ID; aliases are not accepted"
+        )
+    # Local import avoids coupling the existing Hugging Face resolver to the
+    # training domain at module import time.
+    from .training_runs import CheckpointBundleStore
+
+    root = model_data_root.expanduser().resolve()
+    store = CheckpointBundleStore(root)
+    try:
+        store.verify(checkpoint_id)
+        inspection = store.inspect(checkpoint_id)
+    except Exception as exc:
+        raise CheckpointResolutionError(
+            f"trained checkpoint is not finalized and verified: {checkpoint_id}: {exc}"
+        ) from exc
+    checkpoint = inspection.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        raise CheckpointResolutionError("trained checkpoint document is missing")
+    kind = str(checkpoint.get("kind"))
+    if kind not in {"peft_adapter", "full_checkpoint"}:
+        raise CheckpointResolutionError(f"unsupported trained checkpoint kind: {kind!r}")
+    if kind == "peft_adapter" and checkpoint.get("merge_status") != "unmerged":
+        raise CheckpointResolutionError("Gate I PEFT deployment requires an unmerged adapter bundle")
+    base_identity = checkpoint.get("base_checkpoint")
+    if not isinstance(base_identity, dict):
+        raise CheckpointResolutionError("trained checkpoint omits its immutable base dependency")
+    resource_id = str(base_identity.get("resource_id", ""))
+    try:
+        spec = checkpoint_spec_by_id(repository_root, resource_id)
+    except CheckpointResolutionError as exc:
+        raise CheckpointResolutionError(
+            f"trained checkpoint base dependency is incompatible with registry resource {resource_id!r}: {exc}"
+        ) from exc
+    expected = {
+        "resource_id": spec.resource_id,
+        "repository": spec.repo_id,
+        "revision": spec.revision,
+        "aggregate_sha256": spec.expected_sha256,
+    }
+    if any(base_identity.get(key) != value for key, value in expected.items()):
+        raise CheckpointResolutionError(
+            f"trained checkpoint base dependency is incompatible with registry resource {resource_id!r}"
+        )
+    resolver = CheckpointResolver(
+        global_cache=(global_cache or default_global_cache(os.environ)).expanduser().resolve(),
+        managed_cache=root / "checkpoints" / "huggingface",
+        progress=progress,
+    )
+    base = resolver.resolve(spec, local_path=local_base_path, offline=True)
+    bundle_path = Path(str(inspection["host_path"])).resolve()
+    return ResolvedTrainingCheckpoint(
+        checkpoint_id=checkpoint_id,
+        kind=kind,
+        bundle_host_path=bundle_path,
+        bundle_container_path=f"/checkpoints/trained/{checkpoint_id}",
+        base=base,
+        merge_status=str(checkpoint.get("merge_status")),
+        expected_loader=str(checkpoint.get("expected_loader")),
+        training_run_id=str(checkpoint.get("training_run_id")),
+    )

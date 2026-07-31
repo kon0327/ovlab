@@ -16,6 +16,108 @@ if ! command -v "$python_executable" >/dev/null 2>&1; then
     exit 127
 fi
 
+# Dataset mutation is always isolated from checkpoints, benchmark runs, and
+# reporting. Only the explicit `dataset fetch` command receives network access.
+if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; then
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "ovlab: dataset operations require Docker; the Docker CLI is unavailable." >&2
+        exit 127
+    fi
+    model_data_root="${OVLAB_MODEL_DATA_ROOT:-${OVLAB_DATA_ROOT:-$repository_root/../ovlab-data}}"
+    model_data_root="$(realpath -m -- "$model_data_root")"
+    datasets_root="$model_data_root/datasets"
+    mkdir -p -- "$datasets_root"
+    chmod 2770 -- "$datasets_root"
+    dataset_image="${OVLAB_DATASET_IMAGE:-ovlab-dataset:local}"
+    if ! docker image inspect "$dataset_image" >/dev/null 2>&1; then
+        echo "ovlab: dataset image is unavailable: $dataset_image" >&2
+        echo "ovlab: build it with: bash deploy/scripts/build-images.sh dataset" >&2
+        exit 6
+    fi
+    dataset_command="${2:-}"
+    help_requested=false
+    for argument in "$@"; do
+        if [[ "$argument" == "--help" || "$argument" == "-h" ]]; then
+            help_requested=true
+            break
+        fi
+    done
+    mount_mode="readonly"
+    network="none"
+    case "$dataset_command" in
+        fetch) mount_mode=""; network="bridge" ;;
+        import|prepare) mount_mode="" ;;
+        providers|resolve|list|inspect|verify|--help|-h) ;;
+        *) echo "ovlab: unsupported dataset command: $dataset_command" >&2; exit 2 ;;
+    esac
+    if [[ "$help_requested" == "true" ]]; then
+        mount_mode="readonly"
+        network="none"
+    fi
+    args=("$@")
+    import_mount=()
+    dataset_source=""
+    dataset_name=""
+    if [[ "$help_requested" == "false" && "$dataset_command" == "fetch" ]]; then
+        for ((index=0; index<${#args[@]}; index++)); do
+            if [[ "${args[$index]}" == "--source" && $((index + 1)) -lt ${#args[@]} ]]; then
+                dataset_source="${args[$((index + 1))]}"
+            elif [[ "${args[$index]}" == "--name" && $((index + 1)) -lt ${#args[@]} ]]; then
+                dataset_name="${args[$((index + 1))]}"
+            fi
+        done
+    elif [[ "$help_requested" == "false" && "$dataset_command" == "import" ]]; then
+        dataset_source="local"
+        for ((index=0; index<${#args[@]}; index++)); do
+            if [[ "${args[$index]}" == "--name" && $((index + 1)) -lt ${#args[@]} ]]; then
+                dataset_name="${args[$((index + 1))]}"
+            fi
+        done
+    fi
+    if [[ -n "$dataset_source" || -n "$dataset_name" ]]; then
+        if [[ ! "$dataset_source" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || ! "$dataset_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "ovlab: dataset source and name must be path-safe identifiers." >&2
+            exit 3
+        fi
+        provider_root="$datasets_root/$dataset_source"
+        name_root="$provider_root/$dataset_name"
+        if [[ -L "$provider_root" || -L "$name_root" ]]; then
+            echo "ovlab: dataset publication path must not contain symbolic links." >&2
+            exit 3
+        fi
+        mkdir -p -- "$provider_root" "$name_root"
+        chmod 2770 -- "$provider_root" "$name_root"
+    fi
+    if [[ "$dataset_command" == "import" && "$help_requested" == "false" ]]; then
+        source_path=""
+        for ((index=0; index<${#args[@]}; index++)); do
+            if [[ "${args[$index]}" == "--path" && $((index + 1)) -lt ${#args[@]} ]]; then
+                source_path="$(realpath -- "${args[$((index + 1))]}")"
+                args[$((index + 1))]="/imports/source"
+                break
+            fi
+        done
+        if [[ -z "$source_path" || ! -d "$source_path" ]]; then
+            echo "ovlab: dataset import --path must name an existing directory." >&2
+            exit 3
+        fi
+        import_mount=(--mount "type=bind,source=$source_path,target=/imports/source,readonly")
+    fi
+    dataset_mount="type=bind,source=$datasets_root,target=/var/lib/ovlab/model-data/datasets"
+    if [[ "$mount_mode" == "readonly" ]]; then
+        dataset_mount+=",readonly"
+    fi
+    echo "ovlab: dataset: using isolated image $dataset_image (network=$network)." >&2
+    exec docker run --rm \
+        --network "$network" --read-only --user 10001:10001 --group-add "$(id -g)" \
+        --cap-drop ALL --security-opt no-new-privileges:true \
+        --tmpfs /tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700 \
+        --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data \
+        --env "OVLAB_MODEL_DATA_DISPLAY_ROOT=$model_data_root" \
+        --mount "$dataset_mount" "${import_mount[@]}" \
+        "$dataset_image" "${args[@]}"
+fi
+
 # Reporting and export use their purpose-built image by default. Host execution
 # remains an explicit diagnostic escape hatch, never an implicit Conda dependency.
 if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then

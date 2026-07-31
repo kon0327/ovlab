@@ -1,0 +1,3 @@
+# Gate I OpenVLA reference training additions.
+transformers==4.40.1
+# dlimp @ git+https://github.com/moojink/dlimp_openvla.git@040105d256bd28866cc6620621a3d5f7b6b91b46

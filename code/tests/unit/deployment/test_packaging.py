@@ -22,6 +22,13 @@ def _dockerfile(name: str) -> str:
     return (DOCKER / name).read_text(encoding="utf-8")
 
 
+def _service(name: str, next_name: str | None = None) -> str:
+    block = COMPOSE.split(f"  {name}:\n", 1)[1]
+    if next_name is not None:
+        return block.split(f"  {next_name}:\n", 1)[0]
+    return block.split("\nvolumes:\n", 1)[0]
+
+
 def test_production_images_are_digest_pinned_non_root_and_cli_only():
     for name in (
         "Dockerfile.benchmark", "Dockerfile.reporting", "Dockerfile.openvla",
@@ -76,8 +83,18 @@ def test_role_closures_do_not_cross_heavy_runtime_boundaries():
 def test_compose_is_socket_only_offline_and_least_privilege():
     forbidden = ("ports:", "privileged:", "network_mode: host", "/var/run/docker.sock")
     assert not any(value in COMPOSE for value in forbidden)
-    assert COMPOSE.count("network_mode: none") == 1
-    assert COMPOSE.count("<<: *policy-security") == 6
+    assert "network_mode: none" in COMPOSE.split("x-policy-security:", 1)[1].split("services:", 1)[0]
+    for service, successor in (
+        ("policy-openvla", "benchmark-openvla"),
+        ("benchmark-openvla", "policy-openvla-oft"),
+        ("policy-openvla-oft", "benchmark-oft"),
+        ("benchmark-oft", "reporting"),
+        ("reporting", "export"),
+        ("export", "dataset-acquire"),
+        ("training-openvla", "checkpoint-finalizer"),
+        ("checkpoint-finalizer", None),
+    ):
+        assert "<<: *policy-security" in _service(service, successor)
     assert "read_only: true" in COMPOSE
     assert COMPOSE.count("cap_drop: [ALL]") >= 1
     assert "HF_HUB_OFFLINE: \"1\"" in COMPOSE
@@ -121,8 +138,14 @@ def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
     assert COMPOSE.count("target: /var/lib/ovlab/exports") == 2
     assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,derived-rw,exports-rw") == 1
     assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro") == 1
-    assert COMPOSE.count("${OVLAB_HOST_ARTIFACT_GID:-1000}") == 4
-    reporting = COMPOSE.split("  reporting:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    for service, successor in (
+        ("benchmark-openvla", "policy-openvla-oft"),
+        ("benchmark-oft", "reporting"),
+        ("reporting", "export"),
+        ("export", "dataset-acquire"),
+    ):
+        assert "${OVLAB_HOST_ARTIFACT_GID:-1000}" in _service(service, successor)
+    reporting = _service("reporting", "export")
     assert "profiles: [reporting]" in reporting
     assert "image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}" in reporting
     assert "report\n      - publish" in reporting
@@ -131,7 +154,7 @@ def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
     assert "target: /var/lib/ovlab/exports" in reporting
     assert "gpus:" not in reporting
     assert "rpc-openvla" not in reporting and "rpc-oft" not in reporting
-    export = COMPOSE.split("  export:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    export = _service("export", "dataset-acquire")
     assert "profiles: [export]" in export
     assert "image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}" in export
     assert "OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro" in export
@@ -148,6 +171,53 @@ def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
     benchmark_services = COMPOSE.split("  benchmark-openvla:\n", 1)[1].split("  policy-openvla-oft:\n", 1)[0] + COMPOSE.split("  benchmark-oft:\n", 1)[1].split("  reporting:\n", 1)[0]
     assert "/var/lib/ovlab/derived" not in benchmark_services
     assert "/var/lib/ovlab/exports" not in benchmark_services
+
+
+def test_gate_i_compose_services_preserve_dataset_training_and_finalization_boundaries():
+    dataset = _service("dataset-acquire", "training-openvla")
+    assert "profiles: [dataset-acquire]" in dataset
+    assert "image: ${OVLAB_DATASET_IMAGE:-ovlab-dataset:local}" in dataset
+    assert "network_mode: none" not in dataset
+    assert "OVLAB_MOUNT_CONTRACT: datasets-rw" in dataset
+    assert "target: /var/lib/ovlab/model-data/datasets" in dataset
+    assert "target: /var/lib/ovlab/model-data/datasets\n        read_only: true" not in dataset
+    assert "/var/lib/ovlab/runs" not in dataset
+    assert "/var/lib/ovlab/checkpoints" not in dataset
+    assert "gpus:" not in dataset
+
+    training = _service("training-openvla", "checkpoint-finalizer")
+    assert "profiles: [training]" in training
+    assert "<<: *policy-security" in training
+    assert "gpus: all" in training
+    assert "target: /checkpoints/base\n        read_only: true" in training
+    assert "target: /datasets/resolved/${OVLAB_TRAINING_DATASET_NAME:-unset}/1.0.0\n        read_only: true" in training
+    assert "target: /var/lib/ovlab/training-run" in training
+    assert "target: /var/lib/ovlab/model-data/checkpoints" not in training
+    assert "/var/lib/ovlab/runs" not in training
+
+    finalizer = _service("checkpoint-finalizer")
+    assert "profiles: [training-finalize]" in finalizer
+    assert "<<: *policy-security" in finalizer
+    assert "gpus:" not in finalizer
+    assert "target: /var/lib/ovlab/training-run" in finalizer
+    assert "target: /var/lib/ovlab/model-data/checkpoints" in finalizer
+    assert "/checkpoints/base" not in finalizer
+    assert "/datasets/resolved" not in finalizer
+    assert "/var/lib/ovlab/runs" not in finalizer
+
+
+def test_gate_i_images_keep_dataset_and_training_dependency_closures_separate():
+    dataset = _dockerfile("Dockerfile.dataset")
+    training = _dockerfile("Dockerfile.training-openvla")
+    assert "COPY external/" not in dataset
+    assert "reporting.requirements" not in dataset
+    assert "matplotlib" not in (ROOT / "deploy/locks/dataset.requirements.txt").read_text(encoding="utf-8")
+    assert "COPY external/openvla " in training
+    assert "COPY external/libero " not in training
+    assert "COPY external/openvla-oft " not in training
+    assert "COPY external/openvla-quic " not in training
+    assert "cz.cvut.ovlab.dependency-lock.sha256" in dataset
+    assert "cz.cvut.ovlab.dependency-lock.sha256" in training
 
 
 def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
@@ -183,6 +253,24 @@ def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
     build_script = (ROOT / "deploy/scripts/build-images.sh").read_text(encoding="utf-8")
     assert '--secret "id=ovlab_source_manifest,src=$manifest"' in build_script
     assert "OVLAB_SOURCE_MANIFEST_B64" not in build_script
+
+
+def test_dataset_pyyaml_lock_uses_the_verified_platform_wheel_hash():
+    """Keep the small dataset lock aligned with the accepted runtime locks."""
+    expected = "9c7708761fccb9397fe64bbc0395abcae8c4bf7b0eac081e12b809bf47700d0b"
+    locks = ROOT / "deploy/locks"
+    dataset_requirement = (locks / "dataset.requirements.txt").read_text(encoding="utf-8")
+    dataset_pylock = (locks / "dataset.pylock.toml").read_text(encoding="utf-8")
+    accepted_openvla_lock = (locks / "openvla.requirements.txt").read_text(encoding="utf-8")
+    assert f"pyyaml==6.0.3 --hash=sha256:{expected}" in dataset_requirement
+    assert f'sha256 = "{expected}"' in dataset_pylock
+    assert f"pyyaml==6.0.3 --hash=sha256:{expected}" in accepted_openvla_lock
+
+
+def test_training_image_python_label_matches_the_pinned_pytorch_base_runtime():
+    training = _dockerfile("Dockerfile.training-openvla")
+    assert 'cz.cvut.ovlab.python.version="3.10.13"' in training
+    assert 'cz.cvut.ovlab.python.version="3.10.20"' not in training
 
 
 def test_builds_disable_unlocked_pep517_isolation():

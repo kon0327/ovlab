@@ -11,7 +11,8 @@ import sys
 import pytest
 
 from ovlab_benchctl.application import OvlabApplication
-from ovlab_benchctl.cli import ExitCode, _classify
+from ovlab_benchctl.cli import ExitCode, _classify, _parser
+from ovlab_benchctl.datasets import DatasetRequest, DatasetStore
 from ovlab_runner import ReportingRendererError
 
 
@@ -62,10 +63,55 @@ def test_help_and_version_have_stable_identity():
     help_result = _run("--help")
     assert help_result.returncode == 0
     assert "Config" not in help_result.stderr
-    assert all(command in help_result.stdout for command in ("config", "policy", "service", "connect", "run", "metrics"))
+    assert all(command in help_result.stdout for command in (
+        "config", "policy", "service", "connect", "run", "metrics",
+        "dataset", "train", "checkpoint",
+    ))
     version = _run("--version")
     assert version.returncode == 0
     assert version.stdout.startswith("ovlab 0.1.0 (revision ")
+
+
+def test_dataset_version_does_not_trigger_global_cli_version():
+    fetched = _parser().parse_args([
+        "dataset", "fetch", "--source", "libero", "--name", "libero_10",
+    ])
+    imported = _parser().parse_args([
+        "dataset", "import", "--name", "custom", "--version", "1",
+        "--path", "/imports/source",
+    ])
+    assert fetched.show_version is False and fetched.version == "1"
+    assert imported.show_version is False and imported.version == "1"
+
+
+def test_dataset_list_defaults_to_compact_rows_and_detail_preserves_document(tmp_path):
+    model_data = tmp_path / "model-data"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "samples.bin").write_bytes(b"samples")
+    registered = DatasetStore(model_data).import_local(DatasetRequest(
+        source="local", name="fixture", version="1.0.0", local_path=source,
+    ))
+    environment = {
+        "OVLAB_DATASET_RUNTIME": "host",
+        "OVLAB_MODEL_DATA_ROOT": str(model_data),
+    }
+
+    compact = _run("dataset", "list", environment=environment)
+    assert compact.returncode == 0 and compact.stderr == ""
+    assert compact.stdout == f"fixture 1.0.0 {registered['host_path']}\n"
+
+    detailed = _run("dataset", "list", "--detail", environment=environment)
+    assert detailed.returncode == 0 and detailed.stderr == ""
+    detail_document = json.loads(detailed.stdout)
+    assert detail_document["schema_version"] == "ovlab.dataset-list/v1"
+    assert detail_document["datasets"][0]["dataset_id"] == registered["dataset_id"]
+
+    machine = _run("dataset", "list", "--json", environment=environment)
+    assert machine.returncode == 0 and machine.stderr == ""
+    machine_document = json.loads(machine.stdout)
+    assert machine_document["schema_version"] == "ovlab-cli-output/1.0.0"
+    assert machine_document["result"] == detail_document
 
 
 def test_source_launcher_uses_dedicated_reporting_container(tmp_path):
@@ -111,6 +157,103 @@ def test_source_launcher_uses_dedicated_reporting_container(tmp_path):
     assert (data / "derived").stat().st_mode & 0o7777 == 0o2770
     assert (data / "exports/isolated").stat().st_mode & 0o7777 == 0o2770
     assert (data / "exports/grouped").stat().st_mode & 0o7777 == 0o2770
+
+
+@pytest.mark.parametrize("arguments", [
+    ("--help",),
+    ("fetch", "--help"),
+    ("import", "--help"),
+])
+def test_dataset_help_is_forwarded_offline_without_mutation(tmp_path, arguments):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    fake_python = binaries / "python3"
+    fake_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    log = tmp_path / "docker-arguments.txt"
+    fake_docker = binaries / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = image ]; then exit 0; fi\n"
+        "printf '%s\\n' \"$@\" > \"$OVLAB_FAKE_DOCKER_LOG\"\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    data = tmp_path / "model-data"
+    result = _run("dataset", *arguments, environment={
+        "PATH": f"{binaries}:{os.environ['PATH']}",
+        "OVLAB_PYTHON": str(fake_python),
+        "OVLAB_MODEL_DATA_ROOT": str(data),
+        "OVLAB_FAKE_DOCKER_LOG": str(log),
+        "OVLAB_DATASET_IMAGE": "example/ovlab-dataset:test",
+    })
+    assert result.returncode == 0
+    logged_arguments = log.read_text(encoding="utf-8").splitlines()
+    assert logged_arguments[0] == "run"
+    assert "--network" in logged_arguments and "none" in logged_arguments
+    assert any(
+        "target=/var/lib/ovlab/model-data/datasets,readonly" in value
+        for value in logged_arguments
+    )
+    assert logged_arguments[-(len(arguments) + 1):] == ["dataset", *arguments]
+
+
+def test_dataset_fetch_repairs_only_group_writable_publication_parents(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    fake_docker = binaries / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = image ]; then exit 0; fi\n"
+        "printf '%s\\n' \"$@\" > \"$OVLAB_FAKE_DOCKER_LOG\"\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    log = tmp_path / "docker-arguments.txt"
+    model_data = tmp_path / "model-data"
+    name_root = model_data / "datasets/libero/libero_10"
+    name_root.mkdir(parents=True)
+    (model_data / "datasets/libero").chmod(0o750)
+    name_root.chmod(0o750)
+
+    result = _run(
+        "dataset", "fetch", "--source", "libero", "--name", "libero_10",
+        environment={
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "OVLAB_MODEL_DATA_ROOT": str(model_data),
+            "OVLAB_FAKE_DOCKER_LOG": str(log),
+            "OVLAB_DATASET_IMAGE": "example/ovlab-dataset:test",
+        },
+    )
+
+    assert result.returncode == 0
+    assert (model_data / "datasets/libero").stat().st_mode & 0o7777 == 0o2770
+    assert name_root.stat().st_mode & 0o7777 == 0o2770
+    arguments = log.read_text(encoding="utf-8").splitlines()
+    assert "bridge" in arguments
+    assert any("target=/var/lib/ovlab/model-data/datasets" in value for value in arguments)
+
+
+def test_dataset_launcher_rejects_unsafe_name_before_filesystem_use(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    fake_docker = binaries / "docker"
+    fake_docker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_docker.chmod(0o755)
+    model_data = tmp_path / "model-data"
+
+    result = _run(
+        "dataset", "fetch", "--source", "libero", "--name", "../escaped",
+        environment={
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "OVLAB_MODEL_DATA_ROOT": str(model_data),
+            "OVLAB_DATASET_IMAGE": "example/ovlab-dataset:test",
+        },
+    )
+
+    assert result.returncode == 3
+    assert "path-safe identifiers" in result.stderr
+    assert not (tmp_path / "escaped").exists()
 
 
 def test_policy_list_is_static_distinct_and_has_no_non_quic_qp_metadata():
@@ -248,6 +391,64 @@ def test_container_image_tag_does_not_change_scientific_hash():
         "OVLAB_IMAGE_REFERENCE": "registry.example/ovlab-benchmark:second",
     }).execution_plan("configs/experiments/mock-e2e-smoke.yaml")
     assert first["scientific_config_hash"] == second["scientific_config_hash"]
+
+
+def test_gate_i_cli_human_and_json_inspection_stay_dependency_light(tmp_path):
+    environment = {
+        "OVLAB_DATASET_RUNTIME": "host",
+        "OVLAB_MODEL_DATA_ROOT": str(tmp_path / "model-data"),
+    }
+    human = _run("dataset", "providers", environment=environment)
+    assert human.returncode == 0
+    assert '"id": "libero"' in human.stdout
+    assert human.stderr == ""
+
+    resolved = _run(
+        "dataset", "resolve", "--benchmark", "libero", "--suite", "libero_10", "--json",
+        environment=environment,
+    )
+    assert resolved.returncode == 0 and resolved.stderr == ""
+    payload = json.loads(resolved.stdout)
+    assert payload["status"] == "success"
+    assert payload["result"]["source_revision"] == "a7c9ae18499b6eea8a32f78a9302327b752b1b5f"
+
+    validated = _run(
+        "train", "validate", "--profile", "configs/training/openvla-libero10-lora-smoke.yaml", "--json",
+        environment=environment,
+    )
+    result = json.loads(validated.stdout)["result"]
+    assert validated.returncode == 0 and validated.stderr == ""
+    assert result["valid"] is True
+    assert result["model_initialized"] is False
+    assert result["network_used"] is False
+
+    checkpoints = _run("checkpoint", "list", "--json", environment=environment)
+    assert checkpoints.returncode == 0 and checkpoints.stderr == ""
+    assert json.loads(checkpoints.stdout)["result"]["checkpoints"] == []
+
+
+def test_dataset_registry_does_not_require_an_experiment_config_tree(tmp_path):
+    app = OvlabApplication(tmp_path, environment={"OVLAB_MODEL_DATA_ROOT": str(tmp_path / "data")})
+    providers = app.dataset_providers()["providers"]
+    assert {provider["id"] for provider in providers} == {"libero", "local", "url"}
+    assert app._resolver is None
+
+
+def test_gate_i_plan_missing_dataset_is_typed_and_never_downloads(tmp_path):
+    environment = {
+        "OVLAB_MODEL_DATA_ROOT": str(tmp_path / "model-data"),
+        "OVLAB_AVAILABLE_GPU_COUNT": "1",
+        "OVLAB_AVAILABLE_VRAM_GIB": "32",
+    }
+    result = _run(
+        "train", "plan", "--profile", "configs/training/openvla-libero10-lora-smoke.yaml", "--json",
+        environment=environment,
+    )
+    assert result.returncode == ExitCode.POLICY_UNAVAILABLE
+    error = json.loads(result.stdout)["errors"][0]
+    assert error["code"] == "dataset_unavailable"
+    assert "--allow-dataset-download" in error["message"]
+    assert not (tmp_path / "model-data/datasets/.staging").exists()
 
 
 def test_cli_module_contains_no_rollout_or_metric_implementation():

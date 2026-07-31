@@ -269,6 +269,86 @@ services:
         target: /etc/ovlab/export.yaml
         read_only: true
 
+  dataset-acquire:
+    profiles: [dataset-acquire]
+    image: ${OVLAB_DATASET_IMAGE:-ovlab-dataset:local}
+    command: [dataset, providers]
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700
+    restart: "no"
+    environment:
+      OVLAB_MODEL_DATA_ROOT: /var/lib/ovlab/model-data
+      OVLAB_MOUNT_CONTRACT: datasets-rw
+      OVLAB_NETWORK_CONTRACT: explicit-acquisition-only
+    group_add:
+      - ${OVLAB_HOST_ARTIFACT_GID:-1000}
+    volumes:
+      - type: bind
+        source: ${OVLAB_MODEL_DATA_ROOT:-../../../ovlab-data}/datasets
+        target: /var/lib/ovlab/model-data/datasets
+
+  training-openvla:
+    <<: *policy-security
+    profiles: [training]
+    image: ${OVLAB_TRAINING_IMAGE:-ovlab-training-openvla:local}
+    entrypoint: [python, -m, ovlab_benchctl.training_worker]
+    command: [train, --run-root, /var/lib/ovlab/training-run]
+    environment:
+      OVLAB_TRAINING_RUNTIME: isolated-container
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      WANDB_MODE: offline
+      OVLAB_TRAINING_BASE_CHECKPOINT: /checkpoints/base
+      OVLAB_TRAINING_DATA_ROOT: /datasets/resolved
+      OVLAB_TRAINING_DATASET_NAME: ${OVLAB_TRAINING_DATASET_NAME:-unset}
+      OVLAB_MOUNT_CONTRACT: prepared-dataset-ro,base-checkpoint-ro,training-run-rw
+      OVLAB_NETWORK_CONTRACT: disabled
+      NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all
+    group_add:
+      - ${OVLAB_HOST_ARTIFACT_GID:-1000}
+    volumes:
+      - type: bind
+        source: ${OVLAB_TRAINING_BASE_CHECKPOINT_PATH:-/tmp}
+        target: /checkpoints/base
+        read_only: true
+      - type: bind
+        source: ${OVLAB_TRAINING_PREPARED_DATASET_PATH:-/tmp}
+        target: /datasets/resolved/${OVLAB_TRAINING_DATASET_NAME:-unset}/1.0.0
+        read_only: true
+      - type: bind
+        source: ${OVLAB_TRAINING_RUN_PATH:-/tmp}
+        target: /var/lib/ovlab/training-run
+
+  checkpoint-finalizer:
+    <<: *policy-security
+    profiles: [training-finalize]
+    image: ${OVLAB_DATASET_IMAGE:-ovlab-dataset:local}
+    entrypoint: [python, -m, ovlab_benchctl.training_worker]
+    command:
+      - finalize
+      - --run-root
+      - /var/lib/ovlab/training-run
+      - --model-data-root
+      - /var/lib/ovlab/model-data
+    environment:
+      OVLAB_MOUNT_CONTRACT: training-run-rw,finalized-checkpoints-rw
+      OVLAB_NETWORK_CONTRACT: disabled
+    group_add:
+      - ${OVLAB_HOST_ARTIFACT_GID:-1000}
+    volumes:
+      - type: bind
+        source: ${OVLAB_TRAINING_RUN_PATH:-/tmp}
+        target: /var/lib/ovlab/training-run
+      - type: bind
+        source: ${OVLAB_MODEL_DATA_ROOT:-../../../ovlab-data}/checkpoints
+        target: /var/lib/ovlab/model-data/checkpoints
+
 volumes:
   rpc-openvla:
   rpc-oft:

@@ -24,6 +24,11 @@ Face cache are reused through verified hard links rather than copied. Only
 benchmark containers write canonical runs; reporting mounts them read-only.
 See [`deploy/README.md`](deploy/README.md).
 
+Dataset discovery, explicit acquisition, local import, verification and storage
+are documented in the [`Dataset operations guide`](DATASETS.md). Versioned
+training profiles, isolated OpenVLA-LoRA training and immutable checkpoint
+handoff are documented in the [`Training operations guide`](TRAINING.md).
+
 ## Command line
 
 Use the unified CLI directly from a checkout without installing packages:
@@ -43,6 +48,9 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab report verify --run RUN_ID --profile libero-task-default --build BUILD_ID
 ./ovlab export isolated --run RUN_ID
 ./ovlab export grouped --name STUDY_NAME --runs RUN_ID_A RUN_ID_B
+./ovlab dataset resolve --benchmark libero --suite libero_10
+./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
+./ovlab checkpoint list
 ```
 
 `ovlab deploy run` is the normal operator workflow. It launches the selected

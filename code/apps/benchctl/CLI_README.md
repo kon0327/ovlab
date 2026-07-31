@@ -5,7 +5,7 @@ the existing configuration, policy-service, runner, artifact, and metric APIs
 through one workflow:
 
 ```text
-Experiment -> Deploy -> Run -> Verify -> Report
+Dataset -> Train -> Checkpoint -> Deploy -> Run -> Verify -> Report
 ```
 
 The CLI is an orchestration layer. It does not implement policy inference,
@@ -181,8 +181,35 @@ ovlab
 ├── export grouped --name GROUP (--all-runs | --same-model-as RUN_ID | --runs RUN_ID...)
 │   [--suite SUITE] [--template TEMPLATE] [--json]
 ├── export verify --kind isolated|grouped --name NAME [--json]
-└── export generate --spec SPEC.yaml [--json]  # legacy grouped bridge
+├── export generate --spec SPEC.yaml [--json]  # legacy grouped bridge
+├── dataset
+│   ├── providers [--json]
+│   ├── resolve --benchmark libero --suite SUITE [--json]
+│   ├── fetch --source libero|url --name NAME [URL OPTIONS] [--json]
+│   ├── import --name NAME --version VERSION --path PATH [--json]
+│   ├── prepare --dataset DATASET_ID --format FORMAT [--json]
+│   ├── list [--json]
+│   ├── inspect --dataset DATASET_ID [--json]
+│   └── verify --dataset DATASET_ID [--json]
+├── train
+│   ├── profiles [--json]
+│   ├── validate --profile PROFILE [--json]
+│   ├── plan --profile PROFILE [--json]
+│   ├── run --profile PROFILE [--allow-dataset-download] [--json]
+│   ├── status --run TRAINING_RUN_ID [--json]
+│   ├── inspect --run TRAINING_RUN_ID [--json]
+│   └── verify --run TRAINING_RUN_ID [--json]
+└── checkpoint
+    ├── list [--json]
+    ├── inspect --checkpoint CHECKPOINT_ID [--json]
+    └── verify --checkpoint CHECKPOINT_ID [--json]
 ```
+
+Dataset and training commands use separate least-privilege images and never
+write benchmark runs. Acquisition is explicit; validation, planning and all
+inspection commands are offline and do not initialize a model. See
+[`TRAINING.md`](../../../TRAINING.md) for the storage, identity, interruption
+and base-plus-adapter deployment contracts.
 
 ## 1. Validate and resolve configuration
 

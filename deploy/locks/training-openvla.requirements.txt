@@ -1,0 +1,2 @@
+# Standard OpenVLA Transformers wheel; the OFT dependency closure supplies TF/RLDS dependencies.
+transformers==4.40.1 --hash=sha256:9d5ee0c8142a60501faf9e49a0b42f8e9cb8611823bce4f195a9325a6816337e

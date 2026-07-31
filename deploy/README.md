@@ -15,6 +15,8 @@ For a command-oriented build and launch guide, see
 |---|---|---|---|
 | `ovlab-benchmark-libero` | CLI, runner, LIBERO, Robosuite, MuJoCo, EGL and immutable trace output | LIBERO simulation stack; Torch only because pinned LIBERO imports it to load initial states | OpenVLA, Transformers, PEFT, FlashAttention and model weights |
 | `ovlab-reporting` | Offline HTML reporting plus isolated/grouped publication exports | NumPy, Jinja2 and Matplotlib | LIBERO, MuJoCo, model runtimes, checkpoints, datasets, GPU and policy socket |
+| `ovlab-dataset` | Explicit dataset acquisition, offline verification and checkpoint finalization | dependency-light CLI plus pinned archive support | model runtimes, LIBERO, benchmark runs and GPU |
+| `ovlab-training-openvla` | Offline full/LoRA OpenVLA training | Torch/CUDA, Transformers, PEFT, FlashAttention, TensorFlow/RLDS and pinned OpenVLA source | LIBERO runtime, benchmark runs, reporting and finalized-checkpoint write access |
 | `ovlab-policy-openvla` | Vanilla and merged-LoRA OpenVLA service | Torch 2.2.0/CUDA 12.1, Transformers 4.40.1, PEFT 0.11.1, BitsAndBytes 0.43.1, FlashAttention 2.5.5 and pinned OpenVLA source | LIBERO, Robosuite, MuJoCo, datasets and run output |
 | `ovlab-policy-openvla-oft` | OpenVLA-OFT service | The distinct OFT Transformers commit, Torch/CUDA, FlashAttention and pinned OFT source | LIBERO, Robosuite, MuJoCo, datasets and run output |
 
@@ -116,7 +118,8 @@ outside the source checkout:
 │   ├── huggingface/   # pinned snapshots managed or materialized by OVLAB
 │   └── local/         # unpublished QuIC and experimental checkpoints
 ├── datasets/
-│   └── libero/        # LIBERO demonstration datasets, mounted read-only
+│   └── <provider>/... # immutable raw and prepared training datasets
+├── training-runs/     # canonical training evidence and staged output
 ├── runs/              # immutable traces, per-episode videos, metrics, config and provenance
 ├── derived/           # regenerated reports, plots and tables
 └── exports/           # curated outputs prepared for papers and sharing
@@ -178,6 +181,12 @@ read-only and writes below `derived/` and `exports/`. Benchmark services never
 mount either output root. Grouped exports remain an explicit operator workflow. Policy containers mount
 none of these artifact roots. Host paths and Docker tags are deployment
 provenance and never enter the scientific configuration hash.
+
+Finalized training artifacts use content-derived `checkpoint-<32 hex>` IDs.
+Their deployment handoff resolves the verified read-only adapter plus its
+registry-pinned read-only base checkpoint. Mutable aliases, failed/interrupted
+training output and staging checkpoints are not deployable. See
+[`../TRAINING.md`](../TRAINING.md) for commands and schema details.
 
 ## CLI-managed Compose profiles
 

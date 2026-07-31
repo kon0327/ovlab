@@ -1,0 +1,20 @@
+lock-version = "1.0"
+environments = ["python_version == '3.10' and platform_machine == 'x86_64'"]
+
+[[packages]]
+name = "numpy"
+version = "1.26.4"
+wheel = "numpy-1.26.4-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+sha256 = "ffa75af20b44f8dba823498024771d5ac50620e6915abac414251bd971b4529f"
+
+[[packages]]
+name = "pyyaml"
+version = "6.0.3"
+wheel = "pyyaml-6.0.3-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+sha256 = "9c7708761fccb9397fe64bbc0395abcae8c4bf7b0eac081e12b809bf47700d0b"
+
+[[packages]]
+name = "zstandard"
+version = "0.24.0"
+wheel = "zstandard-0.24.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+sha256 = "92be52ca4e6e604f03d5daa079caec9e04ab4cbf6972b995aaebb877d3d24e13"

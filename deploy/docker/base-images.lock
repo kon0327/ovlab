@@ -1,6 +1,9 @@
 # role image-reference immutable-digest platform
 benchmark-libero pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d linux/amd64
 reporting pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d linux/amd64
+dataset pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d linux/amd64
+training-openvla-builder pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel sha256:6353d21b66b5c00ae0f2683e447a0ba392157761f6dd0386a0dd648e0e5cc2de linux/amd64
+training-openvla-runtime pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d linux/amd64
 openvla-builder pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel sha256:6353d21b66b5c00ae0f2683e447a0ba392157761f6dd0386a0dd648e0e5cc2de linux/amd64
 openvla-runtime pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d linux/amd64
 oft-builder pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel sha256:6353d21b66b5c00ae0f2683e447a0ba392157761f6dd0386a0dd648e0e5cc2de linux/amd64

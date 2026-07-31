@@ -1,0 +1,45 @@
+schema_version: ovlab.training-profile/v1
+id: openvla-libero10-lora-smoke
+
+trainer:
+  id: openvla
+  implementation: openvla-reference
+
+model:
+  base_checkpoint: openvla-7b
+  revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
+  processor: inherited
+
+dataset:
+  ref: libero/libero_10
+  preparation: openvla-rlds
+  split: train
+
+training:
+  mode: peft
+  peft:
+    method: lora
+    target_modules:
+      - all-linear
+    rank: 32
+    alpha: 16
+    dropout: 0.0
+  seed: 42
+  max_steps: 2
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.0005
+  precision: bf16
+  gradient_checkpointing: true
+  quantization: none
+
+checkpointing:
+  save_strategy: final
+  save_optimizer_state: false
+  output_kind: adapter
+
+resources:
+  accelerator: cuda
+  gpu_count: 1
+  max_vram_gib: 32
+  network: disabled
