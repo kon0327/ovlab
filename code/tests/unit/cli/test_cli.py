@@ -11,6 +11,8 @@ import sys
 import pytest
 
 from ovlab_benchctl.application import OvlabApplication
+from ovlab_benchctl.cli import ExitCode, _classify
+from ovlab_runner import ReportingRendererError
 
 
 REPOSITORY = Path(__file__).resolve().parents[4]
@@ -64,6 +66,51 @@ def test_help_and_version_have_stable_identity():
     version = _run("--version")
     assert version.returncode == 0
     assert version.stdout.startswith("ovlab 0.1.0 (revision ")
+
+
+def test_source_launcher_uses_dedicated_reporting_container(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    fake_python = binaries / "python-without-matplotlib"
+    fake_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    log = tmp_path / "docker-arguments.txt"
+    fake_docker = binaries / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = image ]; then exit 0; fi\n"
+        "printf '%s\\n' \"$@\" > \"$OVLAB_FAKE_DOCKER_LOG\"\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    data = tmp_path / "data"
+    (data / "runs").mkdir(parents=True)
+    environment = {
+        "PATH": f"{binaries}:{os.environ['PATH']}",
+        "OVLAB_PYTHON": str(fake_python),
+        "OVLAB_DATA_ROOT": str(data),
+        "OVLAB_FAKE_DOCKER_LOG": str(log),
+        "OVLAB_REPORTING_IMAGE": "example/ovlab-reporting:test",
+    }
+    result = _run("export", "isolated", "--run", "run-id", environment=environment)
+    assert result.returncode == 0
+    assert "using isolated image example/ovlab-reporting:test" in result.stderr
+    arguments = log.read_text(encoding="utf-8").splitlines()
+    assert arguments[0] == "run"
+    assert "--network" in arguments and "none" in arguments
+    assert "OVLAB_RUNS_ROOT=/var/lib/ovlab/runs" in arguments
+    assert "OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived" in arguments
+    assert "OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports" in arguments
+    assert f"OVLAB_DERIVED_DISPLAY_ROOT={data / 'derived'}" in arguments
+    assert f"OVLAB_EXPORTS_DISPLAY_ROOT={data / 'exports'}" in arguments
+    assert any("target=/var/lib/ovlab/runs,readonly" in value for value in arguments)
+    assert any("target=/var/lib/ovlab/derived" in value for value in arguments)
+    assert any("target=/var/lib/ovlab/exports" in value for value in arguments)
+    assert arguments[-4:] == ["export", "isolated", "--run", "run-id"]
+    assert (data / "exports").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "derived").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/isolated").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/grouped").stat().st_mode & 0o7777 == 0o2770
 
 
 def test_policy_list_is_static_distinct_and_has_no_non_quic_qp_metadata():
@@ -133,6 +180,12 @@ def test_semantic_usage_error_has_stable_exit_code():
     result = _run("run", "inspect")
     assert result.returncode == 2
     assert "usage_error" in result.stderr
+
+
+def test_reporting_renderer_failure_has_typed_exit_code():
+    assert _classify(ReportingRendererError("broken template")) == (
+        ExitCode.RUNTIME, "report_renderer_error",
+    )
 
 
 def test_dry_run_is_deterministic_and_has_no_filesystem_side_effects(tmp_path):

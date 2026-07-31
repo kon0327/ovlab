@@ -160,7 +160,30 @@ class _Parser:
                 item = line.text[2:].strip()
                 if not item:
                     raise StrictYamlError(f"{self.source}:{line.number}: nested sequence items are not supported")
-                result.append(_scalar(item, self.source, line.number)); index += 1
+                try:
+                    key, raw = _split_mapping(item, self.source, line.number)
+                except StrictYamlError:
+                    result.append(_scalar(item, self.source, line.number)); index += 1
+                    continue
+                if not _safe_key(key):
+                    raise StrictYamlError(f"{self.source}:{line.number}: mapping keys must match {_SAFE_KEY.pattern!r}")
+                if not raw:
+                    raise StrictYamlError(
+                        f"{self.source}:{line.number}: a sequence mapping's first key requires a scalar value"
+                    )
+                mapping_item = {key: _scalar(raw, self.source, line.number)}
+                index += 1
+                if index < len(self.lines) and self.lines[index].indent == indent + 2:
+                    continuation, index = self._block(index, indent + 2)
+                    if not isinstance(continuation, dict):
+                        raise StrictYamlError(
+                            f"{self.source}:{line.number}: sequence mapping continuation must be a mapping"
+                        )
+                    duplicates = sorted(set(mapping_item) & set(continuation))
+                    if duplicates:
+                        raise StrictYamlError(f"{self.source}:{line.number}: duplicate key {duplicates[0]!r}")
+                    mapping_item.update(continuation)
+                result.append(mapping_item)
                 continue
             if line.text.startswith("- "):
                 break

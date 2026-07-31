@@ -83,6 +83,7 @@ def test_every_versioned_component_is_schema_valid():
         "resources/registry.yaml": "resource_registry",
         "experiments/libero-spatial-vanilla.yaml": "experiment",
         "experiments/mock-e2e-smoke.yaml": "experiment",
+        "experiments/mock-e2e-reporting-disabled.yaml": "experiment",
         "experiments/libero-mock-smoke.yaml": "experiment",
         "experiments/libero-vanilla-smoke.yaml": "experiment",
         "experiments/libero10-vanilla-rpc-smoke.yaml": "experiment",
@@ -546,3 +547,19 @@ def test_cross_component_action_convention_mismatch_is_rejected(tmp_path):
     with pytest.raises(ConfigCompatibilityError, match="ActionSpec"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
             root / "experiments/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path))
+
+
+def test_reporting_configuration_changes_only_derived_identity(tmp_path):
+    local = profile(tmp_path, suffix="reporting")
+    enabled = resolver().resolve(
+        "configs/experiments/mock-e2e-smoke.yaml", local_profile=local
+    )
+    disabled = resolver().resolve(
+        "configs/experiments/mock-e2e-reporting-disabled.yaml",
+        local_profile=local,
+    )
+    assert enabled.scientific_config_hash == disabled.scientific_config_hash
+    assert enabled.execution_config_hash == disabled.execution_config_hash
+    assert enabled.reporting_settings.enabled is True
+    assert disabled.reporting_settings.enabled is False
+    assert enabled.document()["reporting"]["profile"] == "libero-task-default"

@@ -31,6 +31,23 @@ def test_strict_yaml_round_trip_preserves_empty_nested_collections():
     assert loads(dumped) == {"empty_sequence": [], "empty_mapping": {}, "nested": {"indices": []}}
 
 
+def test_strict_yaml_parses_declarative_sequence_of_mappings():
+    assert loads(
+        "outputs:\n"
+        "  - id: success\n"
+        "    kind: figure\n"
+        "    formats: [svg, png]\n"
+        "  - id: metrics\n"
+        "    kind: table\n"
+        "    formats: [csv, latex]\n"
+    ) == {
+        "outputs": [
+            {"id": "success", "kind": "figure", "formats": ["svg", "png"]},
+            {"id": "metrics", "kind": "table", "formats": ["csv", "latex"]},
+        ]
+    }
+
+
 @pytest.mark.parametrize("text,match", [
     ("key: 1\nkey: 2\n", "duplicate key"),
     ("key:\n   nested: true\n", "multiples of two"),

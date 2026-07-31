@@ -5,6 +5,13 @@ deployment:
   profile: oft
   renderer: egl
 
+reporting:
+  enabled: true
+  profile: libero-task-default
+  on_task_finalize: true
+  on_run_finalize: true
+  failure_policy: warn
+
 experiment:
   id: libero10-openvla-oft-rpc-smoke
   name: Native OpenVLA-OFT methodological reference on LIBERO-10 through local RPC

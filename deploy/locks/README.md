@@ -19,6 +19,10 @@ Every dependency used by the accepted headless EGL path is listed explicitly
 in `benchmark.in`; `pynput`, `evdev`, pytest and Jupyter are intentionally not
 part of the production closure.
 
+The reporting lock is a separate offline-only closure containing NumPy, Jinja2,
+Matplotlib, and their explicitly pinned renderer dependencies. It contains no
+LIBERO, MuJoCo, policy runtime, checkpoint client, or network service.
+
 OpenVLA-OFT's required Transformers fork is pinned to commit
 `bc339d9ad707454c0c115970db43c260067c61ab`. The
 commit came from the accepted `openvla-oft` environment's installed

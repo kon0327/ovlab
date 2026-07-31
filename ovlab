@@ -15,4 +15,62 @@ if ! command -v "$python_executable" >/dev/null 2>&1; then
     echo "OVLAB requires Python 3 for its host-side CLI launcher." >&2
     exit 127
 fi
+
+# Reporting and export use their purpose-built image by default. Host execution
+# remains an explicit diagnostic escape hatch, never an implicit Conda dependency.
+if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
+    reporting_runtime="${OVLAB_REPORTING_RUNTIME:-${OVLAB_EXPORT_RUNTIME:-docker}}"
+    if [[ "$reporting_runtime" != "host" ]]; then
+        if ! command -v docker >/dev/null 2>&1; then
+            echo "ovlab: reporting requires Docker; the Docker CLI is unavailable." >&2
+            echo "ovlab: set OVLAB_REPORTING_RUNTIME=host only for an explicitly prepared host Python." >&2
+            exit 127
+        fi
+        data_root="${OVLAB_DATA_ROOT:-$repository_root/../ovlab-data}"
+        runs_root="${OVLAB_RUNS_ROOT:-$data_root/runs}"
+        derived_root="${OVLAB_DERIVED_ROOT:-$data_root/derived}"
+        exports_root="${OVLAB_EXPORTS_ROOT:-$data_root/exports}"
+        configs_root="${OVLAB_CONFIGS_ROOT:-$repository_root/configs}"
+        runs_root="$(realpath -m -- "$runs_root")"
+        derived_root="$(realpath -m -- "$derived_root")"
+        exports_root="$(realpath -m -- "$exports_root")"
+        configs_root="$(realpath -m -- "$configs_root")"
+        if [[ "${1:-}" != "report" || "${2:-}" != "profiles" ]] && [[ ! -d "$runs_root" ]]; then
+            echo "ovlab: canonical run source directory does not exist: $runs_root" >&2
+            exit 4
+        fi
+        if [[ ! -d "$configs_root" ]]; then
+            echo "ovlab: portable config directory does not exist: $configs_root" >&2
+            exit 3
+        fi
+        mkdir -p -- "$runs_root" "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"
+        if ! chmod 2770 -- "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"; then
+            echo "ovlab: cannot establish group-writable reporting output directories." >&2
+            exit 6
+        fi
+        reporting_image="${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}"
+        if ! docker image inspect "$reporting_image" >/dev/null 2>&1; then
+            echo "ovlab: reporting image is unavailable: $reporting_image" >&2
+            echo "ovlab: build it with: bash deploy/scripts/build-images.sh reporting" >&2
+            exit 6
+        fi
+        echo "ovlab: reporting: using isolated image $reporting_image." >&2
+        exec docker run --rm \
+            --network none \
+            --read-only \
+            --user 10001:10001 \
+            --group-add "$(id -g)" \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
+            --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
+            --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
+            --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
+            --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
+            --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
+            --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly" \
+            --mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly" \
+            --mount "type=bind,source=$derived_root,target=/var/lib/ovlab/derived" \
+            --mount "type=bind,source=$exports_root,target=/var/lib/ovlab/exports" \
+            "$reporting_image" "$@"
+    fi
+fi
 exec "$python_executable" -m ovlab_benchctl.cli "$@"

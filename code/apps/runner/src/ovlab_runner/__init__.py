@@ -5,12 +5,17 @@ from .connection import ConnectionReport
 from .configuration import RunConfigurationSnapshot
 from .errors import (
     ArtifactError, ConnectionError, ExperimentExecutionError, RecorderError,
-    RunnerError, RunnerLifecycleError,
+    ReportingRendererError, ReportingSourceUnavailableError, RunnerError, RunnerLifecycleError,
 )
 from .lifecycle import DeterministicClock, RecorderState, RunnerState, SystemClock
 from .inspection import RunIntegrityError, inspect_run, verify_run
 from .offline_metrics import MetricRecomputationError, recompute_run_metrics
 from .reporting import regenerate_report
+from .derived import (
+    AutomaticDerivedReporter, DerivedReportEngine, ReportProfile, build_report_model,
+    builtin_profile, report_profiles,
+)
+from .exports import ExportEngine, validate_export_spec
 from .plan import (
     ActionExecutionMode, ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
     ExperimentPlan, MetricAvailabilityPolicy, TraceRecordingPolicy,
@@ -28,4 +33,7 @@ __all__ = [
     "RunConfigurationSnapshot", "RunIntegrityError", "RunnerLifecycleError", "RunnerState", "StaticProvenanceProvider", "SystemClock", "TraceCodec",
     "TraceRecordingPolicy",
     "inspect_run", "recompute_run_metrics", "regenerate_report", "verify_run",
+    "AutomaticDerivedReporter", "DerivedReportEngine", "ReportProfile", "build_report_model",
+    "builtin_profile", "report_profiles", "ExportEngine", "validate_export_spec",
+    "ReportingRendererError", "ReportingSourceUnavailableError",
 ]

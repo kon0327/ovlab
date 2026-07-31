@@ -108,12 +108,59 @@ def _parser() -> argparse.ArgumentParser:
     recompute.add_argument("run_path")
     recompute.add_argument("--json", action="store_true")
 
-    report = commands.add_parser("report", help="regenerate deterministic reports from immutable runs")
+    report = commands.add_parser("report", help="generate and verify offline reports from immutable runs")
     report_commands = report.add_subparsers(dest="report_command", required=True)
-    generate = report_commands.add_parser("generate", help="write a derived report outside the canonical run")
-    generate.add_argument("run_path")
-    generate.add_argument("--output", required=True)
+    generate = report_commands.add_parser(
+        "generate", help="build a reproducible report (example: ovlab report generate --run RUN_ID --profile libero-task-default)",
+    )
+    generate.add_argument("run_path", nargs="?", help="legacy canonical RUN_PATH")
+    generate.add_argument("--run", dest="run_id", help="canonical run ID")
+    generate.add_argument("--task", help="optional canonical task ID")
+    generate.add_argument("--profile", default="libero-task-default", help="built-in profile ID or local YAML path")
+    generate.add_argument("--output", help="legacy output path; cannot be combined with --run")
     generate.add_argument("--json", action="store_true")
+    publish = report_commands.add_parser(
+        "publish", help="publish the HTML report and isolated export for one finalized run",
+    )
+    publish.add_argument("--run", dest="run_id", required=True, help="canonical run ID")
+    publish.add_argument("--profile", default="libero-task-default")
+    publish.add_argument(
+        "--report-enabled", choices=("true", "false"), default="true",
+        help="generate derived HTML in addition to the always-generated isolated export",
+    )
+    publish.add_argument("--json", action="store_true")
+    verify_report = report_commands.add_parser("verify", help="verify a derived report and its canonical inputs")
+    verify_report.add_argument("--run", dest="run_id", required=True)
+    verify_report.add_argument("--profile", default="libero-task-default")
+    verify_report.add_argument("--build")
+    verify_report.add_argument("--json", action="store_true")
+    profiles = report_commands.add_parser("profiles", help="list built-in report profiles")
+    profiles.add_argument("--json", action="store_true")
+
+    export = commands.add_parser("export", help="generate readable isolated or grouped exports from canonical runs")
+    export_commands = export.add_subparsers(dest="export_command", required=True)
+    isolated = export_commands.add_parser("isolated", help="export one complete run or one episode")
+    isolated.add_argument("--run", dest="run_id", required=True, help="canonical run ID")
+    isolated.add_argument("--episode", dest="episode_id", help="optional canonical episode ID")
+    isolated.add_argument("--template", default="isolated-default-v1")
+    isolated.add_argument("--json", action="store_true")
+    grouped = export_commands.add_parser("grouped", help="compare an explicitly selected group of runs")
+    grouped.add_argument("--name", required=True, help="portable group name")
+    selectors = grouped.add_mutually_exclusive_group(required=True)
+    selectors.add_argument("--all-runs", action="store_true", help="select every compatible completed run")
+    selectors.add_argument("--same-model-as", metavar="RUN_ID", help="select runs with the same model/checkpoint as RUN_ID")
+    selectors.add_argument("--runs", nargs="+", metavar="RUN_ID", help="select these run IDs manually")
+    grouped.add_argument("--suite", help="optional benchmark-suite filter")
+    grouped.add_argument("--template", default="grouped-default-v1")
+    grouped.add_argument("--json", action="store_true")
+    export_generate = export_commands.add_parser("generate", help="legacy: generate a grouped export from ovlab.export-spec/v1")
+    export_generate.add_argument("--spec", required=True)
+    export_generate.add_argument("--json", action="store_true")
+    export_verify = export_commands.add_parser("verify", help="verify an export build and source checksums")
+    export_verify.add_argument("--kind", choices=("isolated", "grouped"), default="grouped")
+    export_verify.add_argument("--name", dest="export_name")
+    export_verify.add_argument("--export", dest="legacy_export_id", help="legacy alias for --kind grouped --name")
+    export_verify.add_argument("--json", action="store_true")
     return parser
 
 
@@ -130,7 +177,7 @@ def _command_name(args) -> str:
     parts = [args.command]
     for name in (
         "config_command", "policy_command", "service_command", "deploy_command",
-        "metrics_command", "report_command",
+        "metrics_command", "report_command", "export_command",
     ):
         value = getattr(args, name, None)
         if value:
@@ -178,6 +225,10 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.USAGE, "usage_error"
     if name in {"MetricRecomputationError"}:
         return ExitCode.METRICS, "metric_recomputation_error"
+    if name == "ReportingSourceUnavailableError":
+        return ExitCode.POLICY_UNAVAILABLE, "source_unavailable"
+    if name == "ReportingRendererError":
+        return ExitCode.RUNTIME, "report_renderer_error"
     if name in {"RunIntegrityError", "ArtifactError"}:
         return ExitCode.INTEGRITY, "run_integrity_error"
     if name.startswith("QuIC") and ("Incomplete" in name or "Unavailable" in name or "Provider" in name):
@@ -264,7 +315,44 @@ def _dispatch(args):
     if args.command == "metrics":
         return _application().recompute_metrics(args.run_path), args.json, None
     if args.command == "report":
-        return _application().generate_report(args.run_path, args.output), args.json, None
+        app = _application()
+        if args.report_command == "profiles":
+            return app.report_profiles(), args.json, None
+        if args.report_command == "publish":
+            return app.report_publish(
+                args.run_id,
+                args.profile,
+                report_enabled=args.report_enabled == "true",
+            ), args.json, None
+        if args.report_command == "verify":
+            return app.report_verify(args.run_id, args.profile, build_id=args.build), args.json, None
+        if args.run_id:
+            if args.run_path is not None or args.output is not None:
+                raise CliUsageError("report generate --run cannot be combined with legacy RUN_PATH/--output")
+            return app.report_generate(args.run_id, args.profile, task_id=args.task), args.json, None
+        if args.run_path is None or args.output is None:
+            raise CliUsageError("report generate requires --run RUN_ID or legacy RUN_PATH --output PATH")
+        if args.task is not None or args.profile != "libero-task-default":
+            raise CliUsageError("--task/--profile require the --run form")
+        return app.generate_report(args.run_path, args.output), args.json, None
+    if args.command == "export":
+        app = _application()
+        if args.export_command == "isolated":
+            return app.export_isolated(args.run_id, episode_id=args.episode_id, template=args.template), args.json, None
+        if args.export_command == "grouped":
+            return app.export_grouped(
+                args.name, all_runs=args.all_runs, run_ids=args.runs or (),
+                same_model_as=args.same_model_as, suite=args.suite, template=args.template,
+            ), args.json, None
+        if args.export_command == "generate":
+            return app.export_generate(args.spec), args.json, None
+        name = args.export_name or args.legacy_export_id
+        if name is None:
+            raise CliUsageError("export verify requires --name NAME")
+        if args.export_name is not None and args.legacy_export_id is not None:
+            raise CliUsageError("export verify accepts either --name or legacy --export, not both")
+        kind = "grouped" if args.legacy_export_id is not None else args.kind
+        return app.export_verify(kind, name), args.json, None
     raise AssertionError("unhandled CLI command")
 
 

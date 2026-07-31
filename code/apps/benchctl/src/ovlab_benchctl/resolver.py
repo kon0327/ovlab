@@ -36,7 +36,7 @@ from ovlab_runner import (
 
 from .errors import ConfigCompatibilityError, ConfigReferenceError, ConfigSchemaError
 from .models import (
-    MetricSetSettings, MockBenchmarkSettings, MockPolicySettings, ProtocolSettings,
+    MetricSetSettings, MockBenchmarkSettings, MockPolicySettings, ProtocolSettings, ReportingSettings,
     ResolvedExperimentConfig,
 )
 from .schema import SCHEMA_VERSION, validate
@@ -231,6 +231,7 @@ class ConfigResolver:
         policy = self._policy(components["policy"], components["benchmark"], action_spec, resolved_checkpoints, devices)
         metrics = self._metrics(components["metrics"])
         artifact = self._artifacts(components["artifacts"], paths)
+        reporting = ReportingSettings(**experiment_doc.get("reporting", {}))
         if protocol.trace_recording_policy.record_raw_policy_output and not policy.record_raw_output:
             raise ConfigCompatibilityError("protocol requests raw policy output but the policy does not expose it")
         if not components["protocol"]["recording"]["predictions"]:
@@ -262,7 +263,7 @@ class ConfigResolver:
             execution["execution_profile"] = execution_profile_doc
             execution["libero"] = {"renderer": renderer.as_dict()}
         return ResolvedExperimentConfig(
-            experiment_doc["experiment"]["id"], benchmark, policy, action_spec, metrics, protocol, artifact,
+            experiment_doc["experiment"]["id"], benchmark, policy, action_spec, metrics, protocol, artifact, reporting,
             scientific, execution, _hash(scientific), _hash(execution),
         )
 

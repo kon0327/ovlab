@@ -1,0 +1,23 @@
+schema_version: ovlab.export-spec/v1
+id: libero-success-comparison
+
+selection:
+  suite: libero_10
+  run_ids: []
+  filters:
+    status: completed
+
+group_by:
+  - policy.variant
+  - task.id
+
+outputs:
+  - id: success_comparison
+    kind: figure
+    builder: success_comparison
+    formats: [svg, png]
+  - id: action_safety
+    kind: table
+    builder: metric_summary
+    metrics: [action.smoothness_1, action.smoothness_2, failure.gripper_flicker_rate]
+    formats: [csv, latex]

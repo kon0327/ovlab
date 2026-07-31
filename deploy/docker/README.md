@@ -15,6 +15,7 @@ For the complete reproducibility and security contract, see
 | Image | Responsibility | Persistent access |
 |---|---|---|
 | `ovlab-benchmark-libero:local` | OVLAB CLI, runner, LIBERO, Robosuite and MuJoCo | datasets read-only, canonical runs read-write |
+| `ovlab-reporting:local` | Offline HTML reports and isolated/grouped exports | canonical runs read-only, derived/exports read-write |
 | `ovlab-policy-openvla:local` | OpenVLA Vanilla and merged-LoRA policy service | checkpoints read-only |
 | `ovlab-policy-openvla-oft:local` | OpenVLA-OFT policy service | checkpoints read-only |
 
@@ -28,7 +29,7 @@ image.
 - Docker Engine with Compose v2;
 - NVIDIA Container Toolkit and a CUDA 12.1-compatible host driver;
 - local, complete checkpoint and LIBERO dataset trees;
-- sufficient storage for the three pinned images;
+- sufficient storage for the four pinned images;
 - an EGL-capable device for unattended benchmark execution.
 
 Check the host before building:
@@ -52,6 +53,7 @@ Build only one role when iterating:
 
 ```bash
 bash deploy/scripts/build-images.sh benchmark
+bash deploy/scripts/build-images.sh reporting
 bash deploy/scripts/build-images.sh policy-openvla
 bash deploy/scripts/build-images.sh policy-openvla-oft
 ```
@@ -65,6 +67,7 @@ Inspect the resulting identities:
 
 ```bash
 docker image inspect ovlab-benchmark-libero:local
+docker image inspect ovlab-reporting:local
 docker image inspect ovlab-policy-openvla:local
 docker image inspect ovlab-policy-openvla-oft:local
 ```
@@ -89,8 +92,9 @@ The CLI creates a missing `runs/` directory with mode `2770` and passes the
 invoking user's primary GID to benchmark containers as a supplementary group.
 For direct Compose use, create the directories yourself and set
 `OVLAB_HOST_ARTIFACT_GID` to `id -g`. Only the benchmark writes canonical runs.
-Reporting mounts `runs/` read-only, and `exports/` is not mounted into OVLAB
-containers.
+After runtime teardown, the reporting image mounts `runs/` read-only and
+`derived/` plus `exports/` read-write. Neither output root is mounted into the
+benchmark or policy containers.
 
 Copy the environment template and replace every host-specific value:
 
@@ -137,7 +141,7 @@ Preview the resolved orchestration without starting containers:
 
 The real command performs its own `docker compose config --quiet` preflight. It
 also verifies the versioned deployment contract and exact source-manifest label
-on both selected images. The CLI validates the selected experiment and its
+on all selected runtime and reporting images. The CLI validates the selected experiment and its
 transitive `extends`, component, registry and renderer-profile closure, hashes
 that closure and mounts it into both services at `/opt/ovlab/configs:ro`. The
 temporary host bundle is removed after Compose teardown. New or changed YAML
@@ -145,7 +149,7 @@ therefore needs no image rebuild; packaged Python source, dependency locks,
 Dockerfiles and bundled external source still do. Rebuild those changes with:
 
 ```bash
-bash deploy/scripts/build-images.sh benchmark policy-openvla-oft
+bash deploy/scripts/build-images.sh benchmark reporting policy-openvla-oft
 ```
 
 ## Run with EGL
@@ -199,13 +203,13 @@ headless backend; hiding a window does not remove the display-server dependency.
 The overlay forces `MUJOCO_GL=glfw`, removes the EGL device variable and mounts
 the host X11 socket read-only. Use EGL for CI and unattended benchmarks.
 
-## Generate a report
+## Publish a report and isolated export
 
-Set a canonical run directory name and a new output directory name:
+Set a canonical run directory name and report profile:
 
 ```bash
 export OVLAB_REPORT_RUN_ID=<run-directory-name>
-export OVLAB_REPORT_OUTPUT_NAME=<new-derived-directory-name>
+export OVLAB_REPORT_PROFILE=libero-task-default
 
 docker compose \
   --env-file deploy/compose/.env \
@@ -213,8 +217,11 @@ docker compose \
   --profile reporting run --rm reporting
 ```
 
-The report service reads `/var/lib/ovlab/runs` read-only and writes only to
-`/var/lib/ovlab/derived`. The requested output directory must not already exist.
+The report service reads `/var/lib/ovlab/runs` read-only and atomically writes
+the HTML bundle to `/var/lib/ovlab/derived/<run>/<profile>/<derived-build-id>`
+plus the isolated export to `/var/lib/ovlab/exports/isolated/<run>`. It verifies
+canonical checksums and publishes manifests last. Grouped exports use the same
+image through the `export` Compose profile.
 
 ## Shutdown and verification
 

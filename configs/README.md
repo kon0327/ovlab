@@ -40,6 +40,22 @@ resolver produces a scientific hash without that profile and an execution hash
 including all resolved paths and devices. Its immutable output is one
 `resolved_config.yaml`.
 
+## Reporting and export configuration
+
+An experiment may declare a `reporting` block with `enabled`, a built-in or
+local `profile`, task/run finalization hooks, and `failure_policy`. Reporting
+defaults to the built-in `libero-task-default` profile when the block is omitted.
+Its content affects only the derived report identity, not the scientific or
+benchmark execution configuration hashes.
+
+New exports use built-in, versioned `isolated-default-v1` and
+`grouped-default-v1` templates selected directly by the CLI. Their normalized
+selection and every source run's canonical configuration identity are recorded
+in the resulting `metadata.json`. Files below `exports/` retain only the legacy
+`ovlab.export-spec/v1` grouped bridge; new grouped comparisons should use
+`ovlab export grouped`. Python expressions, YAML tags, arbitrary imports, and
+remote assets are not supported.
+
 ## Checkpoint resources
 
 Portable policy configurations select a logical `settings.checkpoint_id`.

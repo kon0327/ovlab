@@ -38,19 +38,29 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab run inspect RUN_PATH
 ./ovlab run verify RUN_PATH
 ./ovlab metrics recompute RUN_PATH
+./ovlab report publish --run RUN_ID --profile libero-task-default
+./ovlab report generate --run RUN_ID --profile libero-task-default
+./ovlab report verify --run RUN_ID --profile libero-task-default --build BUILD_ID
+./ovlab export isolated --run RUN_ID
+./ovlab export grouped --name STUDY_NAME --runs RUN_ID_A RUN_ID_B
 ```
 
 `ovlab deploy run` is the normal operator workflow. It launches the selected
 policy service and the LIBERO runner as separate Compose containers, waits for
 readiness, propagates the benchmark result, and cleans up the private deployment
-resources. It needs Docker and system Python 3, not an activated Conda
-environment.
+resources. It then starts the dedicated reporting image with canonical `runs/`
+mounted read-only and publishes `derived/` plus the isolated `exports/`. It needs
+Docker and system Python 3, not an activated Conda environment.
 
 Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile only for low-level
 native development. Installing `ovlab-benchctl` exposes the same command as the
 `ovlab` console entrypoint. Complete command, output, exit-code, foreground
 service, cleanup, and QuIC-skeleton behavior is documented in the
 [`OVLAB CLI guide`](code/apps/benchctl/CLI_README.md).
+
+Report generation, offline viewing, integrity verification, isolated/grouped exports,
+and the production reporting-container workflow are covered in the
+[`Reporting and export operations guide`](REPORTING.md).
 
 ## Testing
 

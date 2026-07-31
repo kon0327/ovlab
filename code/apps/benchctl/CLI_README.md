@@ -173,7 +173,15 @@ ovlab
 ├── run inspect RUN_PATH [--json]
 ├── run verify RUN_PATH [--json]
 ├── metrics recompute RUN_PATH [--json]
-└── report generate RUN_PATH --output PATH [--json]
+├── report profiles [--json]
+├── report generate --run RUN_ID [--task TASK_ID] [--profile PROFILE] [--json]
+├── report publish --run RUN_ID [--profile PROFILE] [--report-enabled true|false] [--json]
+├── report verify --run RUN_ID [--profile PROFILE] [--build BUILD_ID] [--json]
+├── export isolated --run RUN_ID [--episode EPISODE_ID] [--template TEMPLATE] [--json]
+├── export grouped --name GROUP (--all-runs | --same-model-as RUN_ID | --runs RUN_ID...)
+│   [--suite SUITE] [--template TEMPLATE] [--json]
+├── export verify --kind isolated|grouped --name NAME [--json]
+└── export generate --spec SPEC.yaml [--json]  # legacy grouped bridge
 ```
 
 ## 1. Validate and resolve configuration
@@ -338,14 +346,43 @@ original trace or stored metrics; records metric implementation identity;
 preserves unavailable results as `status=unavailable, value=null`; and compares
 complete recorded and recomputed `MetricResult` objects.
 
-## 8. Generate a derived report
+## 8. Reports and exports
 
 ```bash
-./ovlab report generate RUN_PATH --output DERIVED_PATH
+./ovlab report profiles
+./ovlab report generate --run RUN_ID --profile libero-task-default
+./ovlab report generate --run RUN_ID --task libero/10/0 --profile libero-task-default
+./ovlab report verify --run RUN_ID --profile libero-task-default --build DERIVED_BUILD_ID
+./ovlab export isolated --run RUN_ID
+./ovlab export isolated --run RUN_ID --episode EPISODE_ID
+./ovlab export grouped --name paper-ablation --runs RUN_ID_A RUN_ID_B
+./ovlab export grouped --name model-family --same-model-as REFERENCE_RUN_ID
+./ovlab export grouped --name complete-study --all-runs --suite libero_10
+./ovlab export verify --kind grouped --name paper-ablation
 ```
 
-The source run remains immutable. In Docker deployment, the reporting profile
-mounts canonical runs read-only and writes only to the configured derived root.
+Reports read canonical evidence from `OVLAB_RUNS_ROOT` and publish staged,
+checksummed offline HTML/JSON builds under `OVLAB_DERIVED_ROOT`. Exports read
+canonical runs directly and publish readable CSV tables plus PNG/PDF figures
+under `OVLAB_EXPORTS_ROOT`; they never scrape report HTML. `--json` returns the
+final host-visible path. These commands do not start
+LIBERO, a policy service, inference, or a network request.
+
+The source-tree launcher runs report and export commands in the locked,
+purpose-built `ovlab-reporting` image. It mounts canonical runs read-only,
+derived/exports read-write, and still reports real host output paths. No Conda
+activation or host package installation is required. Set
+`OVLAB_REPORTING_RUNTIME=host` only for an intentionally prepared native Python.
+
+During deployment, benchmark and policy containers are torn down after the
+canonical run is finalized. The orchestrator then invokes `report publish` in
+the reporting container to generate the final HTML report and isolated export.
+Grouped comparison is never automatic. The experiment setting is
+`reporting: {enabled: true, profile: libero-task-default,
+on_task_finalize: true, on_run_finalize: true, failure_policy: warn}`. Setting
+`enabled: false` skips HTML but retains isolated export. A renderer or export
+failure cannot change canonical benchmark status or timing. The legacy `report generate RUN_PATH
+--output PATH` form remains available for the H.1 machine report.
 
 ## JSON output
 

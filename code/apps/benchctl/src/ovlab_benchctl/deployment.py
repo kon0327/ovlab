@@ -33,11 +33,14 @@ class ComposeDeploymentPlan:
     local_profile: str | None
     offline: bool
     benchmark_service: str
+    reporting_enabled: bool
+    reporting_profile: str
     compose_files: tuple[str, ...]
     config_command: tuple[str, ...]
     up_command: tuple[str, ...]
     status_command: tuple[str, ...]
     down_command: tuple[str, ...]
+    postprocess_command: tuple[str, ...]
 
     def document(self, *, side_effects_performed: bool) -> dict[str, object]:
         return {
@@ -52,11 +55,14 @@ class ComposeDeploymentPlan:
             "local_profile": self.local_profile,
             "offline": self.offline,
             "benchmark_service": self.benchmark_service,
+            "reporting_enabled": self.reporting_enabled,
+            "reporting_profile": self.reporting_profile,
             "compose_files": list(self.compose_files),
             "config_command": list(self.config_command),
             "up_command": list(self.up_command),
             "status_command": list(self.status_command),
             "down_command": list(self.down_command),
+            "postprocess_command": list(self.postprocess_command),
             "side_effects_performed": side_effects_performed,
         }
 
@@ -86,6 +92,7 @@ class ComposeDeployment:
     _SOURCE_MANIFEST_LABEL = "cz.cvut.ovlab.source-manifest.sha256"
     _IMAGE_CONTRACTS = {
         "benchmark": "resolved-checkpoint-config-bundle-v2",
+        "reporting": "canonical-readonly-reporting-v1",
         "policy-openvla": "resolved-checkpoint-quantization-config-bundle-v2",
         "policy-openvla-oft": "resolved-checkpoint-config-bundle-v2",
     }
@@ -93,10 +100,12 @@ class ComposeDeployment:
         "openvla": (
             ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
             ("OVLAB_OPENVLA_IMAGE", "ovlab-policy-openvla:local", "policy-openvla"),
+            ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"),
         ),
         "oft": (
             ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
             ("OVLAB_OFT_IMAGE", "ovlab-policy-openvla-oft:local", "policy-openvla-oft"),
+            ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"),
         ),
     }
 
@@ -155,6 +164,9 @@ class ComposeDeployment:
             )
         selected_profile = profile or configured["profile"]
         selected_renderer = renderer or configured["renderer"]
+        reporting = experiment_doc.get("reporting", {})
+        reporting_enabled = reporting.get("enabled", True)
+        reporting_profile = reporting.get("profile", "libero-task-default")
         if selected_profile not in self._PROFILES:
             raise ValueError(f"deployment profile must be one of: {', '.join(sorted(self._PROFILES))}")
         if selected_renderer not in self._RENDERERS:
@@ -217,6 +229,8 @@ class ComposeDeployment:
             local_profile=local_profile_path,
             offline=offline,
             benchmark_service=benchmark,
+            reporting_enabled=reporting_enabled,
+            reporting_profile=reporting_profile,
             compose_files=tuple(str(path) for path in files),
             config_command=tuple((*common, "config", "--quiet")),
             up_command=tuple((
@@ -225,6 +239,9 @@ class ComposeDeployment:
             )),
             status_command=tuple((*common, "ps", "--all", "--format", "json")),
             down_command=tuple((*common, "down", "--volumes", "--remove-orphans")),
+            postprocess_command=tuple((
+                *common, "--profile", "reporting", "run", "--rm", "--no-deps", "reporting",
+            )),
         )
 
     def _execute(self, command: Sequence[str], environment: Mapping[str, str]):
@@ -326,6 +343,18 @@ class ComposeDeployment:
             runs.chmod(0o2770)
         if not runs.is_dir():
             raise ComposeDeploymentError(f"OVLAB_RUNS_ROOT is not a directory: {runs}")
+        derived = self._bind_source(plan, "OVLAB_DERIVED_ROOT") or (runs.parent / "derived")
+        if not derived.exists():
+            derived.mkdir(mode=0o2770, parents=True)
+            derived.chmod(0o2770)
+        if not derived.is_dir():
+            raise ComposeDeploymentError(f"OVLAB_DERIVED_ROOT is not a directory: {derived}")
+        exports = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (runs.parent / "exports")
+        if not exports.exists():
+            exports.mkdir(mode=0o2770, parents=True)
+            exports.chmod(0o2770)
+        if not exports.is_dir():
+            raise ComposeDeploymentError(f"OVLAB_EXPORTS_ROOT is not a directory: {exports}")
 
     def _current_source_sha256(self) -> str:
         source_manifest = runpy.run_path(
@@ -523,6 +552,29 @@ class ComposeDeployment:
             new_runs = sorted(
                 str(path) for path in self._run_directories(runs_root) - runs_before
             )
+            if len(new_runs) != 1:
+                raise ComposeDeploymentError(
+                    "completed benchmark must create exactly one canonical run; "
+                    f"observed {len(new_runs)} new run directories"
+                )
+            run_path = Path(new_runs[0])
+            derived_root = self._bind_source(plan, "OVLAB_DERIVED_ROOT") or (run_path.parent.parent / "derived")
+            exports_root = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (run_path.parent.parent / "exports")
+            postprocess_environment = {
+                **environment,
+                "OVLAB_REPORT_RUN_ID": run_path.name,
+                "OVLAB_REPORT_PROFILE": plan.reporting_profile,
+                "OVLAB_REPORT_ENABLED": "true" if plan.reporting_enabled else "false",
+                "OVLAB_DERIVED_DISPLAY_ROOT": str(derived_root),
+                "OVLAB_EXPORTS_DISPLAY_ROOT": str(exports_root),
+            }
+            published = self._execute(plan.postprocess_command, postprocess_environment)
+            if published.returncode != 0:
+                raise ComposeDeploymentError(
+                    "canonical benchmark run completed and remains authoritative at "
+                    f"{run_path}, but isolated reporting failed with exit code "
+                    f"{published.returncode}"
+                )
         result = {
             "deployment": "docker-compose",
             "experiment": plan.experiment,
@@ -534,7 +586,15 @@ class ComposeDeployment:
             "runs_root": None if runs_root is None else str(runs_root),
             "datasets_root": str(datasets_root),
             "new_run_paths": new_runs,
-            "run_path": new_runs[0] if len(new_runs) == 1 else None,
+            "run_path": new_runs[0],
+            "postprocessing": {
+                "status": "completed",
+                "service": "reporting",
+                "run_id": Path(new_runs[0]).name,
+                "report_enabled": plan.reporting_enabled,
+                "report_profile": plan.reporting_profile,
+                "canonical_run_modified": False,
+            },
             "service_statuses": list(service_statuses),
             "checkpoint": checkpoint.as_dict(),
             "config_bundle": bundle.summary(),

@@ -48,7 +48,11 @@ class _Runner:
                 json.dumps({"Service": benchmark, "State": "exited", "ExitCode": 0}),
             ))
             return _Result(0, stdout=payload)
-        return _Result(self.returncodes.pop(0))
+        result = _Result(self.returncodes.pop(0) if self.returncodes else 0)
+        if result.returncode == 0 and "up" in command:
+            runs = Path(kwargs["env"]["OVLAB_RUNS_ROOT"])
+            (runs / "simulated-run").mkdir(exist_ok=True)
+        return result
 
 
 @pytest.fixture
@@ -95,8 +99,8 @@ def test_openvla_egl_run_preflights_starts_and_reaps_one_project(deployment_envi
     result = deployment.run(plan)
 
     assert result["status"] == result["cleanup"] == "completed"
-    assert len(runner.calls) == 4
-    config, up, status, down = (call["command"] for call in runner.calls)
+    assert len(runner.calls) == 5
+    config, up, status, down, publish = (call["command"] for call in runner.calls)
     assert config[-2:] == ["config", "--quiet"]
     assert "compose.glfw.yaml" not in " ".join(config)
     assert up[-6:] == [
@@ -104,6 +108,9 @@ def test_openvla_egl_run_preflights_starts_and_reaps_one_project(deployment_envi
     ]
     assert status[-4:] == ["ps", "--all", "--format", "json"]
     assert down[-3:] == ["down", "--volumes", "--remove-orphans"]
+    assert publish[-6:] == ["--profile", "reporting", "run", "--rm", "--no-deps", "reporting"]
+    assert runner.calls[-1]["env"]["OVLAB_REPORT_RUN_ID"] == "simulated-run"
+    assert runner.calls[-1]["env"]["OVLAB_REPORT_ENABLED"] == "true"
     container_experiment = "/opt/ovlab/configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
     assert all(
         call["env"]["OVLAB_EXPERIMENT_CONFIG"] == container_experiment
@@ -131,14 +138,7 @@ def test_success_reports_new_host_run_path(tmp_path):
     datasets = tmp_path / "datasets"
     datasets.mkdir()
 
-    class CreatingRunner(_Runner):
-        def __call__(self, command, **kwargs):
-            result = super().__call__(command, **kwargs)
-            if "up" in command:
-                (runs / "new-run").mkdir()
-            return result
-
-    runner = CreatingRunner(0, 0, 0)
+    runner = _Runner(0, 0, 0, 0)
     deployment = ComposeDeployment(
         REPOSITORY,
         environment={
@@ -155,8 +155,56 @@ def test_success_reports_new_host_run_path(tmp_path):
 
     result = deployment.run(plan)
 
-    assert result["run_path"] == str((runs / "new-run").resolve())
-    assert result["new_run_paths"] == [str((runs / "new-run").resolve())]
+    assert result["run_path"] == str((runs / "simulated-run").resolve())
+    assert result["new_run_paths"] == [str((runs / "simulated-run").resolve())]
+    assert result["postprocessing"]["canonical_run_modified"] is False
+
+
+def test_reporting_failure_preserves_completed_canonical_run_and_is_not_silent(
+    deployment_environment,
+):
+    runner = _Runner(0, 0, 0, 19)
+    deployment = ComposeDeployment(
+        REPOSITORY, environment=deployment_environment, runner=runner,
+    )
+    plan = deployment.plan(
+        LORA, profile="openvla", renderer="egl", env_file=ENV_FILE,
+        project_name="ovlab-test-reporting-failure",
+    )
+
+    with pytest.raises(ComposeDeploymentError, match="canonical benchmark run completed") as failure:
+        deployment.run(plan)
+
+    run_path = Path(deployment_environment["OVLAB_RUNS_ROOT"]) / "simulated-run"
+    assert run_path.is_dir()
+    assert str(run_path) in str(failure.value)
+    assert runner.calls[-2]["command"][-3:] == ["down", "--volumes", "--remove-orphans"]
+    assert runner.calls[-1]["command"][-1] == "reporting"
+
+
+def test_completed_benchmark_without_a_unique_run_refuses_ambiguous_handoff(
+    deployment_environment,
+):
+    class NoArtifactRunner(_Runner):
+        def __call__(self, command, **kwargs):
+            result = super().__call__(command, **kwargs)
+            if result.returncode == 0 and "up" in command:
+                (Path(kwargs["env"]["OVLAB_RUNS_ROOT"]) / "simulated-run").rmdir()
+            return result
+
+    runner = NoArtifactRunner(0, 0, 0)
+    deployment = ComposeDeployment(
+        REPOSITORY, environment=deployment_environment, runner=runner,
+    )
+    plan = deployment.plan(
+        LORA, profile="openvla", renderer="egl", env_file=ENV_FILE,
+        project_name="ovlab-test-no-run-handoff",
+    )
+
+    with pytest.raises(ComposeDeploymentError, match="exactly one canonical run"):
+        deployment.run(plan)
+
+    assert all(call["command"][-1] != "reporting" for call in runner.calls)
 
 
 def test_oft_glfw_plan_selects_oft_services_and_renderer_overlay():
@@ -252,8 +300,8 @@ def test_stale_policy_and_benchmark_images_fail_before_checkpoint_or_compose(
     with pytest.raises(ComposeDeploymentError, match="stale or incompatible") as failure:
         _PREFLIGHT_IMAGES(deployment, plan)
 
-    assert "bash deploy/scripts/build-images.sh benchmark policy-openvla-oft" in str(failure.value)
-    assert len(observed) == 2
+    assert "bash deploy/scripts/build-images.sh benchmark policy-openvla-oft reporting" in str(failure.value)
+    assert len(observed) == 3
     assert all(call[0][:3] == ["docker", "image", "inspect"] for call in observed)
 
 
@@ -271,6 +319,8 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
         contract = (
             "resolved-checkpoint-config-bundle-v2"
             if image == "ovlab-benchmark-libero:local"
+            else "canonical-readonly-reporting-v1"
+            if image == "ovlab-reporting:local"
             else "resolved-checkpoint-v1"
         )
         return _Result(0, stdout=f"{contract}|{current_source}\n")
@@ -301,6 +351,8 @@ def test_preflight_rejects_image_that_does_not_contain_current_source(monkeypatc
         contract = (
             "resolved-checkpoint-quantization-config-bundle-v2"
             if image == "ovlab-policy-openvla:local"
+            else "canonical-readonly-reporting-v1"
+            if image == "ovlab-reporting:local"
             else "resolved-checkpoint-config-bundle-v2"
         )
         return _Result(0, stdout=f"{contract}|{'b' * 64}\n")
@@ -313,7 +365,7 @@ def test_preflight_rejects_image_that_does_not_contain_current_source(monkeypatc
     with pytest.raises(ComposeDeploymentError, match="source-manifest") as failure:
         _PREFLIGHT_IMAGES(deployment, plan)
 
-    assert "build-images.sh benchmark policy-openvla" in str(failure.value)
+    assert "build-images.sh benchmark policy-openvla reporting" in str(failure.value)
 
 
 def test_failed_benchmark_is_cleaned_and_reported(deployment_environment):

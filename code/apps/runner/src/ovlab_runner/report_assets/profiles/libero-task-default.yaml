@@ -1,0 +1,19 @@
+{
+  "schema_version": "ovlab.report-profile/v1",
+  "id": "libero-task-default",
+  "template": "benchmark/task-v1",
+  "sections": [
+    "overview", "episode_results", "task_metrics", "action_metrics",
+    "system_metrics", "action_trajectories", "latency", "videos", "provenance"
+  ],
+  "charts": [
+    {"id": "action_components", "builder": "action_timeseries"},
+    {"id": "inference_latency", "builder": "latency_distribution"},
+    {"id": "episode_outcomes", "builder": "episode_outcomes"}
+  ],
+  "options": {
+    "show_units": true,
+    "show_unavailable": true,
+    "include_raw_provenance": false
+  }
+}

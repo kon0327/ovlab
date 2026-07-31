@@ -49,7 +49,7 @@ selected() {
 roles=("$@")
 for requested in "${roles[@]}"; do
   case "$requested" in
-    benchmark|policy-openvla|policy-openvla-oft) ;;
+    benchmark|reporting|policy-openvla|policy-openvla-oft) ;;
     *) printf 'unknown image role: %s\n' "$requested" >&2; exit 2 ;;
   esac
 done
@@ -57,6 +57,10 @@ done
 if [[ "${#roles[@]}" -eq 0 ]] || selected benchmark; then
   build_role benchmark deploy/docker/Dockerfile.benchmark ovlab-benchmark-libero:local \
     deploy/locks/benchmark.pylock.toml deploy/locks/benchmark.requirements.txt
+fi
+if [[ "${#roles[@]}" -eq 0 ]] || selected reporting; then
+  build_role reporting deploy/docker/Dockerfile.reporting ovlab-reporting:local \
+    deploy/locks/reporting.pylock.toml deploy/locks/reporting.requirements.txt
 fi
 if [[ "${#roles[@]}" -eq 0 ]] || selected policy-openvla; then
   build_role policy-openvla deploy/docker/Dockerfile.openvla ovlab-policy-openvla:local \

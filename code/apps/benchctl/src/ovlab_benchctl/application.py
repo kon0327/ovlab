@@ -142,6 +142,36 @@ class OvlabApplication:
             )
         return path.resolve()
 
+    def _data_roots(self, *, runs_root=None):
+        data_root = Path(
+            self.environment.get("OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data")
+        ).expanduser().resolve()
+        runs = Path(
+            runs_root or self.environment.get("OVLAB_RUNS_ROOT", data_root / "runs")
+        ).expanduser().resolve()
+        derived = Path(
+            self.environment.get("OVLAB_DERIVED_ROOT", runs.parent / "derived")
+        ).expanduser().resolve()
+        exports = Path(
+            self.environment.get("OVLAB_EXPORTS_ROOT", runs.parent / "exports")
+        ).expanduser().resolve()
+        return runs, derived, exports
+
+    def _report_profile(self, reference):
+        from ovlab_runner import ArtifactError, ReportProfile, builtin_profile
+        if reference == "libero-task-default":
+            return builtin_profile(reference)
+        path = Path(reference).expanduser()
+        if not path.is_absolute():
+            path = self.repository_root / path
+        if not path.is_file():
+            raise ConfigReferenceError(f"report profile does not exist: {path.resolve()}")
+        try:
+            return ReportProfile.from_mapping(load(path.resolve()), template_base=path.resolve().parent)
+        except ArtifactError as exc:
+            from .errors import ConfigSchemaError
+            raise ConfigSchemaError(f"invalid report profile: {exc}") from exc
+
     def _quic_descriptor(self, path: Path, *, runtime: bool):
         from ovlab_openvla_quic import descriptor_from_document
 
@@ -481,7 +511,10 @@ class OvlabApplication:
         from ovlab_benchmarks.libero import LiberoBenchmarkAdapter
         from ovlab_core.contracts import RunContext, RunId
         from ovlab_remote_policy import RemotePolicyAdapter, UnixPolicyClient
-        from ovlab_runner import ExperimentRunner, FilesystemRunArtifactStore
+        from ovlab_runner import (
+            AutomaticDerivedReporter, DerivedReportEngine, ExperimentRunner, ExportEngine,
+            FilesystemRunArtifactStore,
+        )
 
         resolved = self._resolved_experiment(config)
         created_wall_time_utc_ns = time.time_ns()
@@ -515,6 +548,25 @@ class OvlabApplication:
             "deployment": self._deployment_provenance(self.environment),
         })
         root = resolved.artifact_settings.root if output_root is None else Path(output_root).expanduser().resolve()
+        reporting = resolved.reporting_settings
+        postprocessor = None
+        postprocessing_mode = self.environment.get("OVLAB_POSTPROCESSING_MODE", "external")
+        if postprocessing_mode not in {"external", "internal"}:
+            raise ConfigCompatibilityError(
+                "OVLAB_POSTPROCESSING_MODE must be 'external' or 'internal'"
+            )
+        if postprocessing_mode == "internal":
+            _, derived_root, exports_root = self._data_roots(runs_root=root)
+            report_engine = None
+            if reporting.enabled:
+                profile = self._report_profile(reporting.profile)
+                report_engine = DerivedReportEngine(root, derived_root, profile)
+            postprocessor = AutomaticDerivedReporter(
+                report_engine,
+                on_task_finalize=reporting.on_task_finalize,
+                on_run_finalize=reporting.on_run_finalize,
+                isolated_export_engine=ExportEngine(root, exports_root),
+            )
         socket = self.default_socket(config)
         policy = RemotePolicyAdapter(UnixPolicyClient(socket))
         runner = ExperimentRunner(
@@ -523,6 +575,8 @@ class OvlabApplication:
             policy,
             FilesystemRunArtifactStore(root),
             configuration_snapshot=resolved.configuration_snapshot(),
+            postprocessor=postprocessor,
+            postprocessor_failure_policy=reporting.failure_policy,
         )
         try:
             report = runner.connect()
@@ -557,3 +611,75 @@ class OvlabApplication:
     def generate_report(path, output):
         from ovlab_runner import regenerate_report
         return regenerate_report(path, output)
+
+    def report_generate(self, run, profile="libero-task-default", *, task_id=None):
+        from ovlab_runner import DerivedReportEngine
+        runs, derived, _ = self._data_roots()
+        return DerivedReportEngine(runs, derived, self._report_profile(profile)).generate(run, task_id=task_id)
+
+    def report_publish(self, run, profile="libero-task-default", *, report_enabled=True):
+        """Publish regenerable outputs from one finalized canonical run."""
+        from ovlab_runner import DerivedReportEngine, ExportEngine
+        runs, derived, exports = self._data_roots()
+        report = None
+        if report_enabled:
+            report = DerivedReportEngine(
+                runs, derived, self._report_profile(profile)
+            ).generate(run)
+        isolated = ExportEngine(runs, exports).generate_isolated(run)
+        return {
+            "schema_version": "ovlab.postprocessing-result/v1",
+            "run_id": str(run),
+            "canonical_run_modified": False,
+            "report": report,
+            "isolated_export": isolated,
+            "status": "completed",
+        }
+
+    def report_verify(self, run, profile="libero-task-default", *, build_id=None):
+        from ovlab_runner import DerivedReportEngine
+        runs, derived, _ = self._data_roots()
+        return DerivedReportEngine(runs, derived, self._report_profile(profile)).verify(run, build_id=build_id)
+
+    @staticmethod
+    def report_profiles():
+        from ovlab_runner import report_profiles
+        return {"schema_version": "ovlab.report-profiles/v1", "profiles": list(report_profiles())}
+
+    def export_generate(self, spec):
+        from ovlab_runner import ArtifactError, ExportEngine, validate_export_spec
+        path = Path(spec).expanduser()
+        if not path.is_absolute():
+            path = self.repository_root / path
+        if not path.is_file():
+            raise ConfigReferenceError(f"export specification does not exist: {path.resolve()}")
+        runs, _, exports = self._data_roots()
+        try:
+            document = validate_export_spec(load(path.resolve()))
+        except ArtifactError as exc:
+            from .errors import ConfigSchemaError
+            raise ConfigSchemaError(f"invalid export specification: {exc}") from exc
+        return ExportEngine(runs, exports).generate(document)
+
+    def export_isolated(self, run_id, *, episode_id=None, template="isolated-default-v1"):
+        from ovlab_runner import ExportEngine
+        runs, _, exports = self._data_roots()
+        return ExportEngine(runs, exports).generate_isolated(
+            run_id, episode_id=episode_id, template=template,
+        )
+
+    def export_grouped(
+        self, group_name, *, all_runs=False, run_ids=(), same_model_as=None,
+        suite=None, template="grouped-default-v1",
+    ):
+        from ovlab_runner import ExportEngine
+        runs, _, exports = self._data_roots()
+        return ExportEngine(runs, exports).generate_grouped(
+            group_name, all_runs=all_runs, run_ids=run_ids,
+            same_model_as=same_model_as, suite=suite, template=template,
+        )
+
+    def export_verify(self, kind, name):
+        from ovlab_runner import ExportEngine
+        runs, _, exports = self._data_roots()
+        return ExportEngine(runs, exports).verify(kind, name)

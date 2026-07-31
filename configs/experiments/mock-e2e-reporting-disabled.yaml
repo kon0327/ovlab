@@ -2,10 +2,10 @@ schema_version: "0.1.0"
 kind: experiment
 
 reporting:
-  enabled: true
+  enabled: false
   profile: libero-task-default
-  on_task_finalize: true
-  on_run_finalize: true
+  on_task_finalize: false
+  on_run_finalize: false
   failure_policy: warn
 
 experiment:

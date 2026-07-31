@@ -25,3 +25,9 @@ Canonical `runs/`, regenerated `derived/`, and curated `exports/` are separate
 ownership domains. Only the benchmark runtime may create canonical runs; analysis
 and reporting read them without write permission. Promotion from `derived/` into
 `exports/` is a deliberate host-side publication step.
+
+The production Gate H.2 benchmark report owner is `ovlab_runner`, invoked through
+the unified `ovlab report` and `ovlab export` CLI. This laboratory remains the
+place for reusable higher-level offline analyses and notebooks; it consumes the
+same canonical runs read-only and must not introduce a second trace, metric, or
+report schema.

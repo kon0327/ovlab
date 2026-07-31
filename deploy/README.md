@@ -14,14 +14,15 @@ For a command-oriented build and launch guide, see
 | Image | Runtime responsibility | Included heavy closure | Deliberately absent |
 |---|---|---|---|
 | `ovlab-benchmark-libero` | CLI, runner, LIBERO, Robosuite, MuJoCo, EGL and immutable trace output | LIBERO simulation stack; Torch only because pinned LIBERO imports it to load initial states | OpenVLA, Transformers, PEFT, FlashAttention and model weights |
+| `ovlab-reporting` | Offline HTML reporting plus isolated/grouped publication exports | NumPy, Jinja2 and Matplotlib | LIBERO, MuJoCo, model runtimes, checkpoints, datasets, GPU and policy socket |
 | `ovlab-policy-openvla` | Vanilla and merged-LoRA OpenVLA service | Torch 2.2.0/CUDA 12.1, Transformers 4.40.1, PEFT 0.11.1, BitsAndBytes 0.43.1, FlashAttention 2.5.5 and pinned OpenVLA source | LIBERO, Robosuite, MuJoCo, datasets and run output |
+| `ovlab-policy-openvla-oft` | OpenVLA-OFT service | The distinct OFT Transformers commit, Torch/CUDA, FlashAttention and pinned OFT source | LIBERO, Robosuite, MuJoCo, datasets and run output |
 
 Vanilla and merged-LoRA policies accept `runtime.quantization: none | 4bit`.
 The `4bit` identity denotes the pinned BitsAndBytes NF4 inference recipe with
 BF16 compute, FP16 storage and double quantization. Applying it to the published
 merged-LoRA full weights is quantized merged-LoRA inference; it is not evidence
 that the adapter was trained with QLoRA.
-| `ovlab-policy-openvla-oft` | OpenVLA-OFT service | The distinct OFT Transformers commit, Torch/CUDA, FlashAttention and pinned OFT source | LIBERO, Robosuite, MuJoCo, datasets and run output |
 
 QuIC remains descriptor-only. There is no QuIC image, Compose profile, provider
 selection, or claim of runtime readiness in Gate H.
@@ -54,7 +55,7 @@ compatible with CUDA 12.1, and enough local storage for the pinned images. Verif
 these prerequisites with `docker version`, `docker compose version`, `docker info`,
 `nvidia-smi`, and a small `docker run --gpus all` check.
 
-For a deployment, set the three `OVLAB_*_IMAGE` Compose variables to immutable
+For a deployment, set the four `OVLAB_*_IMAGE` Compose variables to immutable
 registry digest references and set the matching `*_IMAGE_DIGEST` values. Those
 identities enter execution provenance and the policy handshake, but never the
 scientific configuration hash. Machine paths, socket names, renderer device IDs
@@ -167,15 +168,16 @@ path from being silently created. LIBERO task definitions, assets, and initial
 states remain supplied by the pinned benchmark source; demonstration datasets
 belong only in this host data tree.
 
-The container runtime uses UID/GID `10001:10001`. The host CLI creates a missing
-`runs/` root with mode `2770`, creates the default `datasets/libero/` root when
+The container runtime uses UID/GID `10001:10001`. The host CLI creates missing
+`runs/`, `derived/`, and `exports/` roots with mode `2770`, creates the default `datasets/libero/` root when
 absent, and passes the invoking user's primary GID as a
 supplementary container group, so canonical artifacts remain writable by the
 host user without world-writable permissions. `runs/` is writable only in benchmark services.
-Reporting mounts it read-only and writes only below `derived/`. `exports/` is never
-mounted into benchmark or policy containers; promotion into it is an explicit host
-workflow. Host paths and Docker tags are deployment provenance and never enter the
-scientific configuration hash.
+After benchmark/policy teardown, the reporting container mounts `runs/`
+read-only and writes below `derived/` and `exports/`. Benchmark services never
+mount either output root. Grouped exports remain an explicit operator workflow. Policy containers mount
+none of these artifact roots. Host paths and Docker tags are deployment
+provenance and never enter the scientific configuration hash.
 
 ## CLI-managed Compose profiles
 
@@ -187,17 +189,18 @@ Python 3, not an activated Conda environment:
   configs/experiments/libero10-lora-merged-rpc-smoke.yaml
 ```
 
-The CLI passes the selected experiment to both services, performs checkpoint
+The CLI passes the selected experiment to both runtime services, performs checkpoint
 resolution and Compose preflight, propagates the benchmark status and reaps the
-project-scoped containers and RPC volume. It checks a versioned deployment
-contract on both selected images before hashing a large checkpoint, so stale
+project-scoped containers and RPC volume. It then hands the single completed run
+ID to the isolated reporting service. It checks a versioned deployment
+contract on all selected images before hashing a large checkpoint, so stale
 images fail with an exact rebuild command instead of running old mount semantics.
 New or changed YAML below `configs/` is resolved into a read-only per-run bundle
 and does not require a rebuild. After changing packaged Python source, dependency
 locks, Dockerfiles, or bundled external source, rebuild the selected topology:
 
 ```bash
-bash deploy/scripts/build-images.sh benchmark policy-openvla-oft
+bash deploy/scripts/build-images.sh benchmark reporting policy-openvla-oft
 ```
 
 The commands below describe the underlying topology and remain useful for
@@ -245,17 +248,31 @@ capability probe, and then `ovlab run ...`. Add `--json` where supported for sta
 machine output; omit it for human output. Compose delegates directly to the service
 and run commands and returns their exit status.
 
-Regenerate a report without granting write access to canonical evidence:
+Publish the report and isolated export without granting write access to
+canonical evidence:
 
 ```bash
 export OVLAB_REPORT_RUN_ID=<canonical-run-directory>
-export OVLAB_REPORT_OUTPUT_NAME=<derived-output-directory>
+export OVLAB_REPORT_PROFILE=libero-task-default
 docker compose --file deploy/compose/compose.yaml --profile reporting run --rm reporting
 ```
 
-The source is mounted at `/var/lib/ovlab/runs:ro`; the new report is written below
-`/var/lib/ovlab/derived`. The output directory must not already exist. Report
-generation performs neither policy inference nor LIBERO execution.
+The source is mounted at `/var/lib/ovlab/runs:ro`; the report is written below
+`/var/lib/ovlab/derived/<run>/<profile>/<derived-build-id>` and the isolated
+export below `/var/lib/ovlab/exports/isolated/<run>`. Report generation performs
+neither policy inference nor LIBERO execution. Only `runs/` is writable during
+the benchmark; reporting/export failure is isolated from canonical finalization.
+
+Generate a grouped export with canonical runs mounted read-only:
+
+```bash
+docker compose --file deploy/compose/compose.yaml --profile export run --rm export \
+  export grouped --name paper-ablation --runs RUN_ID_A RUN_ID_B
+```
+
+The export service writes only below `/var/lib/ovlab/exports`. Both standalone
+services retain the non-root, read-only-root, dropped-capability,
+`no-new-privileges` and `network_mode: none` contract.
 
 Use `docker compose ... down` for scoped teardown. Do not use global prune commands.
 On a signal, the foreground CLI closes its adapter and removes only its owned socket;

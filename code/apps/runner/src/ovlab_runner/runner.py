@@ -1,6 +1,7 @@
 """In-process synchronous ExperimentRunner."""
 
 from collections import Counter
+import warnings
 
 from ovlab_metrics import (
     MetricEvaluator, MetricRegistry, MetricStatus, TaskMetricPlugin, aggregate_episode_results,
@@ -18,7 +19,7 @@ from .provenance import StaticProvenanceProvider
 class ExperimentRunner:
     version = "0.1.0"
 
-    def __init__(self, plan, benchmark, policy, artifact_store, *, metric_registry=None, clock=None, provenance_provider=None, configuration_snapshot=None):
+    def __init__(self, plan, benchmark, policy, artifact_store, *, metric_registry=None, clock=None, provenance_provider=None, configuration_snapshot=None, postprocessor=None, postprocessor_failure_policy="warn"):
         self.plan = plan
         self.benchmark = benchmark
         self.policy = policy
@@ -29,6 +30,10 @@ class ExperimentRunner:
         if configuration_snapshot is not None and not isinstance(configuration_snapshot, RunConfigurationSnapshot):
             raise TypeError("configuration_snapshot must be a RunConfigurationSnapshot or None")
         self.configuration_snapshot = configuration_snapshot
+        if postprocessor_failure_policy != "warn":
+            raise ValueError("postprocessor_failure_policy must be warn")
+        self.postprocessor = postprocessor
+        self.postprocessor_failure_policy = postprocessor_failure_policy
         self.state = RunnerState.CREATED
         self.connection_report = None
         self._resources_closed = False
@@ -113,11 +118,13 @@ class ExperimentRunner:
                 task_results = self._aggregate_task(task, episode_results)
                 self.store.write_task_metric_results(self.plan.run_context.run_id, task.task_id, task_results)
                 all_task_results[str(task.task_id)] = task_results
+                self._postprocess("task", task.task_id)
                 if stop_task:
                     continue
             completed = self._final_manifest("completed", terminal_counts, episode_count, metric_errors)
             self.store.finalize_run(self.plan.run_context.run_id, completed)
             self.state = RunnerState.COMPLETED
+            self._postprocess("run", "completed")
             return all_task_results
         except BaseException as exc:
             self.state = RunnerState.FAILED
@@ -126,7 +133,9 @@ class ExperimentRunner:
             failed = self._final_manifest(
                 status, terminal_counts, episode_count, metric_errors, type(exc).__name__, category
             )
-            try: self.store.mark_run_failed(self.plan.run_context.run_id, failed)
+            try:
+                self.store.mark_run_failed(self.plan.run_context.run_id, failed)
+                self._postprocess("run", status)
             except Exception: pass
             raise
         finally:
@@ -185,6 +194,25 @@ class ExperimentRunner:
         try: self.policy.close()
         finally: self.benchmark.close()
         self._resources_closed = True
+
+    def _postprocess(self, scope, value):
+        if self.postprocessor is None:
+            return
+        try:
+            if scope == "task":
+                self.postprocessor.task_finalized(self.plan.run_context.run_id, value)
+            else:
+                self.postprocessor.run_finalized(self.plan.run_context.run_id, value)
+        except Exception as exc:
+            recorder = getattr(self.postprocessor, "record_failure", None)
+            if callable(recorder):
+                try: recorder(self.plan.run_context.run_id, scope, exc)
+                except Exception: pass
+            warnings.warn(
+                f"postprocessing {scope} report failed without changing canonical benchmark status: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     def _require(self, state):
         if self.state is not state: raise RunnerLifecycleError(f"operation requires {state.value}, current state is {self.state.value}")

@@ -64,7 +64,7 @@ def validate_experiment(doc, path):
         doc,
         path,
         required=("schema_version", "kind", "experiment", "components", "resources"),
-        optional=("deployment",),
+        optional=("deployment", "reporting"),
     )
     experiment = mapping(doc["experiment"], f"{path}.experiment", required=("id", "name", "tags"))
     non_empty_string(experiment["id"], f"{path}.experiment.id")
@@ -85,6 +85,15 @@ def validate_experiment(doc, path):
         )
         enum(deployment["profile"], ("openvla", "oft"), f"{path}.deployment.profile")
         enum(deployment["renderer"], ("egl", "glfw"), f"{path}.deployment.renderer")
+    if "reporting" in doc:
+        reporting = mapping(
+            doc["reporting"], f"{path}.reporting",
+            required=("enabled", "profile", "on_task_finalize", "on_run_finalize", "failure_policy"),
+        )
+        for key in ("enabled", "on_task_finalize", "on_run_finalize"):
+            exact_type(reporting[key], bool, f"{path}.reporting.{key}")
+        non_empty_string(reporting["profile"], f"{path}.reporting.profile")
+        enum(reporting["failure_policy"], ("warn",), f"{path}.reporting.failure_policy")
 
 
 def validate_benchmark(doc, path):

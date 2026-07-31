@@ -6,4 +6,6 @@ class RunnerLifecycleError(RunnerError): pass
 class ConnectionError(RunnerError): pass
 class ExperimentExecutionError(RunnerError): pass
 class ArtifactError(RunnerError): pass
+class ReportingSourceUnavailableError(ArtifactError): pass
+class ReportingRendererError(ArtifactError): pass
 class RecorderError(RunnerError): pass

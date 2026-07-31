@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OVLAB run {{ model.run.run_id }}</title><link rel="stylesheet" href="assets/style.css"></head>
+<body><main>
+<h1>OVLAB run report</h1>
+<section class="card"><h2>Overview</h2><p><strong>Run:</strong> <code>{{ model.run.run_id }}</code></p>
+<p><strong>Status:</strong> <span class="status">{{ model.run.status }}</span> · <strong>Completeness:</strong> {{ model.completeness }}</p>
+<p><strong>Experiment:</strong> {{ model.run.experiment_name or model.run.experiment }}</p>
+<p><strong>Policy:</strong> {{ model.policy.name }} {{ model.policy.version }} · <strong>Benchmark:</strong> {{ model.benchmark.name }} {{ model.benchmark.version }}</p>
+<p><strong>Scientific config:</strong> <code>{{ model.run.scientific_config_hash }}</code><br><strong>Execution config:</strong> <code>{{ model.run.execution_config_hash }}</code></p></section>
+<section class="card"><h2>Outcome</h2>
+{% if model.outcome.presentation == 'binary_success' %}<p>Success: <strong>{{ 'true' if model.outcome.success else 'false' }}</strong></p>
+{% elif model.outcome.presentation == 'success_rate' %}<p>Success rate: <strong>{{ '%.3f'|format(model.outcome.success_rate) }}</strong> ({{ model.outcome.successful_episode_count }}/{{ model.outcome.eligible_episode_count }})</p>
+{% else %}<p class="unavailable">Outcome unavailable.</p>{% endif %}
+<p>Failed: {{ model.outcome.failed_episode_count }} · Interrupted/invalid: {{ model.outcome.interrupted_or_invalid_episode_count }} · Missing: {{ model.outcome.missing_episode_count }}</p></section>
+<section class="card"><h2>Tasks</h2><table><thead><tr><th>Task</th><th>Status</th><th>Instruction</th><th>Outcome</th></tr></thead><tbody>
+{% for task in model.tasks %}<tr><td><a href="{{ task_links[task.task_id] }}">{{ task.task_id }}</a></td><td>{{ task.status }}</td><td>{{ task.instruction }}</td><td>{% if task.outcome.presentation == 'binary_success' %}success={{ 'true' if task.outcome.success else 'false' }}{% elif task.outcome.presentation == 'success_rate' %}{{ '%.3f'|format(task.outcome.success_rate) }} (n={{ task.outcome.eligible_episode_count }}){% else %}unavailable{% endif %}</td></tr>{% endfor %}
+</tbody></table></section>
+<section class="card"><h2>Charts and descriptive statistics</h2><p class="chart-help">Move the cursor over a chart for exact values. Use the mouse wheel to zoom, drag to pan, and double-click to reset. Tables use full canonical samples and are not computed from chart downsampling.</p>{% for chart in model.charts %}<h3>{{ chart.id }}</h3><object class="chart" type="image/svg+xml" data="{{ charts[chart.id] }}" aria-label="Interactive {{ chart.id }} chart"><a href="{{ charts[chart.id] }}">Open static {{ chart.id }} chart</a></object><h4>Descriptive statistics</h4><p class="statistics-source">{{ chart.statistics.source }}. {{ chart.statistics.standard_deviation }}.</p><div class="table-scroll"><table class="statistics"><thead><tr><th>Task</th><th>Episode</th><th>Series</th><th>Unit</th><th>n</th><th>Non-finite</th><th>Min</th><th>P05</th><th>Median</th><th>Mean</th><th>Sample SD</th><th>P95</th><th>Max</th></tr></thead><tbody>{% for row in chart.statistics.rows %}<tr><td>{{ row.task_id or 'all' }}</td><td>{{ row.episode_id or 'all' }}</td><td>{{ row.series }}</td><td>{{ row.unit }}</td><td>{{ row.n }}</td><td>{{ row.non_finite_count }}</td><td>{{ '%.6g'|format(row.minimum) if row.minimum is not none else 'unavailable' }}</td><td>{{ '%.6g'|format(row.p05) if row.p05 is not none else 'unavailable' }}</td><td>{{ '%.6g'|format(row.median) if row.median is not none else 'unavailable' }}</td><td>{{ '%.6g'|format(row.mean) if row.mean is not none else 'unavailable' }}</td><td>{{ '%.6g'|format(row.sample_standard_deviation) if row.sample_standard_deviation is not none else 'unavailable' }}</td><td>{{ '%.6g'|format(row.p95) if row.p95 is not none else 'unavailable' }}</td><td>{{ '%.6g'|format(row.maximum) if row.maximum is not none else 'unavailable' }}</td></tr>{% endfor %}</tbody></table></div>{% endfor %}</section>
+<section class="card"><h2>Renderer and provenance</h2><p>{{ model.renderer.description }} ({{ model.renderer.acceleration }})</p>
+<p>Canonical verification: {{ model.provenance.verification }}. This derived report does not alter canonical evidence.</p></section>
+</main></body></html>

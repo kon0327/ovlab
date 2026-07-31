@@ -23,7 +23,10 @@ def _dockerfile(name: str) -> str:
 
 
 def test_production_images_are_digest_pinned_non_root_and_cli_only():
-    for name in ("Dockerfile.benchmark", "Dockerfile.openvla", "Dockerfile.openvla-oft"):
+    for name in (
+        "Dockerfile.benchmark", "Dockerfile.reporting", "Dockerfile.openvla",
+        "Dockerfile.openvla-oft",
+    ):
         text = _dockerfile(name)
         assert all(
             "@sha256:" in line
@@ -41,6 +44,8 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
         expected_contract = (
             "resolved-checkpoint-quantization-config-bundle-v2"
             if name == "Dockerfile.openvla"
+            else "canonical-readonly-reporting-v1"
+            if name == "Dockerfile.reporting"
             else "resolved-checkpoint-config-bundle-v2"
         )
         assert f'cz.cvut.ovlab.deployment.contract="{expected_contract}"' in text
@@ -48,6 +53,7 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
 
 def test_role_closures_do_not_cross_heavy_runtime_boundaries():
     benchmark = _dockerfile("Dockerfile.benchmark")
+    reporting = _dockerfile("Dockerfile.reporting")
     openvla = _dockerfile("Dockerfile.openvla")
     oft = _dockerfile("Dockerfile.openvla-oft")
     assert "COPY external/libero " in benchmark
@@ -61,6 +67,9 @@ def test_role_closures_do_not_cross_heavy_runtime_boundaries():
     assert "COPY external/libero " not in openvla
     assert "COPY external/openvla-oft " in oft
     assert "COPY external/libero " not in oft
+    assert "COPY external/" not in reporting
+    assert "mujoco" not in reporting.lower()
+    assert "resolved-checkpoint" not in reporting
     assert "openvla-quic" not in COMPOSE.lower()
 
 
@@ -68,7 +77,7 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     forbidden = ("ports:", "privileged:", "network_mode: host", "/var/run/docker.sock")
     assert not any(value in COMPOSE for value in forbidden)
     assert COMPOSE.count("network_mode: none") == 1
-    assert COMPOSE.count("<<: *policy-security") == 5
+    assert COMPOSE.count("<<: *policy-security") == 6
     assert "read_only: true" in COMPOSE
     assert COMPOSE.count("cap_drop: [ALL]") >= 1
     assert "HF_HUB_OFFLINE: \"1\"" in COMPOSE
@@ -99,31 +108,51 @@ def test_compose_is_socket_only_offline_and_least_privilege():
 
 def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
     assert "OVLAB_RUNS_PATH" not in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 3
-    assert COMPOSE.count("target: /var/lib/ovlab/runs") == 3
+    assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 4
+    assert COMPOSE.count("target: /var/lib/ovlab/runs") == 4
     assert COMPOSE.count("--output-root, /var/lib/ovlab/runs") == 2
-    assert COMPOSE.count("target: /var/lib/ovlab/runs\n        read_only: true") == 1
-    assert "source: ${OVLAB_DERIVED_ROOT:-../../../ovlab-data/derived}" in COMPOSE
-    assert "target: /var/lib/ovlab/derived" in COMPOSE
-    assert "OVLAB_MOUNT_CONTRACT: runs-ro,derived-rw" in COMPOSE
-    assert "OVLAB_EXPORTS_ROOT" not in COMPOSE
-    assert COMPOSE.count("${OVLAB_HOST_ARTIFACT_GID:-1000}") == 3
+    assert COMPOSE.count("target: /var/lib/ovlab/runs\n        read_only: true") == 2
+    assert COMPOSE.count("source: ${OVLAB_DERIVED_ROOT:-../../../ovlab-data/derived}") == 1
+    assert COMPOSE.count("target: /var/lib/ovlab/derived") == 1
+    assert "OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,derived-rw,exports-rw" in COMPOSE
+    assert COMPOSE.count("source: ${OVLAB_CONFIGS_ROOT:-../../configs}") == 2
+    assert COMPOSE.count("target: /opt/ovlab/configs\n        read_only: true") == 2
+    assert COMPOSE.count("source: ${OVLAB_EXPORTS_ROOT:-../../../ovlab-data/exports}") == 2
+    assert COMPOSE.count("target: /var/lib/ovlab/exports") == 2
+    assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,derived-rw,exports-rw") == 1
+    assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro") == 1
+    assert COMPOSE.count("${OVLAB_HOST_ARTIFACT_GID:-1000}") == 4
     reporting = COMPOSE.split("  reporting:\n", 1)[1].split("\nvolumes:\n", 1)[0]
     assert "profiles: [reporting]" in reporting
-    assert "report\n      - generate" in reporting
+    assert "image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}" in reporting
+    assert "report\n      - publish" in reporting
+    assert "target: /var/lib/ovlab/runs\n        read_only: true" in reporting
+    assert "target: /var/lib/ovlab/derived" in reporting
+    assert "target: /var/lib/ovlab/exports" in reporting
     assert "gpus:" not in reporting
     assert "rpc-openvla" not in reporting and "rpc-oft" not in reporting
+    export = COMPOSE.split("  export:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    assert "profiles: [export]" in export
+    assert "image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}" in export
+    assert "OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro" in export
+    assert "target: /var/lib/ovlab/runs\n        read_only: true" in export
+    assert "target: /etc/ovlab/export.yaml\n        read_only: true" in export
+    assert "gpus:" not in export and "rpc-openvla" not in export and "rpc-oft" not in export
     assert "runs:" not in COMPOSE.split("\nvolumes:\n", 1)[1]
 
     profile = (ROOT / "deploy/config/container-profile.yaml").read_text(encoding="utf-8")
     assert "runs_root: /var/lib/ovlab/runs" in profile
     benchmark = _dockerfile("Dockerfile.benchmark")
     assert "install -d -o 10001 -g 10001 -m 0700 /run/ovlab /var/lib/ovlab/runs" in benchmark
+    assert COMPOSE.count("OVLAB_POSTPROCESSING_MODE: external") == 2
+    benchmark_services = COMPOSE.split("  benchmark-openvla:\n", 1)[1].split("  policy-openvla-oft:\n", 1)[0] + COMPOSE.split("  benchmark-oft:\n", 1)[1].split("  reporting:\n", 1)[0]
+    assert "/var/lib/ovlab/derived" not in benchmark_services
+    assert "/var/lib/ovlab/exports" not in benchmark_services
 
 
 def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
     locks = ROOT / "deploy/locks"
-    for role in ("benchmark", "openvla", "openvla-oft", "flash-attn"):
+    for role in ("benchmark", "reporting", "openvla", "openvla-oft", "flash-attn"):
         pylock = (locks / f"{role}.pylock.toml").read_text(encoding="utf-8")
         requirements = (locks / f"{role}.requirements.txt").read_text(encoding="utf-8")
         assert 'lock-version = "1.0"' in pylock
@@ -138,6 +167,8 @@ def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
     assert "bitsandbytes=0.43.1" in _dockerfile("Dockerfile.openvla")
     assert "rich==15.0.0" in (locks / "openvla-oft.requirements.txt").read_text(encoding="utf-8")
     assert "imageio-ffmpeg==0.6.0" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
+    assert "jinja2==3.1.6" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
+    assert "markupsafe==3.0.3" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
     oft = (locks / "openvla-oft.pylock.toml").read_text(encoding="utf-8")
     assert oft.count('commit-id = "bc339d9ad707454c0c115970db43c260067c61ab"') == 1
     assert oft.count('commit-id = "040105d256bd28866cc6620621a3d5f7b6b91b46"') == 1
@@ -157,7 +188,10 @@ def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
 def test_builds_disable_unlocked_pep517_isolation():
     installer = (DOCKER / "install-ovlab-packages.sh").read_text(encoding="utf-8")
     assert "--no-build-isolation" in installer
-    for name in ("Dockerfile.benchmark", "Dockerfile.openvla", "Dockerfile.openvla-oft"):
+    for name in (
+        "Dockerfile.benchmark", "Dockerfile.reporting", "Dockerfile.openvla",
+        "Dockerfile.openvla-oft",
+    ):
         for line in _dockerfile(name).splitlines():
             if "python -m pip install" in line or "python -m pip wheel" in line:
                 assert "--no-build-isolation" in line
@@ -230,7 +264,10 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
 
 
 def test_production_images_require_runtime_configuration_bundle():
-    for name in ("Dockerfile.benchmark", "Dockerfile.openvla", "Dockerfile.openvla-oft"):
+    for name in (
+        "Dockerfile.benchmark", "Dockerfile.reporting", "Dockerfile.openvla",
+        "Dockerfile.openvla-oft",
+    ):
         assert "COPY configs " not in _dockerfile(name)
 
 

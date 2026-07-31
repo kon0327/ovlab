@@ -1,0 +1,17 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f5f7fb; }
+body { max-width: 1120px; margin: 0 auto; padding: 2rem; }
+h1, h2, h3 { color: #101828; }
+.card { background: white; border: 1px solid #d8deea; border-radius: .6rem; padding: 1rem; margin: 1rem 0; }
+.status { display: inline-block; padding: .15rem .5rem; border-radius: 1rem; background: #e7eefc; }
+.warning { border-left: .35rem solid #d97706; padding-left: .8rem; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; border-bottom: 1px solid #e5e7eb; padding: .45rem; vertical-align: top; }
+code { overflow-wrap: anywhere; }
+object.chart { display: block; width: 100%; min-height: 430px; border: 1px solid #e5e7eb; background: white; }
+.chart-help { color: #475467; font-size: .9rem; }
+.statistics-source { color: #475467; font-size: .82rem; }
+.table-scroll { overflow-x: auto; margin-bottom: 1.25rem; }
+table.statistics { min-width: 1120px; font-size: .82rem; }
+table.statistics th { white-space: nowrap; }
+.unavailable { color: #667085; font-style: italic; }
+a { color: #155eef; }

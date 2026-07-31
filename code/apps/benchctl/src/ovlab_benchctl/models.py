@@ -120,6 +120,23 @@ class ProtocolSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportingSettings:
+    enabled: bool = True
+    profile: str = "libero-task-default"
+    on_task_finalize: bool = True
+    on_run_finalize: bool = True
+    failure_policy: str = "warn"
+
+    def __post_init__(self) -> None:
+        if any(type(getattr(self, key)) is not bool for key in ("enabled", "on_task_finalize", "on_run_finalize")):
+            raise TypeError("reporting enable/finalization settings must be booleans")
+        if not isinstance(self.profile, str) or not self.profile:
+            raise ValueError("reporting profile must be a non-empty string")
+        if self.failure_policy != "warn":
+            raise ValueError("reporting failure_policy must be warn")
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedExperimentConfig:
     experiment_id: str
     benchmark_settings: LiberoAdapterSettings | MockBenchmarkSettings
@@ -128,6 +145,7 @@ class ResolvedExperimentConfig:
     metric_settings: MetricSetSettings
     protocol_settings: ProtocolSettings
     artifact_settings: ArtifactStoreSettings
+    reporting_settings: ReportingSettings
     scientific_config: Metadata
     execution_config: Metadata
     scientific_config_hash: str
@@ -152,6 +170,13 @@ class ResolvedExperimentConfig:
             "execution_config_hash": self.execution_config_hash,
             "scientific_config": self.scientific_config,
             "execution_config": self.execution_config,
+            "reporting": {
+                "enabled": self.reporting_settings.enabled,
+                "profile": self.reporting_settings.profile,
+                "on_task_finalize": self.reporting_settings.on_task_finalize,
+                "on_run_finalize": self.reporting_settings.on_run_finalize,
+                "failure_policy": self.reporting_settings.failure_policy,
+            },
         }
 
     def configuration_snapshot(self) -> RunConfigurationSnapshot:

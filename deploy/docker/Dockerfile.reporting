@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1.7
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime@sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d
+
+ARG OVLAB_REVISION
+ARG OVLAB_SOURCE_MANIFEST_SHA256
+ARG OVLAB_SOURCE_DIRTY
+ARG OVLAB_LOCK_SHA256
+ARG OVLAB_DOCKERFILE_SHA256
+ARG OVLAB_IMAGE_REFERENCE=ovlab-reporting:local
+
+LABEL org.opencontainers.image.title="OVLAB offline reporting engine" \
+      org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
+      org.opencontainers.image.revision="$OVLAB_REVISION" \
+      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.licenses="NOASSERTION" \
+      org.opencontainers.image.description="Read-only canonical run analysis and derived/export publication" \
+      cz.cvut.ovlab.role="reporting" \
+      cz.cvut.ovlab.build-target="production" \
+      cz.cvut.ovlab.deployment.contract="canonical-readonly-reporting-v1" \
+      cz.cvut.ovlab.python.version="3.10.20" \
+      cz.cvut.ovlab.runtime.components="numpy=1.26.4;jinja2=3.1.6;matplotlib=3.10.9" \
+      cz.cvut.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
+      cz.cvut.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
+      cz.cvut.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
+      cz.cvut.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
+
+ENV OVLAB_ROOT=/opt/ovlab \
+    OVLAB_REVISION=$OVLAB_REVISION \
+    OVLAB_IMAGE_ROLE=reporting \
+    OVLAB_IMAGE_REFERENCE=$OVLAB_IMAGE_REFERENCE \
+    OVLAB_BUILD_TARGET=production \
+    OVLAB_PYTHON_VERSION=3.10.20 \
+    OVLAB_SOURCE_MANIFEST_SHA256=$OVLAB_SOURCE_MANIFEST_SHA256 \
+    OVLAB_SOURCE_DIRTY=$OVLAB_SOURCE_DIRTY \
+    OVLAB_LOCK_SHA256=$OVLAB_LOCK_SHA256 \
+    OVLAB_DOCKERFILE_SHA256=$OVLAB_DOCKERFILE_SHA256 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MPLCONFIGDIR=/tmp/ovlab-matplotlib
+
+WORKDIR /opt/ovlab
+COPY deploy/locks/reporting.requirements.txt /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+COPY code /opt/ovlab/code
+COPY deploy/config /opt/ovlab/deploy/config
+COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
+RUN --mount=type=secret,id=ovlab_source_manifest \
+    bash /tmp/install-ovlab-packages.sh \
+    && rm /tmp/install-ovlab-packages.sh \
+    && groupadd --gid 10001 ovlab \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \
+    && install -d -o root -g root -m 0555 /var/lib/ovlab/runs \
+    && install -d -o 10001 -g 10001 -m 0700 /var/lib/ovlab/derived /var/lib/ovlab/exports \
+    && install -d -o root -g root -m 0755 /usr/share/ovlab \
+    && test -s /run/secrets/ovlab_source_manifest \
+    && cp /run/secrets/ovlab_source_manifest /usr/share/ovlab/source-manifest.json \
+    && chmod 0444 /usr/share/ovlab/source-manifest.json
+
+USER 10001:10001
+ENTRYPOINT ["ovlab"]
+CMD ["report", "profiles"]
