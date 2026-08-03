@@ -177,6 +177,7 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
             --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data \
             --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
+            --env OVLAB_ARTIFACT_UMASK=0007 \
             --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
             --mount "type=bind,source=$training_runs_root,target=/var/lib/ovlab/model-data/training-runs,readonly" \
             --mount "$derived_mount" \
@@ -264,6 +265,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
                 --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
                 --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
+                --env OVLAB_ARTIFACT_UMASK=0007 \
                 --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
                 --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
                 "${verification_mounts[@]}" \
@@ -284,6 +286,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
             --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
             --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
             --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
+            --env OVLAB_ARTIFACT_UMASK=0007 \
             --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
             --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
             --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly" \

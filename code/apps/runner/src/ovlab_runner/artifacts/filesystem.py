@@ -12,6 +12,7 @@ from ..errors import ArtifactError
 from .base import RunArtifactStore
 from .codec import TraceCodec, _plain
 from .layout import run_key, safe_key
+from ..permissions import finalize_managed_tree
 
 
 class FilesystemRunArtifactStore(RunArtifactStore):
@@ -226,6 +227,7 @@ class FilesystemRunArtifactStore(RunArtifactStore):
             document = integrity_document(path, virtual_files={name: encoded})
             self._atomic_json(path / "integrity.json", document)
             temporary.write_bytes(encoded)
+            finalize_managed_tree(path)
             temporary.replace(path / name)
         except Exception:
             try: temporary.unlink()

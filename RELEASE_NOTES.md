@@ -13,6 +13,20 @@
   counts and training compute estimates. Added isolated, checksummed training
   HTML/JSON reports through `ovlab train report` without modifying canonical
   training runs.
+- Added host-side `ovlab data` lifecycle management with compact/detail listing,
+  dry-run planning, confirmed deletion, and non-overwriting archival of
+  finalized runs, derived benchmark/training reports, and isolated/grouped
+  exports under `OVLAB_DATA_ROOT/archive`.
+- Added a common ambiguity-safe run resolver. Compact run listings now show
+  `<run-id> (<eight-character-run-hash>)`, and benchmark reporting, exports,
+  metrics, inspection, verification and data operations accept the displayed
+  hash in place of the full ID. Training-run commands use the same lookup rule
+  within the training namespace.
+- Fixed lifecycle operations for container-owned artifacts: finalized run,
+  report and export directories are now group-deletable while their files stay
+  group-read-only. `data delete` performs a complete recursive permission
+  preflight before removing any selected target and reports ownership problems
+  as a typed safety error.
 
 ## 0.2.0 — 2026-07-31
 

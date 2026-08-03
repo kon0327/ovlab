@@ -35,6 +35,8 @@ Dataset discovery, explicit acquisition, local import, verification and storage
 are documented in the [`Dataset operations guide`](DATASETS.md). Versioned
 training profiles, isolated OpenVLA-LoRA training and immutable checkpoint
 handoff are documented in the [`Training operations guide`](TRAINING.md).
+Safe listing, archival and deletion of benchmark runs, derived reports, and
+publication exports are documented in the [`Data management guide`](DATA_MANAGEMENT.md).
 
 ## Command line
 
@@ -47,19 +49,27 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab policy list
 ./ovlab connect CONFIG
 ./ovlab run CONFIG --dry-run
-./ovlab run inspect RUN_PATH
-./ovlab run verify RUN_PATH
-./ovlab metrics recompute RUN_PATH
-./ovlab report publish --run RUN_ID --profile libero-task-default
-./ovlab report generate --run RUN_ID --profile libero-task-default
-./ovlab report verify --run RUN_ID --profile libero-task-default --build BUILD_ID
-./ovlab export isolated --run RUN_ID
-./ovlab export grouped --name STUDY_NAME --runs RUN_ID_A RUN_ID_B
+./ovlab run inspect RUN_PATH_OR_ID_OR_HASH
+./ovlab run verify RUN_PATH_OR_ID_OR_HASH
+./ovlab metrics recompute RUN_PATH_OR_ID_OR_HASH
+./ovlab report publish --run RUN_ID_OR_HASH --profile libero-task-default
+./ovlab report generate --run RUN_ID_OR_HASH --profile libero-task-default
+./ovlab report verify --run RUN_ID_OR_HASH --profile libero-task-default --build BUILD_ID
+./ovlab export isolated --run RUN_ID_OR_HASH
+./ovlab export grouped --name STUDY_NAME --runs RUN_ID_OR_HASH_A RUN_ID_OR_HASH_B
+./ovlab data list
+./ovlab data archive --run RUN_ID
 ./ovlab dataset resolve --benchmark libero --suite libero_10
 ./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
 ./ovlab train report --run TRAINING_RUN_ID
 ./ovlab checkpoint list
 ```
+
+`./ovlab data list --kind runs` prints each canonical run ID followed by its
+eight-character lookup hash in parentheses. Every benchmark-run selector in
+the CLI accepts either the complete ID or that hash; training run selectors
+use the same rule within their separate namespace. Exact IDs take precedence,
+and an ambiguous hash is rejected.
 
 `ovlab deploy run` is the normal operator workflow. It launches the selected
 policy service and the LIBERO runner as separate Compose containers, waits for

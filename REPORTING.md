@@ -80,11 +80,18 @@ Generate a complete run report from an existing canonical run:
 
 ```bash
 RUN_ID=experiment-name_2026-07-30_15-18-22_fd24dff0
+# Equivalent short reference shown by `./ovlab data list --kind runs`:
+RUN_HASH=fd24dff0
 
 ./ovlab report generate \
   --run "$RUN_ID" \
   --profile libero-task-default
 ```
+
+All benchmark report and export selectors accept either `RUN_ID` or the
+displayed eight-character `RUN_HASH`. This includes grouped `--runs` and
+`--same-model-as`, isolated export verification, and report verification.
+Exact IDs win; ambiguous short hashes are rejected rather than guessed.
 
 Generate a task-scoped report when investigating one task:
 

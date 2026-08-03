@@ -11,8 +11,13 @@ import sys
 import pytest
 
 from ovlab_benchctl.application import OvlabApplication
-from ovlab_benchctl.cli import ExitCode, _SUMMARY_FIELDS, _classify, _compact, _parser
+from ovlab_benchctl.cli import (
+    ExitCode, _SUMMARY_FIELDS, _classify, _compact, _configured_artifact_umask, _parser,
+)
 from ovlab_benchctl.datasets import DatasetRequest, DatasetStore
+from ovlab_benchctl.run_references import (
+    RunReferenceAmbiguousError, RunReferenceUnavailableError,
+)
 from ovlab_runner import ReportingRendererError
 
 
@@ -102,6 +107,10 @@ def test_dataset_version_does_not_trigger_global_cli_version():
     ("export", "grouped", "--name", "group", "--all-runs"),
     ("export", "generate", "--spec", "export.yaml"),
     ("export", "verify", "--name", "group"),
+    ("data", "list"),
+    ("data", "archive", "--run", "run-1"),
+    ("data", "delete", "--report", "run-1"),
+    ("data", "archive", "--export", "isolated:run-1"),
     ("dataset", "providers"),
     ("dataset", "resolve", "--benchmark", "libero", "--suite", "libero_10"),
     ("dataset", "fetch", "--source", "libero", "--name", "libero_10"),
@@ -535,6 +544,31 @@ def test_semantic_usage_error_has_stable_exit_code():
 def test_reporting_renderer_failure_has_typed_exit_code():
     assert _classify(ReportingRendererError("broken template")) == (
         ExitCode.RUNTIME, "report_renderer_error",
+    )
+
+
+def test_run_reference_failures_have_stable_typed_exit_codes():
+    assert _classify(RunReferenceUnavailableError("missing")) == (
+        ExitCode.POLICY_UNAVAILABLE, "source_unavailable",
+    )
+
+
+def test_artifact_umask_is_scoped_to_one_cli_operation(tmp_path, monkeypatch):
+    previous = os.umask(0o022)
+    os.umask(previous)
+    monkeypatch.setenv("OVLAB_ARTIFACT_UMASK", "0007")
+    with _configured_artifact_umask():
+        directory = tmp_path / "artifact"
+        directory.mkdir()
+        file = directory / "value.json"
+        file.write_text("{}", encoding="utf-8")
+    assert directory.stat().st_mode & 0o777 == 0o770
+    assert file.stat().st_mode & 0o777 == 0o660
+    observed = os.umask(previous)
+    os.umask(observed)
+    assert observed == previous
+    assert _classify(RunReferenceAmbiguousError("collision")) == (
+        ExitCode.USAGE, "ambiguous_run_reference",
     )
 
 

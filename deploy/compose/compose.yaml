@@ -79,6 +79,7 @@ services:
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla
       OVLAB_OFFLINE_MODE: network-none
       OVLAB_MOUNT_CONTRACT: config-bundle-ro,datasets-ro,runs-rw,rpc-rw
+      OVLAB_ARTIFACT_UMASK: "0007"
       OVLAB_POSTPROCESSING_MODE: external
       OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
       OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
@@ -164,6 +165,7 @@ services:
       OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-oft
       OVLAB_OFFLINE_MODE: network-none
       OVLAB_MOUNT_CONTRACT: config-bundle-ro,datasets-ro,runs-rw,rpc-rw
+      OVLAB_ARTIFACT_UMASK: "0007"
       OVLAB_POSTPROCESSING_MODE: external
       OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
       OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
@@ -207,6 +209,7 @@ services:
       - --report-enabled
       - ${OVLAB_REPORT_ENABLED:-true}
     environment:
+      OVLAB_ARTIFACT_UMASK: "0007"
       OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,derived-rw,exports-rw
       OVLAB_RUNS_ROOT: /var/lib/ovlab/runs
       OVLAB_DERIVED_ROOT: /var/lib/ovlab/derived
@@ -242,6 +245,7 @@ services:
     image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}
     command: [export, generate, --spec, /etc/ovlab/export.yaml]
     environment:
+      OVLAB_ARTIFACT_UMASK: "0007"
       OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro
       OVLAB_RUNS_ROOT: /var/lib/ovlab/runs
       OVLAB_EXPORTS_ROOT: /var/lib/ovlab/exports

@@ -20,6 +20,7 @@ from .models import MockPolicySettings, ResolvedExperimentConfig
 from .resolver import ConfigResolver
 from .strict_yaml import dumps, load
 from .versioning import CLI_VERSION, repository_revision
+from .run_references import resolve_run_reference
 
 
 CLI_SCHEMA_VERSION = "ovlab-cli/1.0.0"
@@ -156,9 +157,7 @@ class OvlabApplication:
         return path.resolve()
 
     def _data_roots(self, *, runs_root=None):
-        data_root = Path(
-            self.environment.get("OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data")
-        ).expanduser().resolve()
+        data_root = self._data_root()
         runs = Path(
             runs_root or self.environment.get("OVLAB_RUNS_ROOT", data_root / "runs")
         ).expanduser().resolve()
@@ -169,6 +168,38 @@ class OvlabApplication:
             self.environment.get("OVLAB_EXPORTS_ROOT", runs.parent / "exports")
         ).expanduser().resolve()
         return runs, derived, exports
+
+    def _data_root(self) -> Path:
+        return Path(
+            self.environment.get("OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data")
+        ).expanduser().resolve()
+
+    def _data_manager(self):
+        from .data_management import DataManager
+        runs, derived, exports = self._data_roots()
+        archive = self.environment.get("OVLAB_ARCHIVE_ROOT")
+        return DataManager(
+            self._data_root(), runs, derived,
+            exports_root=exports,
+            archive_root=None if archive is None else Path(archive),
+        )
+
+    def _benchmark_run(self, reference):
+        runs, _, _ = self._data_roots()
+        return resolve_run_reference(runs, str(reference), label="benchmark run")
+
+    def _benchmark_run_id(self, reference) -> str:
+        return self._benchmark_run(reference).run_id
+
+    def _benchmark_run_path(self, reference) -> Path:
+        candidate = Path(reference).expanduser()
+        if candidate.is_absolute() or len(candidate.parts) != 1 or candidate.exists():
+            return candidate.resolve()
+        return self._benchmark_run(str(reference)).path
+
+    def _training_run_id(self, reference) -> str:
+        root = self._model_data_root() / "training-runs"
+        return resolve_run_reference(root, str(reference), label="training run").run_id
 
     def _model_data_root(self) -> Path:
         """Host-visible model data; never part of a scientific identity."""
@@ -624,44 +655,42 @@ class OvlabApplication:
             "status": "completed",
         }
 
-    @staticmethod
-    def inspect(path):
+    def inspect(self, path):
         from ovlab_runner import inspect_run
-        return inspect_run(path)
+        return inspect_run(self._benchmark_run_path(path))
 
-    @staticmethod
-    def verify(path):
+    def verify(self, path):
         from ovlab_runner import verify_run
-        return verify_run(path)
+        return verify_run(self._benchmark_run_path(path))
 
-    @staticmethod
-    def recompute_metrics(path):
+    def recompute_metrics(self, path):
         from ovlab_runner import recompute_run_metrics
-        return recompute_run_metrics(path)
+        return recompute_run_metrics(self._benchmark_run_path(path))
 
-    @staticmethod
-    def generate_report(path, output):
+    def generate_report(self, path, output):
         from ovlab_runner import regenerate_report
-        return regenerate_report(path, output)
+        return regenerate_report(self._benchmark_run_path(path), output)
 
     def report_generate(self, run, profile="libero-task-default", *, task_id=None):
         from ovlab_runner import DerivedReportEngine
         runs, derived, _ = self._data_roots()
-        return DerivedReportEngine(runs, derived, self._report_profile(profile)).generate(run, task_id=task_id)
+        run_id = self._benchmark_run_id(run)
+        return DerivedReportEngine(runs, derived, self._report_profile(profile)).generate(run_id, task_id=task_id)
 
     def report_publish(self, run, profile="libero-task-default", *, report_enabled=True):
         """Publish regenerable outputs from one finalized canonical run."""
         from ovlab_runner import DerivedReportEngine, ExportEngine
         runs, derived, exports = self._data_roots()
+        run_id = self._benchmark_run_id(run)
         report = None
         if report_enabled:
             report = DerivedReportEngine(
                 runs, derived, self._report_profile(profile)
-            ).generate(run)
-        isolated = ExportEngine(runs, exports).generate_isolated(run)
+            ).generate(run_id)
+        isolated = ExportEngine(runs, exports).generate_isolated(run_id)
         return {
             "schema_version": "ovlab.postprocessing-result/v1",
-            "run_id": str(run),
+            "run_id": run_id,
             "canonical_run_modified": False,
             "report": report,
             "isolated_export": isolated,
@@ -671,7 +700,8 @@ class OvlabApplication:
     def report_verify(self, run, profile="libero-task-default", *, build_id=None):
         from ovlab_runner import DerivedReportEngine
         runs, derived, _ = self._data_roots()
-        return DerivedReportEngine(runs, derived, self._report_profile(profile)).verify(run, build_id=build_id)
+        run_id = self._benchmark_run_id(run)
+        return DerivedReportEngine(runs, derived, self._report_profile(profile)).verify(run_id, build_id=build_id)
 
     @staticmethod
     def report_profiles():
@@ -691,11 +721,21 @@ class OvlabApplication:
         except ArtifactError as exc:
             from .errors import ConfigSchemaError
             raise ConfigSchemaError(f"invalid export specification: {exc}") from exc
+        selection = document.get("selection", {})
+        if selection.get("run_ids"):
+            document = {
+                **document,
+                "selection": {
+                    **selection,
+                    "run_ids": [self._benchmark_run_id(value) for value in selection["run_ids"]],
+                },
+            }
         return ExportEngine(runs, exports).generate(document)
 
     def export_isolated(self, run_id, *, episode_id=None, template="isolated-default-v1"):
         from ovlab_runner import ExportEngine
         runs, _, exports = self._data_roots()
+        run_id = self._benchmark_run_id(run_id)
         return ExportEngine(runs, exports).generate_isolated(
             run_id, episode_id=episode_id, template=template,
         )
@@ -706,6 +746,9 @@ class OvlabApplication:
     ):
         from ovlab_runner import ExportEngine
         runs, _, exports = self._data_roots()
+        run_ids = tuple(self._benchmark_run_id(value) for value in run_ids)
+        if same_model_as is not None:
+            same_model_as = self._benchmark_run_id(same_model_as)
         return ExportEngine(runs, exports).generate_grouped(
             group_name, all_runs=all_runs, run_ids=run_ids,
             same_model_as=same_model_as, suite=suite, template=template,
@@ -714,7 +757,23 @@ class OvlabApplication:
     def export_verify(self, kind, name):
         from ovlab_runner import ExportEngine
         runs, _, exports = self._data_roots()
+        if kind == "isolated":
+            name = self._benchmark_run_id(name)
         return ExportEngine(runs, exports).verify(kind, name)
+
+    def data_list(self, *, kind="all", archived=False, detail=False):
+        return self._data_manager().list(kind=kind, archived=archived, detail=detail)
+
+    def data_preview(self, action, **selector):
+        if action not in {"archive", "delete"}:
+            raise ValueError("data action must be archive or delete")
+        return self._data_manager().preview(action, **selector)
+
+    def data_archive(self, **selector):
+        return self._data_manager().archive(**selector)
+
+    def data_delete(self, **selector):
+        return self._data_manager().delete(**selector)
 
     # Gate I dataset, training, and checkpoint application services. These
     # compose domain owners but never import model runtimes during read-only work.
@@ -806,19 +865,22 @@ class OvlabApplication:
 
     def train_inspect(self, run_id):
         from .training_runs import TrainingRunStore
+        run_id = self._training_run_id(run_id)
         return TrainingRunStore(self._model_data_root()).inspect(run_id)
 
     def train_status(self, run_id):
         inspected = self.train_inspect(run_id)
-        return {"schema_version": "ovlab.training-status/v1", "run_id": run_id, **inspected["result"]}
+        return {"schema_version": "ovlab.training-status/v1", "run_id": inspected["run_id"], **inspected["result"]}
 
     def train_verify(self, run_id):
         from .training_runs import TrainingRunStore
+        run_id = self._training_run_id(run_id)
         return TrainingRunStore(self._model_data_root()).verify(run_id)
 
     def train_report(self, run_id, *, verify=False, build_id=None):
         from ovlab_runner import TrainingDerivedReportEngine
         _, derived, _ = self._data_roots()
+        run_id = self._training_run_id(run_id)
         engine = TrainingDerivedReportEngine(
             self._model_data_root() / "training-runs", derived,
         )

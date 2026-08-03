@@ -29,6 +29,7 @@ from .derived import (
 )
 from .errors import ArtifactError
 from .inspection import verify_run
+from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
 EXPORT_METADATA_SCHEMA = "ovlab.export-metadata/v2"
@@ -656,17 +657,19 @@ def _publish(stage: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists():
         stage.rename(target)
-        return
-    backup = target.with_name(f".{target.name}.{uuid.uuid4().hex}.previous")
-    target.rename(backup)
-    try:
-        stage.rename(target)
-    except Exception:
-        if not target.exists() and backup.exists():
-            backup.rename(target)
-        raise
     else:
-        shutil.rmtree(backup, ignore_errors=True)
+        backup = target.with_name(f".{target.name}.{uuid.uuid4().hex}.previous")
+        target.rename(backup)
+        try:
+            stage.rename(target)
+        except Exception:
+            if not target.exists() and backup.exists():
+                backup.rename(target)
+            raise
+        else:
+            shutil.rmtree(backup, ignore_errors=True)
+    finalize_managed_tree(target)
+    finalize_managed_directory(target.parent)
 
 
 def validate_export_spec(document) -> dict[str, object]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,27 @@ class ExitCode:
     INTEGRITY = 7
     METRICS = 8
     INTERRUPTED = 130
+
+
+@contextmanager
+def _configured_artifact_umask():
+    """Apply a process-local artifact umask for one CLI operation."""
+    raw = os.environ.get("OVLAB_ARTIFACT_UMASK")
+    if raw is None:
+        yield
+        return
+    if not isinstance(raw, str) or len(raw) not in {3, 4} or any(
+        character not in "01234567" for character in raw
+    ):
+        raise CliUsageError("OVLAB_ARTIFACT_UMASK must be a three- or four-digit octal value")
+    value = int(raw, 8)
+    if value > 0o777:
+        raise CliUsageError("OVLAB_ARTIFACT_UMASK must be between 0000 and 0777")
+    previous = os.umask(value)
+    try:
+        yield
+    finally:
+        os.umask(previous)
 
 
 def _output_options(parser: argparse.ArgumentParser, *, detail: bool = True) -> None:
@@ -115,7 +137,7 @@ def _parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="execute, inspect, or verify a run")
     run.add_argument("target", help="CONFIG, or 'inspect'/'verify'")
-    run.add_argument("path", nargs="?", help="RUN_PATH for inspect or verify")
+    run.add_argument("path", nargs="?", help="RUN_PATH, RUN_ID, or RUN_HASH for inspect or verify")
     run.add_argument("--output-root")
     run.add_argument("--dry-run", action="store_true")
     _output_options(run)
@@ -123,7 +145,7 @@ def _parser() -> argparse.ArgumentParser:
     metrics = commands.add_parser("metrics", help="offline metric operations")
     metrics_commands = metrics.add_subparsers(dest="metrics_command", required=True)
     recompute = metrics_commands.add_parser("recompute", help="recompute metrics from immutable traces")
-    recompute.add_argument("run_path")
+    recompute.add_argument("run_path", metavar="RUN_PATH_OR_REFERENCE")
     _output_options(recompute)
 
     report = commands.add_parser("report", help="generate and verify offline reports from immutable runs")
@@ -131,8 +153,11 @@ def _parser() -> argparse.ArgumentParser:
     generate = report_commands.add_parser(
         "generate", help="build a reproducible report (example: ovlab report generate --run RUN_ID --profile libero-task-default)",
     )
-    generate.add_argument("run_path", nargs="?", help="legacy canonical RUN_PATH")
-    generate.add_argument("--run", dest="run_id", help="canonical run ID")
+    generate.add_argument(
+        "run_path", nargs="?",
+        help="legacy canonical RUN_PATH, RUN_ID, or displayed RUN_HASH",
+    )
+    generate.add_argument("--run", dest="run_id", help="canonical run ID or displayed run hash")
     generate.add_argument("--task", help="optional canonical task ID")
     generate.add_argument("--profile", default="libero-task-default", help="built-in profile ID or local YAML path")
     generate.add_argument("--output", help="legacy output path; cannot be combined with --run")
@@ -140,7 +165,7 @@ def _parser() -> argparse.ArgumentParser:
     publish = report_commands.add_parser(
         "publish", help="publish the HTML report and isolated export for one finalized run",
     )
-    publish.add_argument("--run", dest="run_id", required=True, help="canonical run ID")
+    publish.add_argument("--run", dest="run_id", required=True, help="canonical run ID or displayed run hash")
     publish.add_argument("--profile", default="libero-task-default")
     publish.add_argument(
         "--report-enabled", choices=("true", "false"), default="true",
@@ -148,7 +173,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     _output_options(publish)
     verify_report = report_commands.add_parser("verify", help="verify a derived report and its canonical inputs")
-    verify_report.add_argument("--run", dest="run_id", required=True)
+    verify_report.add_argument(
+        "--run", dest="run_id", required=True,
+        help="canonical run ID or displayed run hash",
+    )
     verify_report.add_argument("--profile", default="libero-task-default")
     verify_report.add_argument("--build")
     _output_options(verify_report)
@@ -158,7 +186,7 @@ def _parser() -> argparse.ArgumentParser:
     export = commands.add_parser("export", help="generate readable isolated or grouped exports from canonical runs")
     export_commands = export.add_subparsers(dest="export_command", required=True)
     isolated = export_commands.add_parser("isolated", help="export one complete run or one episode")
-    isolated.add_argument("--run", dest="run_id", required=True, help="canonical run ID")
+    isolated.add_argument("--run", dest="run_id", required=True, help="canonical run ID or displayed run hash")
     isolated.add_argument("--episode", dest="episode_id", help="optional canonical episode ID")
     isolated.add_argument("--template", default="isolated-default-v1")
     _output_options(isolated)
@@ -166,8 +194,8 @@ def _parser() -> argparse.ArgumentParser:
     grouped.add_argument("--name", required=True, help="portable group name")
     selectors = grouped.add_mutually_exclusive_group(required=True)
     selectors.add_argument("--all-runs", action="store_true", help="select every compatible completed run")
-    selectors.add_argument("--same-model-as", metavar="RUN_ID", help="select runs with the same model/checkpoint as RUN_ID")
-    selectors.add_argument("--runs", nargs="+", metavar="RUN_ID", help="select these run IDs manually")
+    selectors.add_argument("--same-model-as", metavar="RUN_REFERENCE", help="select runs with the same model/checkpoint as RUN_ID or RUN_HASH")
+    selectors.add_argument("--runs", nargs="+", metavar="RUN_REFERENCE", help="select these run IDs or displayed hashes manually")
     grouped.add_argument("--suite", help="optional benchmark-suite filter")
     grouped.add_argument("--template", default="grouped-default-v1")
     _output_options(grouped)
@@ -176,9 +204,44 @@ def _parser() -> argparse.ArgumentParser:
     _output_options(export_generate)
     export_verify = export_commands.add_parser("verify", help="verify an export build and source checksums")
     export_verify.add_argument("--kind", choices=("isolated", "grouped"), default="grouped")
-    export_verify.add_argument("--name", dest="export_name")
+    export_verify.add_argument(
+        "--name", dest="export_name",
+        help="group name, or isolated run ID/displayed run hash",
+    )
     export_verify.add_argument("--export", dest="legacy_export_id", help="legacy alias for --kind grouped --name")
     _output_options(export_verify)
+
+    data = commands.add_parser(
+        "data", help="list, archive, and safely delete runs, reports, and exports"
+    )
+    data_commands = data.add_subparsers(dest="data_command", required=True)
+    data_list = data_commands.add_parser(
+        "list", help="list active or archived runs, reports, and exports"
+    )
+    data_list.add_argument(
+        "--kind", choices=("runs", "reports", "exports", "all"), default="all"
+    )
+    data_list.add_argument("--archived", action="store_true", help="list OVLAB_DATA_ROOT/archive instead of active data")
+    _output_options(data_list)
+    for action in ("archive", "delete"):
+        command = data_commands.add_parser(action, help=f"{action} selected canonical data")
+        selectors = command.add_mutually_exclusive_group(required=True)
+        selectors.add_argument("--run", dest="run_id", metavar="RUN_ID_OR_HASH")
+        selectors.add_argument(
+            "--report", dest="report_id", metavar="REPORT_ID",
+            help="benchmark RUN_ID/RUN_HASH, or training:TRAINING_RUN_ID/RUN_HASH",
+        )
+        selectors.add_argument(
+            "--export", dest="export_id", metavar="EXPORT_ID",
+            help="isolated:RUN_ID_OR_HASH or grouped:GROUP_ID",
+        )
+        selectors.add_argument(
+            "--all", dest="all_data", action="store_true",
+            help="select all runs, reports, and exports; fail if any is incomplete",
+        )
+        command.add_argument("--dry-run", action="store_true", help="show the exact selection without changing files")
+        command.add_argument("--yes", action="store_true", help="confirm the operation non-interactively")
+        _output_options(command)
 
     dataset = commands.add_parser("dataset", help="resolve, acquire, prepare, and verify immutable datasets")
     dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
@@ -233,12 +296,18 @@ def _parser() -> argparse.ArgumentParser:
     _output_options(train_run)
     for command_name in ("status", "inspect", "verify"):
         command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
-        command.add_argument("--run", dest="run_id", required=True)
+        command.add_argument(
+            "--run", dest="run_id", required=True,
+            help="training run ID or displayed run hash",
+        )
         _output_options(command)
     train_report = train_commands.add_parser(
         "report", help="generate or verify an offline system-performance report",
     )
-    train_report.add_argument("--run", dest="run_id", required=True)
+    train_report.add_argument(
+        "--run", dest="run_id", required=True,
+        help="training run ID or displayed run hash",
+    )
     train_report.add_argument("--verify", action="store_true", help="verify the selected/latest build instead of generating")
     train_report.add_argument("--build", help="derived build ID used with --verify")
     _output_options(train_report)
@@ -270,7 +339,7 @@ def _command_name(args) -> str:
     for name in (
         "config_command", "policy_command", "service_command", "deploy_command",
         "metrics_command", "report_command", "export_command",
-        "dataset_command", "train_command", "checkpoint_command",
+        "data_command", "dataset_command", "train_command", "checkpoint_command",
     ):
         value = getattr(args, name, None)
         if value:
@@ -440,6 +509,14 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("integrity", ("integrity",)), ("files", ("verified_file_count",)),
         ("runs", ("source_run_ids",)), ("output", ("output",)),
     ),
+    "data archive": (
+        ("status", ("status",)), ("targets", ("target_count",)),
+        ("archive", ("archive_root",)), ("dry run", ("dry_run",)),
+    ),
+    "data delete": (
+        ("status", ("status",)), ("targets", ("target_count",)),
+        ("dry run", ("dry_run",)),
+    ),
     "dataset resolve": (
         ("provider", ("provider",)), ("dataset", ("logical_name",)),
         ("revision", ("source_revision",)), ("resolution", ("resolution_id",)),
@@ -526,6 +603,22 @@ def _compact(command: str, result) -> str:
             result, (("id",), ("family",), ("config_type",), ("quic_profile",)),
             empty="No policy variants found.",
         )
+    if command == "data list":
+        rows = result.get("items", ()) if isinstance(result, dict) else ()
+        lines = []
+        for row in rows:
+            if isinstance(row, dict) and row.get("kind") == "run":
+                lines.append(
+                    f"run {_scalar(row.get('id'))} ({_scalar(row.get('run_hash'))}) "
+                    f"{_scalar(row.get('state'))} {_scalar(row.get('path'))}"
+                )
+            elif isinstance(row, dict):
+                lines.append(
+                    " ".join(_scalar(row.get(key, "-")) for key in ("kind", "id", "state", "path"))
+                )
+            else:
+                lines.append(_scalar(row))
+        return "\n".join(lines) if lines else "No runs, reports, or exports found."
     list_contracts = {
         "report profiles": (
             "profiles", (("id",), ("source",), ("template",)), "No report profiles found.",
@@ -587,6 +680,18 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.METRICS, "metric_recomputation_error"
     if name == "ReportingSourceUnavailableError":
         return ExitCode.POLICY_UNAVAILABLE, "source_unavailable"
+    if name == "DataSourceUnavailableError":
+        return ExitCode.POLICY_UNAVAILABLE, "data_unavailable"
+    if name == "RunReferenceUnavailableError":
+        return ExitCode.POLICY_UNAVAILABLE, "source_unavailable"
+    if name == "RunReferenceAmbiguousError":
+        return ExitCode.USAGE, "ambiguous_run_reference"
+    if name == "RunReferenceError":
+        return ExitCode.INTEGRITY, "run_reference_error"
+    if name == "DataSafetyError":
+        return ExitCode.INTEGRITY, "data_safety_error"
+    if name == "DataManagementError":
+        return ExitCode.RUNTIME, "data_management_error"
     if name == "ReportingRendererError":
         return ExitCode.RUNTIME, "report_renderer_error"
     if name in {"DatasetIntegrityError", "CheckpointBundleError"}:
@@ -625,6 +730,23 @@ def _install_interrupt_handlers():
 def _restore_handlers(previous):
     for signum, handler in previous.items():
         signal.signal(signum, handler)
+
+
+def _confirm_data_operation(args, preview: dict[str, object]) -> bool:
+    if args.dry_run or args.yes:
+        return True
+    if args.json:
+        raise CliUsageError("destructive JSON-mode data operations require --yes or --dry-run")
+    if not sys.stdin.isatty():
+        raise CliUsageError("data operation requires an interactive terminal, --yes, or --dry-run")
+    action = str(preview["action"])
+    phrase = f"{action.upper()} ALL" if args.all_data else action.upper()
+    sys.stderr.write(
+        f"ovlab: {action} will affect {preview['target_count']} item(s). "
+        f"Type {phrase!r} to continue: "
+    )
+    sys.stderr.flush()
+    return sys.stdin.readline().strip() == phrase
 
 
 def _dispatch(args):
@@ -672,7 +794,7 @@ def _dispatch(args):
         app = _application()
         if args.target in {"inspect", "verify"}:
             if args.path is None:
-                raise CliUsageError(f"run {args.target} requires RUN_PATH")
+                raise CliUsageError(f"run {args.target} requires RUN_PATH, RUN_ID, or RUN_HASH")
             result = app.inspect(args.path) if args.target == "inspect" else app.verify(args.path)
         else:
             if args.path is not None:
@@ -723,6 +845,27 @@ def _dispatch(args):
             raise CliUsageError("export verify accepts either --name or legacy --export, not both")
         kind = "grouped" if args.legacy_export_id is not None else args.kind
         return app.export_verify(kind, name), args.json, None
+    if args.command == "data":
+        app = _application()
+        if args.data_command == "list":
+            return app.data_list(
+                kind=args.kind, archived=args.archived, detail=args.detail,
+            ), args.json, None
+        selector = {
+            "run_id": args.run_id, "report_id": args.report_id,
+            "export_id": args.export_id,
+            "all_data": args.all_data,
+        }
+        preview = app.data_preview(args.data_command, **selector)
+        if args.dry_run:
+            return preview, args.json, None
+        if not _confirm_data_operation(args, preview):
+            return {**preview, "status": "cancelled", "dry_run": False}, False, None
+        result = (
+            app.data_archive(**selector)
+            if args.data_command == "archive" else app.data_delete(**selector)
+        )
+        return result, args.json, None
     if args.command == "dataset":
         app = _application()
         if args.dataset_command == "providers":
@@ -795,7 +938,8 @@ def main(argv=None) -> int:
     command = _command_name(args)
     wants_json = bool(getattr(args, "json", False))
     try:
-        result, json_mode, render = _dispatch(args)
+        with _configured_artifact_umask():
+            result, json_mode, render = _dispatch(args)
         if json_mode:
             _json_output(command, "success", result, ())
         elif render == "raw" or bool(getattr(args, "detail", False)):

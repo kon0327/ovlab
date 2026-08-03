@@ -23,6 +23,7 @@ from .artifacts.codec import TraceCodec
 from .artifacts.layout import run_key, safe_key
 from .errors import ArtifactError, ReportingRendererError, ReportingSourceUnavailableError
 from .inspection import verify_run
+from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
 REPORT_PROFILE_SCHEMA = "ovlab.report-profile/v1"
@@ -1140,6 +1141,9 @@ class DerivedReportEngine:
                 "schema_version": "ovlab.report-latest/v1", "derived_build_id": build_id,
                 "status": manifest["status"], "scope": model["scope"], "scope_task_id": task_id,
             })
+            run_report_root = self.derived_root / run_key(run_id)
+            finalize_managed_tree(run_report_root)
+            finalize_managed_directory(run_report_root.parent)
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             raise

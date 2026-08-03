@@ -183,18 +183,22 @@ ovlab
 │       [--env-file PATH] [--local-profile PATH] [--offline]
 │       [--project-name NAME] [--dry-run] [--detail | --json]
 ├── run CONFIG [--output-root PATH] [--dry-run] [--detail | --json]
-├── run inspect RUN_PATH [--detail | --json]
-├── run verify RUN_PATH [--detail | --json]
-├── metrics recompute RUN_PATH [--detail | --json]
+├── run inspect RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
+├── run verify RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
+├── metrics recompute RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── report profiles [--detail | --json]
-├── report generate --run RUN_ID [--task TASK_ID] [--profile PROFILE] [--detail | --json]
-├── report publish --run RUN_ID [--profile PROFILE] [--report-enabled true|false] [--detail | --json]
-├── report verify --run RUN_ID [--profile PROFILE] [--build BUILD_ID] [--detail | --json]
-├── export isolated --run RUN_ID [--episode EPISODE_ID] [--template TEMPLATE] [--detail | --json]
-├── export grouped --name GROUP (--all-runs | --same-model-as RUN_ID | --runs RUN_ID...)
+├── report generate --run RUN_ID|RUN_HASH [--task TASK_ID] [--profile PROFILE] [--detail | --json]
+├── report publish --run RUN_ID|RUN_HASH [--profile PROFILE] [--report-enabled true|false] [--detail | --json]
+├── report verify --run RUN_ID|RUN_HASH [--profile PROFILE] [--build BUILD_ID] [--detail | --json]
+├── export isolated --run RUN_ID|RUN_HASH [--episode EPISODE_ID] [--template TEMPLATE] [--detail | --json]
+├── export grouped --name GROUP (--all-runs | --same-model-as RUN_REFERENCE | --runs RUN_REFERENCE...)
 │   [--suite SUITE] [--template TEMPLATE] [--detail | --json]
 ├── export verify --kind isolated|grouped --name NAME [--detail | --json]
 ├── export generate --spec SPEC.yaml [--detail | --json]  # legacy grouped bridge
+├── data
+│   ├── list [--kind runs|reports|all] [--archived] [--detail | --json]
+│   ├── archive (--run RUN_REFERENCE | --report REPORT_REFERENCE | --all) [--dry-run] [--yes] [--detail | --json]
+│   └── delete (--run RUN_REFERENCE | --report REPORT_REFERENCE | --all) [--dry-run] [--yes] [--detail | --json]
 ├── dataset
 │   ├── providers [--detail | --json]
 │   ├── resolve --benchmark libero --suite SUITE [--detail | --json]
@@ -209,10 +213,10 @@ ovlab
 │   ├── validate --profile PROFILE [--detail | --json]
 │   ├── plan --profile PROFILE [--detail | --json]
 │   ├── run --profile PROFILE [--allow-dataset-download] [--detail | --json]
-│   ├── status --run TRAINING_RUN_ID [--detail | --json]
-│   ├── inspect --run TRAINING_RUN_ID [--detail | --json]
-│   ├── verify --run TRAINING_RUN_ID [--detail | --json]
-│   └── report --run TRAINING_RUN_ID [--verify] [--build BUILD_ID] [--detail | --json]
+│   ├── status --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
+│   ├── inspect --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
+│   ├── verify --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
+│   └── report --run TRAINING_RUN_ID|RUN_HASH [--verify] [--build BUILD_ID] [--detail | --json]
 └── checkpoint
     ├── list [--detail | --json]
     ├── inspect --checkpoint CHECKPOINT_ID [--detail | --json]
@@ -359,6 +363,13 @@ fallback to Vanilla, LoRA, OFT, mock policies, or dummy actions.
 
 ## 6. Inspect and verify runs
 
+`./ovlab data list --kind runs` prints
+`run <run-id> (<run-hash>) <state> <path>`. The eight-character hash is a
+lookup alias, distinct from the scientific and integrity hashes. Every
+benchmark-run selector below accepts either the complete ID or this hash;
+exact IDs take precedence and ambiguous hashes fail closed. Training commands
+apply the same rule only within `training-runs/`.
+
 Read a run summary without changing artifacts:
 
 ```bash
@@ -431,6 +442,29 @@ on_task_finalize: true, on_run_finalize: true, failure_policy: warn}`. Setting
 `enabled: false` skips HTML but retains isolated export. A renderer or export
 failure cannot change canonical benchmark status or timing. The legacy `report generate RUN_PATH
 --output PATH` form remains available for the H.1 machine report.
+
+## 9. Data lifecycle management
+
+```bash
+./ovlab data list
+./ovlab data archive --run RUN_ID --dry-run
+./ovlab data archive --all
+./ovlab data delete --report RUN_ID
+./ovlab data delete --export isolated:RUN_ID
+./ovlab data list --archived
+```
+
+`data archive` moves selected finalized runs, completed reports, or completed
+exports beneath `OVLAB_DATA_ROOT/archive` while preserving the `runs/`,
+`derived/`, and `exports/` sibling layout. `data delete` is irreversible. Both
+operations require an interactive confirmation; automation must supply
+`--yes`, and should normally perform a `--dry-run` first. `--all` means all
+benchmark runs, derived reports, and exports only—it never includes datasets,
+checkpoints, training-runs, or source files. If any selected item is active or
+incomplete, the complete operation is refused rather than silently skipping it.
+Training report IDs use `training:TRAINING_RUN_ID`. See
+[`DATA_MANAGEMENT.md`](../../../DATA_MANAGEMENT.md) for archive layout, safety
+checks and concurrency guidance.
 
 ## JSON output
 

@@ -13,6 +13,7 @@ import uuid
 
 from .derived import _chart_statistics, _chart_svg, _descriptive_statistics
 from .errors import ArtifactError, ReportingSourceUnavailableError
+from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
 TRAINING_REPORT_SCHEMA = "ovlab.training-performance-report/v1"
@@ -251,6 +252,9 @@ class TrainingDerivedReportEngine:
             target.parent.mkdir(parents=True, exist_ok=True)
             stage.rename(target)
             (profile_root / "latest.json").write_bytes(_canonical({"schema_version": "ovlab.training-report-latest/v1", "derived_build_id": build_id}))
+            training_report_root = self.derived_root / "training"
+            finalize_managed_tree(training_report_root)
+            finalize_managed_directory(training_report_root.parent)
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             raise
