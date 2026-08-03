@@ -63,12 +63,23 @@ def _context(tmp_path, *, rank=2, base=None):
 
 def test_adapter_bundle_finalizes_unmerged_and_verifies(tmp_path):
     context = _context(tmp_path)
+    (context.root / "result.json").write_text(json.dumps({
+        "schema_version": "ovlab.training-result/v1", "status": "checkpointing",
+        "total_parameter_count": 1000, "trainable_parameter_count": 100,
+        "frozen_parameter_count": 900, "adapter_parameter_count": 100,
+        "trainable_adapter_parameter_count": 100,
+        "performance": {"schema_version": "ovlab.performance-summary/v1"},
+    }), encoding="utf-8")
     result = CheckpointBundleStore(tmp_path).finalize(context)
     checkpoint_id = result["checkpoint_id"]
     assert result["checkpoint"]["merge_status"] == "unmerged"
     verified = CheckpointBundleStore(tmp_path).verify(checkpoint_id)
     assert verified["status"] == "verified"
     assert inspect_safetensors(Path(result["checkpoint_path"]) / "weights-or-adapter" / "adapter_model.safetensors")[0]["dtype"] == "F32"
+    finalized_result = json.loads((context.root / "result.json").read_text(encoding="utf-8"))
+    assert finalized_result["performance"]["schema_version"] == "ovlab.performance-summary/v1"
+    assert finalized_result["adapter_parameter_count"] == 100
+    assert result["checkpoint"]["parameter_counts"]["adapter"] == 100
 
 
 def test_incompatible_adapter_configuration_is_rejected(tmp_path):

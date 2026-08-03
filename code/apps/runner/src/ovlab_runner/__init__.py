@@ -16,6 +16,9 @@ from .derived import (
     builtin_profile, report_profiles,
 )
 from .exports import ExportEngine, validate_export_spec
+from .training_derived import (
+    TrainingDerivedReportEngine, build_training_performance_model,
+)
 from .plan import (
     ActionExecutionMode, ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
     ExperimentPlan, MetricAvailabilityPolicy, TraceRecordingPolicy,
@@ -36,4 +39,5 @@ __all__ = [
     "AutomaticDerivedReporter", "DerivedReportEngine", "ReportProfile", "build_report_model",
     "builtin_profile", "report_profiles", "ExportEngine", "validate_export_spec",
     "ReportingRendererError", "ReportingSourceUnavailableError",
+    "TrainingDerivedReportEngine", "build_training_performance_model",
 ]

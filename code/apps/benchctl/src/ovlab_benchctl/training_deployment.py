@@ -102,6 +102,9 @@ class TrainingDeployment:
         dataset_image, dataset_digest = self._docker_image(
             "OVLAB_DATASET_IMAGE", "ovlab-dataset:local", "dataset"
         )
+        reporting_image, reporting_digest = self._docker_image(
+            "OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"
+        )
         datasets = DatasetStore(self.model_data_root)
         dataset_profile = profile.document["dataset"]
         assert isinstance(dataset_profile, dict)
@@ -132,6 +135,7 @@ class TrainingDeployment:
                 "source_dirty": bool(subprocess.run(["git", "status", "--porcelain"], cwd=self.repository_root, capture_output=True, text=True).stdout),
                 "training_image": {"reference": training_image, "digest": training_digest},
                 "finalizer_image": {"reference": dataset_image, "digest": dataset_digest},
+                "reporting_image": {"reference": reporting_image, "digest": reporting_digest},
                 "gpu_count": gpu_count,
                 "detected_vram_gib": vram_gib,
                 "network": "disabled",
@@ -190,4 +194,32 @@ class TrainingDeployment:
         finalized = self.runner(finalizer, check=False)
         if finalized.returncode != 0:
             raise TrainingRuntimeError(f"checkpoint finalizer failed; staged training evidence remains at {context.root}")
-        return store.inspect(context.run_id)
+        derived_root = Path(
+            self.environment.get("OVLAB_DERIVED_ROOT", self.model_data_root / "derived")
+        ).expanduser().resolve()
+        derived_root.mkdir(parents=True, exist_ok=True)
+        derived_root.chmod(0o2770)
+        reporting = [
+            "docker", "run", "--rm", "--network", "none", "--read-only",
+            "--user", "10001:10001", "--group-add", str(os.getgid()),
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
+            "--env", "OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data",
+            "--env", "OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived",
+            "--env", f"OVLAB_DERIVED_DISPLAY_ROOT={derived_root}",
+            "--mount", f"type=bind,source={self.model_data_root / 'training-runs'},target=/var/lib/ovlab/model-data/training-runs,readonly",
+            "--mount", f"type=bind,source={derived_root},target=/var/lib/ovlab/derived",
+            reporting_image, "train", "report", "--run", context.run_id, "--json",
+        ]
+        published = self.runner(reporting, capture_output=True, text=True, check=False)
+        if published.returncode != 0:
+            raise TrainingRuntimeError(
+                "canonical training run and checkpoint completed, but isolated performance reporting "
+                f"failed with exit code {published.returncode}; evidence: {context.root}"
+            )
+        inspected = store.inspect(context.run_id)
+        try:
+            report_result = json.loads(published.stdout).get("result")
+        except (json.JSONDecodeError, AttributeError) as exc:
+            raise TrainingRuntimeError("training report returned an invalid JSON result") from exc
+        return {**inspected, "performance_report": report_result}

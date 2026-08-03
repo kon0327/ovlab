@@ -816,6 +816,16 @@ class OvlabApplication:
         from .training_runs import TrainingRunStore
         return TrainingRunStore(self._model_data_root()).verify(run_id)
 
+    def train_report(self, run_id, *, verify=False, build_id=None):
+        from ovlab_runner import TrainingDerivedReportEngine
+        _, derived, _ = self._data_roots()
+        engine = TrainingDerivedReportEngine(
+            self._model_data_root() / "training-runs", derived,
+        )
+        if verify:
+            return engine.verify(run_id, build_id=build_id)
+        return engine.generate(run_id)
+
     def checkpoint_list(self):
         from .training_runs import CheckpointBundleStore
         return {"schema_version": "ovlab.checkpoint-list/v1", "checkpoints": CheckpointBundleStore(self._model_data_root()).list()}

@@ -54,6 +54,7 @@ RUN --mount=type=secret,id=ovlab_source_manifest \
     && groupadd --gid 10001 ovlab \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \
     && install -d -o root -g root -m 0555 /var/lib/ovlab/runs \
+      /var/lib/ovlab/model-data /var/lib/ovlab/model-data/training-runs \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/ovlab/derived /var/lib/ovlab/exports \
     && install -d -o root -g root -m 0755 /usr/share/ovlab \
     && test -s /run/secrets/ovlab_source_manifest \

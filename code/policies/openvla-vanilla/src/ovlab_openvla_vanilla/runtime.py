@@ -12,7 +12,11 @@ from typing import Mapping, Protocol
 
 import numpy as np
 
-from ovlab_openvla_common import OpenVlaCheckpointIdentity, OpenVlaDecodedAction
+from ovlab_openvla_common import (
+    OpenVlaCheckpointIdentity, OpenVlaDecodedAction, cuda_allocator_snapshot,
+    estimated_inference_compute, parameter_inventory, performance_sample,
+    reset_cuda_peak,
+)
 from ovlab_core.contracts import Metadata, normalize_metadata
 
 from .errors import (
@@ -67,6 +71,7 @@ class HuggingFaceOpenVlaRuntime:
         self.processor_load_count = 0
         self.peft_adapter_load_count = 0
         self._runtime_metadata = {}
+        self._parameter_counts: dict[str, int] = {}
 
     @staticmethod
     def _install_lightweight_prismatic_namespace() -> None:
@@ -241,7 +246,8 @@ class HuggingFaceOpenVlaRuntime:
                 raise OpenVlaCheckpointError("4bit runtime did not load BitsAndBytes 4-bit weights")
             if loaded_in_8bit:
                 raise OpenVlaCheckpointError("8-bit loading is not supported by this runtime contract")
-            total_parameter_count = sum(parameter.numel() for parameter in model.parameters())
+            self._parameter_counts = parameter_inventory(model.named_parameters())
+            total_parameter_count = self._parameter_counts["total"]
         except OpenVlaCheckpointError:
             raise
         except Exception as exc:
@@ -249,6 +255,7 @@ class HuggingFaceOpenVlaRuntime:
             raise OpenVlaLoadError(f"failed to load local OpenVLA checkpoint {model_path}") from exc
         self._settings, self._model, self._processor, self._torch = settings, model, processor, torch
         self._Image = Image
+        load_memory = cuda_allocator_snapshot(torch, settings.device)
         self._runtime_metadata = {
             "load_counts": {
                 "model": self.load_count,
@@ -256,6 +263,8 @@ class HuggingFaceOpenVlaRuntime:
                 "peft_adapter": self.peft_adapter_load_count,
             },
             "total_parameter_count": total_parameter_count,
+            "parameter_counts": dict(self._parameter_counts),
+            "cuda_memory_after_load": load_memory,
             "active_peft_adapter": False,
             "runtime_peft_modules": False,
             "code_loading": "pinned-local-openvla-autoclass-registration",
@@ -347,6 +356,8 @@ class HuggingFaceOpenVlaRuntime:
         preprocess_end = self._clock_ns()
         try:
             self._synchronize()
+            memory_before = cuda_allocator_snapshot(self._torch, self._settings.device)
+            reset_cuda_peak(self._torch, self._settings.device)
             model_start = self._clock_ns()
             with self._torch.inference_mode():
                 action = self._model.predict_action(
@@ -354,17 +365,32 @@ class HuggingFaceOpenVlaRuntime:
                 )
             self._synchronize()
             model_end = self._clock_ns()
+            memory_after = cuda_allocator_snapshot(self._torch, self._settings.device)
             decoded = OpenVlaDecodedAction(np.asarray(action))
         except OpenVlaActionDecodeError:
             raise
         except Exception as exc:
             raise OpenVlaInferenceError("OpenVLA predict_action failed") from exc
+        input_shape = input_shapes.get("input_ids", ())
+        input_tokens = int(np.prod(input_shape)) if input_shape else 0
+        performance = performance_sample(
+            phase="inference",
+            parameter_counts=self._parameter_counts,
+            memory_before=memory_before,
+            memory_after=memory_after,
+            compute=estimated_inference_compute(
+                self._parameter_counts.get("total", 0),
+                input_token_count=input_tokens,
+                output_token_count=decoded.value.size,
+            ),
+        )
         return RuntimePrediction(
             decoded, preprocess_end - preprocess_start, model_end - model_start,
             {
                 "processor_input_shapes": input_shapes,
                 "processor_input_dtypes": input_dtypes,
                 "processor_input_sha256": input_fingerprints,
+                "performance": performance,
             },
         )
 
@@ -375,6 +401,7 @@ class HuggingFaceOpenVlaRuntime:
     def close(self) -> None:
         self._model = self._processor = self._settings = self._torch = None
         self._Image = None
+        self._parameter_counts = {}
 
     def runtime_metadata(self) -> dict[str, object]:
         return dict(self._runtime_metadata)

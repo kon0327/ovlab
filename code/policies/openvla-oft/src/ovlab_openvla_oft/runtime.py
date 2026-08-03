@@ -11,7 +11,10 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from ovlab_openvla_common import OpenVlaDecodedActionChunk
+from ovlab_openvla_common import (
+    OpenVlaDecodedActionChunk, cuda_allocator_snapshot, estimated_inference_compute,
+    parameter_inventory, performance_sample, reset_cuda_peak,
+)
 
 from .settings import OpenVlaOftSettings
 
@@ -61,6 +64,7 @@ class OpenVlaOftRuntime:
         self.warmup_duration_ns = 0
         self.prediction_count = 0
         self._runtime_metadata: dict[str, object] = {}
+        self._parameter_counts: dict[str, int] = {}
 
     @staticmethod
     def _imports():
@@ -122,6 +126,13 @@ class OpenVlaOftRuntime:
         self._settings, self._model, self._processor = settings, model, processor
         self._action_head, self._proprio_projector = action_head, projector
         self._torch, self._get_vla_action = torch, get_vla_action
+        named_parameters = (
+            [(f"backbone.{name}", value) for name, value in model.named_parameters()]
+            + [(f"action_head.{name}", value) for name, value in action_head.named_parameters()]
+            + [(f"proprio_projector.{name}", value) for name, value in projector.named_parameters()]
+        )
+        self._parameter_counts = parameter_inventory(named_parameters)
+        load_memory = cuda_allocator_snapshot(torch, settings.device)
         load_finished = self._clock_ns()
         warm = self._call(
             np.zeros(settings.input_image_shape, dtype=np.uint8),
@@ -131,13 +142,15 @@ class OpenVlaOftRuntime:
             count_prediction=False,
         )
         self.warmup_duration_ns = warm.model_duration_ns
-        total_runtime = sum(parameter.numel() for parameter in model.parameters())
+        total_runtime = self._parameter_counts["total"]
         self._runtime_metadata = {
             "load_counts": dict(self.load_counts),
             "cold_component_loading_duration_ns": load_finished - load_started,
             "warmup_duration_ns": self.warmup_duration_ns,
             "timing_method": "perf_counter_ns with torch.cuda.synchronize before and after official get_vla_action",
             "total_runtime_parameter_count": total_runtime,
+            "parameter_counts": dict(self._parameter_counts),
+            "cuda_memory_after_load": load_memory,
             "runtime_active_adapter": False,
             "backbone_merge_status": "merged",
             "quantization": "none",
@@ -172,6 +185,8 @@ class OpenVlaOftRuntime:
         )
         try:
             self._sync()
+            memory_before = cuda_allocator_snapshot(self._torch, self._settings.device)
+            reset_cuda_peak(self._torch, self._settings.device)
             started = self._clock_ns()
             actions = self._get_vla_action(
                 cfg, self._model, recorder, observation, instruction,
@@ -179,6 +194,7 @@ class OpenVlaOftRuntime:
             )
             self._sync()
             finished = self._clock_ns()
+            memory_after = cuda_allocator_snapshot(self._torch, self._settings.device)
         finally:
             self._model._unnormalize_actions = original_unnormalize
         decoded = np.asarray(actions)
@@ -188,10 +204,29 @@ class OpenVlaOftRuntime:
             raise RuntimeError("official OFT output or normalized proprioception has an unexpected shape")
         if count_prediction:
             self.prediction_count += 1
+        input_tokens = 0
+        for call in recorder.calls:
+            shape = call.get("shapes", {}).get("input_ids", [])
+            if shape:
+                input_tokens += int(np.prod(shape))
         return OftRuntimePrediction(
             normalized, OpenVlaDecodedActionChunk(decoded), normalized_proprio,
             0, finished - started,
-            {"processor_calls": recorder.calls, "prompt": f"In: What action should the robot take to {instruction.lower()}?\nOut:"},
+            {
+                "processor_calls": recorder.calls,
+                "prompt": f"In: What action should the robot take to {instruction.lower()}?\nOut:",
+                "performance": performance_sample(
+                    phase="inference",
+                    parameter_counts=self._parameter_counts,
+                    memory_before=memory_before,
+                    memory_after=memory_after,
+                    compute=estimated_inference_compute(
+                        self._parameter_counts.get("total", 0),
+                        input_token_count=input_tokens,
+                        output_token_count=0,
+                    ),
+                ),
+            },
         )
 
     def predict(self, primary, wrist, proprio, instruction) -> OftRuntimePrediction:
@@ -208,3 +243,4 @@ class OpenVlaOftRuntime:
     def close(self) -> None:
         self._model = self._processor = self._action_head = self._proprio_projector = None
         self._torch = self._get_vla_action = self._settings = None
+        self._parameter_counts = {}

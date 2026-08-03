@@ -211,7 +211,8 @@ ovlab
 │   ├── run --profile PROFILE [--allow-dataset-download] [--detail | --json]
 │   ├── status --run TRAINING_RUN_ID [--detail | --json]
 │   ├── inspect --run TRAINING_RUN_ID [--detail | --json]
-│   └── verify --run TRAINING_RUN_ID [--detail | --json]
+│   ├── verify --run TRAINING_RUN_ID [--detail | --json]
+│   └── report --run TRAINING_RUN_ID [--verify] [--build BUILD_ID] [--detail | --json]
 └── checkpoint
     ├── list [--detail | --json]
     ├── inspect --checkpoint CHECKPOINT_ID [--detail | --json]
@@ -393,6 +394,8 @@ complete recorded and recomputed `MetricResult` objects.
 ./ovlab report generate --run RUN_ID --profile libero-task-default
 ./ovlab report generate --run RUN_ID --task libero/10/0 --profile libero-task-default
 ./ovlab report verify --run RUN_ID --profile libero-task-default --build DERIVED_BUILD_ID
+./ovlab train report --run TRAINING_RUN_ID
+./ovlab train report --run TRAINING_RUN_ID --verify --build DERIVED_BUILD_ID
 ./ovlab export isolated --run RUN_ID
 ./ovlab export isolated --run RUN_ID --episode EPISODE_ID
 ./ovlab export grouped --name paper-ablation --runs RUN_ID_A RUN_ID_B
@@ -413,6 +416,11 @@ purpose-built `ovlab-reporting` image. It mounts canonical runs read-only,
 derived/exports read-write, and still reports real host output paths. No Conda
 activation or host package installation is required. Set
 `OVLAB_REPORTING_RUNTIME=host` only for an intentionally prepared native Python.
+
+`train report` uses that same image, but mounts canonical
+`OVLAB_MODEL_DATA_ROOT/training-runs` read-only and writes only beneath
+`OVLAB_DERIVED_ROOT/training`. It reports exact parameter classes, PyTorch CUDA
+allocator VRAM/peaks and explicitly estimated—not measured—GFLOPs.
 
 During deployment, benchmark and policy containers are torn down after the
 canonical run is finalized. The orchestrator then invokes `report publish` in

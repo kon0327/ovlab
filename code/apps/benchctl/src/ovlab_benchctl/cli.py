@@ -235,6 +235,13 @@ def _parser() -> argparse.ArgumentParser:
         command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
         command.add_argument("--run", dest="run_id", required=True)
         _output_options(command)
+    train_report = train_commands.add_parser(
+        "report", help="generate or verify an offline system-performance report",
+    )
+    train_report.add_argument("--run", dest="run_id", required=True)
+    train_report.add_argument("--verify", action="store_true", help="verify the selected/latest build instead of generating")
+    train_report.add_argument("--build", help="derived build ID used with --verify")
+    _output_options(train_report)
 
     checkpoint = commands.add_parser("checkpoint", help="inspect finalized immutable training checkpoints")
     checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_command", required=True)
@@ -495,6 +502,10 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("run", ("run_id",)), ("status", ("status",)),
         ("files", ("verified_file_count",)),
     ),
+    "train report": (
+        ("training run", ("training_run_id",)), ("build", ("derived_build_id",)),
+        ("integrity", ("integrity",)), ("output", ("output",)), ("reused", ("reused",)),
+    ),
     "checkpoint inspect": (
         ("checkpoint", ("checkpoint.checkpoint_id", "manifest.checkpoint_id")),
         ("kind", ("checkpoint.kind", "manifest.kind")),
@@ -754,6 +765,12 @@ def _dispatch(args):
             return app.train_status(args.run_id), args.json, None
         if args.train_command == "inspect":
             return app.train_inspect(args.run_id), args.json, None
+        if args.train_command == "report":
+            if args.build is not None and not args.verify:
+                raise CliUsageError("train report --build requires --verify")
+            return app.train_report(
+                args.run_id, verify=args.verify, build_id=args.build,
+            ), args.json, None
         return app.train_verify(args.run_id), args.json, None
     if args.command == "checkpoint":
         app = _application()

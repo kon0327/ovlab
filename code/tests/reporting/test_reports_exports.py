@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,9 +19,34 @@ from ovlab_runner import (
     ExperimentRunner, ExportEngine, FilesystemRunArtifactStore, ReportProfile,
     RunConfigurationSnapshot, build_report_model, builtin_profile, validate_export_spec,
 )
+from ovlab_runner.derived import _trace_view
 
 
 REPOSITORY = Path(__file__).resolve().parents[3]
+
+
+def test_trace_report_extracts_policy_allocator_vram_and_estimated_compute(tmp_path):
+    performance = {
+        "schema_version": "ovlab.performance-telemetry/v1",
+        "cuda_memory_after": {
+            "status": "available", "allocated_bytes": 1024 * 1024,
+            "reserved_bytes": 2 * 1024 * 1024,
+            "peak_allocated_bytes": 3 * 1024 * 1024,
+            "peak_reserved_bytes": 4 * 1024 * 1024,
+        },
+        "estimated_compute": {"status": "available", "estimated_gflops": 12.5},
+    }
+    trace = SimpleNamespace(
+        executed_actions=(SimpleNamespace(applied_action=[0.0] * 7, metadata={}),),
+        policy_predictions=(SimpleNamespace(
+            inference_duration_ns=1_000_000,
+            metadata={"runtime": {"performance": performance}},
+        ),),
+    )
+    view = _trace_view(tmp_path / "episode", trace)
+    assert view["vram_allocated_mib"] == [1.0]
+    assert view["vram_peak_reserved_mib"] == [4.0]
+    assert view["estimated_gflops"] == [12.5]
 
 
 class AlternatingBenchmark(TrackingBenchmark):
@@ -131,7 +157,12 @@ def test_single_episode_report_is_binary_offline_traceable_and_tamper_evident(tm
     chart_sources = {chart["builder"]: chart["canonical_sources"] for chart in report["charts"]}
     assert chart_sources["action_timeseries"] == ["tasks/*/episodes/*/trace.json:executed_actions.applied_action"]
     assert chart_sources["latency_distribution"] == ["tasks/*/episodes/*/trace.json:policy_predictions.inference_duration_ns"]
-    assert {chart["builder_version"] for chart in report["charts"]} == {"1.2.0"}
+    chart_versions = {chart["builder"]: chart["builder_version"] for chart in report["charts"]}
+    assert chart_versions == {
+        "action_timeseries": "1.2.0", "latency_distribution": "1.2.0",
+        "episode_outcomes": "1.2.0", "vram_timeseries": "1.0.0",
+        "estimated_compute_timeseries": "1.0.0",
+    }
     assert all(chart["interaction"]["runtime"] == "self-contained SVG; no network dependency" for chart in report["charts"])
     charts = {chart["builder"]: chart for chart in report["charts"]}
     action_statistics = charts["action_timeseries"]["statistics"]

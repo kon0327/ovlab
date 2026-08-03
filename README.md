@@ -6,6 +6,9 @@ Current project version: **0.2.0**. See the complete
 [`release notes`](RELEASE_NOTES.md) for implemented capabilities, compatibility
 boundaries and current scope limits.
 
+The complete system design, runtime boundaries, data flows and extension points
+are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 OVLAB follows a **Config → Connect → Run → Inspect** workflow: define an experiment, connect interchangeable policies and benchmarks through shared contracts, execute reproducible runs, and validate or analyze their immutable traces offline.
 
 The experiment runner and benchmark adapter execute together in a runner process or container. Each VLA implementation runs independently as a policy service, communicating through a dependency-light policy protocol. This separation allows Vanilla, LoRA, OFT, and QuIC implementations to keep distinct dependency environments.
@@ -54,6 +57,7 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab export grouped --name STUDY_NAME --runs RUN_ID_A RUN_ID_B
 ./ovlab dataset resolve --benchmark libero --suite libero_10
 ./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
+./ovlab train report --run TRAINING_RUN_ID
 ./ovlab checkpoint list
 ```
 

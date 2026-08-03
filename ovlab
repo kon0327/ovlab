@@ -133,6 +133,57 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
         "$dataset_image" "${args[@]}"
 fi
 
+# Training performance reports use the same purpose-built reporting image while
+# reading canonical training evidence through a separate read-only mount.
+if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${3:-}" != "-h" ]]; then
+    reporting_runtime="${OVLAB_REPORTING_RUNTIME:-docker}"
+    if [[ "$reporting_runtime" != "host" ]]; then
+        if ! command -v docker >/dev/null 2>&1; then
+            echo "ovlab: training reports require Docker; the Docker CLI is unavailable." >&2
+            exit 127
+        fi
+        data_root="${OVLAB_DATA_ROOT:-$repository_root/../ovlab-data}"
+        model_data_root="${OVLAB_MODEL_DATA_ROOT:-$data_root}"
+        training_runs_root="$(realpath -m -- "$model_data_root/training-runs")"
+        derived_root="$(realpath -m -- "${OVLAB_DERIVED_ROOT:-$data_root/derived}")"
+        if [[ ! -d "$training_runs_root" ]]; then
+            echo "ovlab: canonical training run directory does not exist: $training_runs_root" >&2
+            exit 4
+        fi
+        reporting_image="${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}"
+        if ! docker image inspect "$reporting_image" >/dev/null 2>&1; then
+            echo "ovlab: reporting image is unavailable: $reporting_image" >&2
+            echo "ovlab: build it with: bash deploy/scripts/build-images.sh reporting" >&2
+            exit 6
+        fi
+        training_report_verify="false"
+        for argument in "$@"; do
+            [[ "$argument" == "--verify" ]] && training_report_verify="true"
+        done
+        if [[ "$training_report_verify" == "true" ]]; then
+            if [[ ! -d "$derived_root" ]]; then
+                echo "ovlab: derived report directory does not exist: $derived_root" >&2
+                exit 4
+            fi
+            derived_mount="type=bind,source=$derived_root,target=/var/lib/ovlab/derived,readonly"
+        else
+            mkdir -p -- "$derived_root"
+            chmod 2770 -- "$derived_root"
+            derived_mount="type=bind,source=$derived_root,target=/var/lib/ovlab/derived"
+        fi
+        echo "ovlab: reporting: using isolated image $reporting_image for training performance." >&2
+        exec docker run --rm \
+            --network none --read-only --user 10001:10001 --group-add "$(id -g)" \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
+            --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data \
+            --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
+            --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
+            --mount "type=bind,source=$training_runs_root,target=/var/lib/ovlab/model-data/training-runs,readonly" \
+            --mount "$derived_mount" \
+            "$reporting_image" "$@"
+    fi
+fi
+
 # Reporting and export use their purpose-built image by default. Host execution
 # remains an explicit diagnostic escape hatch, never an implicit Conda dependency.
 if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then

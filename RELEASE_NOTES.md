@@ -1,5 +1,19 @@
 # OpenVLABenchmark release notes
 
+## Unreleased
+
+- Added the versioned `ovlab.performance-telemetry/v1` contract for inference
+  and training, including PyTorch CUDA allocator allocated/reserved/peak memory,
+  exact total/trainable/frozen/adapter parameter classes and explicitly
+  qualified analytical GFLOPs estimates.
+- Extended Vanilla, merged-LoRA, 4-bit and OFT policy traces with per-prediction
+  performance samples and added interactive VRAM/estimated-compute charts plus
+  statistics to derived benchmark reports.
+- Extended optimizer-step evidence with VRAM time series and peaks, adapter
+  counts and training compute estimates. Added isolated, checksummed training
+  HTML/JSON reports through `ovlab train report` without modifying canonical
+  training runs.
+
 ## 0.2.0 — 2026-07-31
 
 OVLAB 0.2.0 is the first consolidated experimental-framework release. It

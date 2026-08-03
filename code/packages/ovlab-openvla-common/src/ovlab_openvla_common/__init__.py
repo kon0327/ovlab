@@ -22,6 +22,11 @@ from .method import (
 )
 from .observations import select_canonical_rgb
 from .prompt import OpenVlaPromptFormatter, OpenVlaPromptTemplate
+from .performance import (
+    CUDA_ALLOCATOR_SOURCE, INFERENCE_COMPUTE_ESTIMATOR, PERFORMANCE_TELEMETRY_SCHEMA,
+    TRAINING_COMPUTE_ESTIMATOR, cuda_allocator_snapshot, estimated_inference_compute,
+    estimated_training_compute, parameter_inventory, performance_sample, reset_cuda_peak,
+)
 from .settings import OpenVlaModelSource
 
 __all__ = [
@@ -31,4 +36,7 @@ __all__ = [
     "OpenVlaModelSource", "OpenVlaObservationError", "OpenVlaPromptFormatter", "OpenVlaRuntimeArtifact",
     "OpenVlaPromptTemplate", "action_specs_match", "libero_target_action_spec",
     "method_descriptor_from_registry", "select_canonical_rgb", "vanilla_base_method_descriptor",
+    "CUDA_ALLOCATOR_SOURCE", "INFERENCE_COMPUTE_ESTIMATOR", "PERFORMANCE_TELEMETRY_SCHEMA",
+    "TRAINING_COMPUTE_ESTIMATOR", "cuda_allocator_snapshot", "estimated_inference_compute",
+    "estimated_training_compute", "parameter_inventory", "performance_sample", "reset_cuda_peak",
 ]

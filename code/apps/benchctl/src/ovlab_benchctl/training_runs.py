@@ -380,8 +380,11 @@ class CheckpointBundleStore:
             else {}
         )
         parameter_counts = {
+            "total": staged_result.get("total_parameter_count"),
             "trainable": staged_result.get("trainable_parameter_count"),
             "frozen": staged_result.get("frozen_parameter_count"),
+            "adapter": staged_result.get("adapter_parameter_count"),
+            "trainable_adapter": staged_result.get("trainable_adapter_parameter_count"),
         }
         semantics = {
             "schema_version": CHECKPOINT_SCHEMA,
@@ -449,6 +452,7 @@ class CheckpointBundleStore:
             shutil.rmtree(temporary, ignore_errors=True)
             raise
         result = {
+            **staged_result,
             "schema_version": TRAINING_RESULT_SCHEMA,
             "run_id": context.run_id,
             "status": "completed",
@@ -539,6 +543,10 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
     from prismatic.vla.action_tokenizer import ActionTokenizer
     from prismatic.vla.datasets import RLDSBatchTransform, RLDSDataset
     from prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics
+    from ovlab_openvla_common import (
+        cuda_allocator_snapshot, estimated_training_compute, parameter_inventory,
+        performance_sample, reset_cuda_peak,
+    )
 
     if not torch.cuda.is_available():
         raise TrainingRuntimeError("OpenVLA production training requires CUDA")
@@ -583,10 +591,13 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
         for name, parameter in model.named_parameters():
             if parameter.requires_grad:
                 initial_hashes[name] = hashlib.sha256(parameter.detach().cpu().float().numpy().tobytes()).hexdigest()
-    trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
-    frozen = sum(parameter.numel() for parameter in model.parameters() if not parameter.requires_grad)
+    parameter_counts = parameter_inventory(model.named_parameters())
+    trainable = parameter_counts["trainable"]
+    frozen = parameter_counts["frozen"]
     if trainable <= 0 or (training["mode"] == "peft" and frozen <= 0):
         raise TrainingRuntimeError("resolved trainable/frozen parameter selection is invalid")
+    if training["mode"] == "peft" and parameter_counts["trainable_non_adapter"] != 0:
+        raise TrainingRuntimeError("LoRA training selected undeclared non-adapter parameters")
     optimizer = AdamW((parameter for parameter in model.parameters() if parameter.requires_grad), lr=float(training["learning_rate"]))
     action_tokenizer = ActionTokenizer(processor.tokenizer)
     transform = RLDSBatchTransform(
@@ -607,11 +618,23 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
     metrics_path = context.root / "metrics.jsonl"
     events_path = context.root / "events.jsonl"
     steps = 0
+    accumulation_started = None
+    accumulation_tokens = 0
+    accumulation_examples = 0
+    initial_memory = cuda_allocator_snapshot(torch, device)
+    run_peak_allocated = int(initial_memory.get("peak_allocated_bytes", 0))
+    run_peak_reserved = int(initial_memory.get("peak_reserved_bytes", 0))
     optimizer.zero_grad(set_to_none=True)
     model.train()
     for batch_index, batch in enumerate(loader):
-        torch.cuda.synchronize()
-        started = __import__("time").perf_counter_ns()
+        if accumulation_started is None:
+            torch.cuda.synchronize()
+            memory_before = cuda_allocator_snapshot(torch, device)
+            reset_cuda_peak(torch, device)
+            accumulation_started = __import__("time").perf_counter_ns()
+        attention_mask = batch["attention_mask"]
+        accumulation_tokens += int(attention_mask.sum().item())
+        accumulation_examples += int(attention_mask.shape[0])
         with torch.autocast("cuda", dtype=dtype, enabled=dtype == torch.bfloat16):
             output = model(
                 input_ids=batch["input_ids"].to(device),
@@ -632,21 +655,42 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
         optimizer.zero_grad(set_to_none=True)
         steps += 1
         torch.cuda.synchronize()
-        elapsed_ms = (__import__("time").perf_counter_ns() - started) / 1_000_000
+        elapsed_ms = (__import__("time").perf_counter_ns() - accumulation_started) / 1_000_000
+        memory_after = cuda_allocator_snapshot(torch, device)
+        run_peak_allocated = max(run_peak_allocated, int(memory_after.get("peak_allocated_bytes", 0)))
+        run_peak_reserved = max(run_peak_reserved, int(memory_after.get("peak_reserved_bytes", 0)))
+        compute = estimated_training_compute(
+            parameter_counts["total"], token_count=accumulation_tokens,
+            trainable_parameter_count=parameter_counts["trainable"],
+        )
         metric = {
             "schema_version": "ovlab.training-metric/v1",
             "global_step": steps,
             "optimizer_step": steps,
+            "timestamp_utc": _utc_now(),
             "training_loss": float(loss.detach().cpu()),
             "learning_rate": float(training["learning_rate"]),
             "gradient_norm": float(grad_norm.detach().cpu()),
             "step_duration_ms": elapsed_ms,
-            "examples_per_second": int(training["per_device_batch_size"]) / (elapsed_ms / 1000.0),
-            "gpu_memory_allocated_bytes": torch.cuda.memory_allocated(),
-            "gpu_memory_peak_bytes": torch.cuda.max_memory_allocated(),
+            "examples_per_second": accumulation_examples / (elapsed_ms / 1000.0),
+            "gpu_memory_allocated_bytes": memory_after.get("allocated_bytes"),
+            "gpu_memory_reserved_bytes": memory_after.get("reserved_bytes"),
+            "gpu_memory_peak_bytes": memory_after.get("peak_allocated_bytes"),
+            "gpu_memory_peak_reserved_bytes": memory_after.get("peak_reserved_bytes"),
+            "estimated_gflops": compute["estimated_gflops"],
+            "performance": performance_sample(
+                phase="training_optimizer_step",
+                parameter_counts=parameter_counts,
+                memory_before=memory_before,
+                memory_after=memory_after,
+                compute=compute,
+            ),
             "timing_method": "perf_counter_ns with torch.cuda.synchronize before and after",
         }
         TrainingRunStore._append(metrics_path, metric)
+        accumulation_started = None
+        accumulation_tokens = 0
+        accumulation_examples = 0
         if steps >= int(training["max_steps"]):
             break
     if steps != int(training["max_steps"]):
@@ -676,8 +720,23 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
         "optimizer_steps": steps,
         "trainable_parameter_count": trainable,
         "frozen_parameter_count": frozen,
+        "total_parameter_count": parameter_counts["total"],
+        "adapter_parameter_count": parameter_counts["adapter"],
+        "trainable_adapter_parameter_count": parameter_counts["trainable_adapter"],
         "changed_adapter_tensor_count": changed if training["mode"] == "peft" else None,
-        "peak_vram_bytes": torch.cuda.max_memory_allocated(),
+        "peak_vram_bytes": run_peak_allocated,
+        "peak_reserved_vram_bytes": run_peak_reserved,
+        "performance": {
+            "schema_version": "ovlab.performance-summary/v1",
+            "parameter_counts": parameter_counts,
+            "cuda_allocator": {
+                "source": "pytorch-cuda-caching-allocator",
+                "peak_allocated_bytes": run_peak_allocated,
+                "peak_reserved_bytes": run_peak_reserved,
+                "qualification": "process allocator peak across model load and recorded optimizer steps; not whole-device NVML usage",
+            },
+            "estimated_compute_method": "dense-parameter-token-proxy/training-v1",
+        },
         "checkpoint_id": None,
         "failure": None,
     }

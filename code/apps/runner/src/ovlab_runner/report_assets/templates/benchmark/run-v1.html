@@ -8,6 +8,16 @@
 <p><strong>Experiment:</strong> {{ model.run.experiment_name or model.run.experiment }}</p>
 <p><strong>Policy:</strong> {{ model.policy.name }} {{ model.policy.version }} · <strong>Benchmark:</strong> {{ model.benchmark.name }} {{ model.benchmark.version }}</p>
 <p><strong>Scientific config:</strong> <code>{{ model.run.scientific_config_hash }}</code><br><strong>Execution config:</strong> <code>{{ model.run.execution_config_hash }}</code></p></section>
+<section class="card"><h2>Model complexity and system telemetry</h2>
+<p>{{ model.performance.vram_source }}; {{ model.performance.vram_qualification }}. GFLOPs values are an {{ model.performance.compute_qualification }}.</p>
+<table><thead><tr><th>Method</th><th>Total params</th><th>Trainable params</th><th>Adapter params</th><th>Merge</th><th>Quantization</th></tr></thead><tbody><tr>
+<td>{{ model.performance.model_complexity.method_family or model.performance.model_complexity.method_id or 'unavailable' }}</td>
+<td>{{ model.performance.model_complexity.parameter_counts.get('total', 'unavailable') }}</td>
+<td>{{ model.performance.model_complexity.parameter_counts.get('trainable', 'unavailable') }}</td>
+<td>{{ model.performance.model_complexity.parameter_counts.get('adapter', 'unavailable') }}</td>
+<td>{{ model.performance.model_complexity.merge_status or 'unavailable' }}</td>
+<td>{{ model.performance.model_complexity.quantization or 'unavailable' }}</td>
+</tr></tbody></table><p><strong>Peak allocated VRAM:</strong> {{ ('%.3f MiB'|format(model.performance.summary.peak_allocated_mib)) if model.performance.summary.peak_allocated_mib is not none else 'unavailable' }} · <strong>Peak reserved VRAM:</strong> {{ ('%.3f MiB'|format(model.performance.summary.peak_reserved_mib)) if model.performance.summary.peak_reserved_mib is not none else 'unavailable' }} · <strong>Estimated total compute:</strong> {{ ('%.6g GFLOPs'|format(model.performance.summary.estimated_total_gflops)) if model.performance.summary.estimated_total_gflops is not none else 'unavailable' }}</p>{% for estimator in model.performance.compute_estimators %}<p class="statistics-source"><strong>{{ estimator.method }}</strong>: <code>{{ estimator.formula }}</code>. {{ estimator.qualification }}</p>{% endfor %}<p class="statistics-source">{{ model.performance.model_complexity.adapter_parameter_semantics }}</p></section>
 <section class="card"><h2>Outcome</h2>
 {% if model.outcome.presentation == 'binary_success' %}<p>Success: <strong>{{ 'true' if model.outcome.success else 'false' }}</strong></p>
 {% elif model.outcome.presentation == 'success_rate' %}<p>Success rate: <strong>{{ '%.3f'|format(model.outcome.success_rate) }}</strong> ({{ model.outcome.successful_episode_count }}/{{ model.outcome.eligible_episode_count }})</p>

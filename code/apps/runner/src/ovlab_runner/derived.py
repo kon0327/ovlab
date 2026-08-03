@@ -29,11 +29,13 @@ REPORT_PROFILE_SCHEMA = "ovlab.report-profile/v1"
 REPORT_SCHEMA = "ovlab.report/v1"
 REPORT_MANIFEST_SCHEMA = "ovlab.report-manifest/v1"
 REPORT_RENDERER_ID = "ovlab-jinja-static-html"
-REPORT_RENDERER_VERSION = "1.2.0"
+REPORT_RENDERER_VERSION = "1.3.0"
 CHART_BUILDERS = {
     "action_timeseries": "1.2.0",
     "latency_distribution": "1.2.0",
     "episode_outcomes": "1.2.0",
+    "vram_timeseries": "1.0.0",
+    "estimated_compute_timeseries": "1.0.0",
 }
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SECTIONS = {
@@ -362,6 +364,30 @@ def _trace_view(episode_path: Path, trace) -> dict[str, object]:
     for previous, current in zip(gripper, gripper[1:]):
         transitions += (previous >= 0) != (current >= 0)
     component_names = _action_component_names(max((len(row) for row in actions), default=0))
+    allocated, reserved, peak_allocated, peak_reserved, estimated_gflops = [], [], [], [], []
+    compute_identity = None
+    for prediction in trace.policy_predictions:
+        runtime = prediction.metadata.get("runtime", {})
+        performance = runtime.get("performance", {}) if isinstance(runtime, dict) else {}
+        if not performance and isinstance(prediction.metadata.get("performance"), dict):
+            performance = prediction.metadata["performance"]
+        after = performance.get("cuda_memory_after", {}) if isinstance(performance, dict) else {}
+        compute = performance.get("estimated_compute", {}) if isinstance(performance, dict) else {}
+        if isinstance(after, dict) and after.get("status") == "available":
+            for target, key in (
+                (allocated, "allocated_bytes"), (reserved, "reserved_bytes"),
+                (peak_allocated, "peak_allocated_bytes"), (peak_reserved, "peak_reserved_bytes"),
+            ):
+                value = after.get(key)
+                if isinstance(value, int | float) and not isinstance(value, bool):
+                    target.append(float(value) / (1024 * 1024))
+        value = compute.get("estimated_gflops") if isinstance(compute, dict) else None
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            estimated_gflops.append(float(value))
+        if compute_identity is None and isinstance(compute, dict) and compute.get("method"):
+            compute_identity = {
+                key: compute.get(key) for key in ("method", "formula", "qualification")
+            }
     return {
         "action_series": _downsample(actions),
         "action_sample_count": len(actions),
@@ -375,7 +401,49 @@ def _trace_view(episode_path: Path, trace) -> dict[str, object]:
         "inference_latency_statistics_ms": _descriptive_statistics(inference),
         "rpc_latency_ms": _downsample(rpc),
         "closed_loop_latency_ms": _downsample(closed),
+        "vram_allocated_mib": _downsample(allocated),
+        "vram_reserved_mib": _downsample(reserved),
+        "vram_peak_allocated_mib": _downsample(peak_allocated),
+        "vram_peak_reserved_mib": _downsample(peak_reserved),
+        "vram_statistics_mib": {
+            "allocated": _descriptive_statistics(allocated),
+            "reserved": _descriptive_statistics(reserved),
+            "peak_allocated": _descriptive_statistics(peak_allocated),
+            "peak_reserved": _descriptive_statistics(peak_reserved),
+        },
+        "estimated_gflops": _downsample(estimated_gflops),
+        "estimated_gflops_statistics": _descriptive_statistics(estimated_gflops),
+        "estimated_compute_identity": compute_identity,
         "trace_reference": str(episode_path.name + "/trace.json"),
+    }
+
+
+def _policy_performance_identity(connection: dict[str, object]) -> dict[str, object]:
+    metadata = connection.get("metadata", {})
+    capabilities = metadata.get("policy_capabilities", {}) if isinstance(metadata, dict) else {}
+    runtime = capabilities.get("runtime", {}) if isinstance(capabilities, dict) else {}
+    method = capabilities.get("method_descriptor", {}) if isinstance(capabilities, dict) else {}
+    parameter_counts = runtime.get("parameter_counts") if isinstance(runtime, dict) else None
+    if not isinstance(parameter_counts, dict):
+        parameter_counts = method.get("parameter_counts") if isinstance(method, dict) else None
+    if not isinstance(parameter_counts, dict):
+        total = None
+        if isinstance(runtime, dict):
+            total = runtime.get("total_parameter_count", runtime.get("total_runtime_parameter_count"))
+        if total is None and isinstance(method, dict):
+            total = method.get("total_runtime_parameter_count")
+        parameter_counts = {"total": total} if total is not None else {}
+    return {
+        "schema_version": "ovlab.model-complexity/v1",
+        "parameter_counts": parameter_counts,
+        "method_family": method.get("family", method.get("method_family")) if isinstance(method, dict) else None,
+        "method_id": method.get("method_id") if isinstance(method, dict) else None,
+        "merge_status": method.get("merge_status", method.get("backbone_merge_status")) if isinstance(method, dict) else None,
+        "quantization": method.get("quantization") if isinstance(method, dict) else None,
+        "cuda_memory_after_load": runtime.get("cuda_memory_after_load") if isinstance(runtime, dict) else None,
+        "adapter_parameter_semantics": (
+            "live runtime adapter parameters; merged adapters remain zero/unavailable and historical training counts stay in method provenance"
+        ),
     }
 
 
@@ -458,7 +526,35 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
     detected = renderer.get("detected_renderer") if isinstance(renderer, dict) else None
     software = isinstance(detected, dict) and "llvmpipe" in str(detected.get("renderer", "")).lower()
     all_episodes = [episode for task in task_views for episode in task["episodes"]]
+    vram_peak_allocated = [
+        value for episode in all_episodes
+        for value in episode["trace_view"]["vram_peak_allocated_mib"]
+    ]
+    vram_peak_reserved = [
+        value for episode in all_episodes
+        for value in episode["trace_view"]["vram_peak_reserved_mib"]
+    ]
+    estimated_compute = [
+        value for episode in all_episodes
+        for value in episode["trace_view"]["estimated_gflops"]
+    ]
+    compute_estimators = []
+    for episode in all_episodes:
+        identity = episode["trace_view"].get("estimated_compute_identity")
+        if isinstance(identity, dict) and identity not in compute_estimators:
+            compute_estimators.append(identity)
     run_status = final.get("status", "partial")
+    complexity = _policy_performance_identity(connection)
+    load_memory = complexity.get("cuda_memory_after_load")
+    load_peak_allocated = None
+    load_peak_reserved = None
+    if isinstance(load_memory, dict) and load_memory.get("status") == "available":
+        if isinstance(load_memory.get("peak_allocated_bytes"), int | float):
+            load_peak_allocated = float(load_memory["peak_allocated_bytes"]) / (1024 * 1024)
+        if isinstance(load_memory.get("peak_reserved_bytes"), int | float):
+            load_peak_reserved = float(load_memory["peak_reserved_bytes"]) / (1024 * 1024)
+    peak_allocated_candidates = [*vram_peak_allocated, *([] if load_peak_allocated is None else [load_peak_allocated])]
+    peak_reserved_candidates = [*vram_peak_reserved, *([] if load_peak_reserved is None else [load_peak_reserved])]
     return {
         "schema_version": REPORT_SCHEMA,
         "scope": "task" if scope_task_id is not None else "run",
@@ -475,6 +571,25 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
         },
         "benchmark": connection.get("benchmark"),
         "policy": connection.get("policy"),
+        "performance": {
+            "telemetry_schema": "ovlab.performance-telemetry/v1",
+            "model_complexity": complexity,
+            "vram_source": "PyTorch CUDA caching allocator in the isolated policy process",
+            "vram_qualification": "not whole-device NVML memory usage",
+            "compute_qualification": "estimated analytical proxy, not measured hardware FLOPs",
+            "compute_estimators": compute_estimators,
+            "summary": {
+                "prediction_sample_count": sum(
+                    int(episode["trace_view"]["inference_latency_statistics_ms"]["n"])
+                    for episode in all_episodes
+                ),
+                "peak_allocated_mib": max(peak_allocated_candidates) if peak_allocated_candidates else None,
+                "peak_reserved_mib": max(peak_reserved_candidates) if peak_reserved_candidates else None,
+                "load_peak_allocated_mib": load_peak_allocated,
+                "load_peak_reserved_mib": load_peak_reserved,
+                "estimated_total_gflops": sum(estimated_compute) if estimated_compute else None,
+            },
+        },
         "renderer": {
             "configuration": renderer,
             "acceleration": "software" if software else "hardware-or-unknown",
@@ -504,6 +619,10 @@ def _chart_axes(builder: str) -> dict[str, str]:
         return {"x": "Ordered control sample", "y": "Applied action (normalized command)"}
     if builder == "latency_distribution":
         return {"x": "Ordered prediction sample", "y": "Policy inference latency (ms)"}
+    if builder == "vram_timeseries":
+        return {"x": "Ordered prediction sample", "y": "PyTorch CUDA allocator memory (MiB)"}
+    if builder == "estimated_compute_timeseries":
+        return {"x": "Ordered prediction sample", "y": "Estimated compute (GFLOPs)"}
     return {"x": "Episode index", "y": "Outcome (0=failure, 1=success)"}
 
 
@@ -532,6 +651,24 @@ def _chart_statistics(builder: str, model: dict[str, object]) -> dict[str, objec
                     **episode["trace_view"]["inference_latency_statistics_ms"],
                 })
         source = "full canonical trace policy_predictions.inference_duration_ns converted to ms"
+    elif builder == "vram_timeseries":
+        for task in model["tasks"]:
+            for episode in task["episodes"]:
+                for series_name, statistics in episode["trace_view"]["vram_statistics_mib"].items():
+                    rows.append({
+                        "task_id": task["task_id"], "episode_id": episode["episode_id"],
+                        "series": series_name, "unit": "MiB", **statistics,
+                    })
+        source = "full canonical prediction performance.cuda_memory_after; bytes converted to MiB"
+    elif builder == "estimated_compute_timeseries":
+        for task in model["tasks"]:
+            for episode in task["episodes"]:
+                rows.append({
+                    "task_id": task["task_id"], "episode_id": episode["episode_id"],
+                    "series": "estimated_compute", "unit": "GFLOPs",
+                    **episode["trace_view"]["estimated_gflops_statistics"],
+                })
+        source = "full canonical prediction performance.estimated_compute; analytical estimate, not measurement"
     else:
         all_values = []
         for task in model["tasks"]:
@@ -596,6 +733,29 @@ def _chart_svg(chart_id: str, builder: str, model: dict[str, object]) -> str:
                 values.extend(episode["trace_view"]["inference_latency_ms"])
         labels = [str(index) for index in range(len(values))]
         series.append({"name": "inference_ms", "color": colors[0], "points": _sampled_points(values)})
+        finite = [float(value) for value in values if math.isfinite(float(value))]
+        y_min, y_max = (min(finite), max(finite)) if finite else (0.0, 1.0)
+    elif builder == "vram_timeseries":
+        combined = {"allocated": [], "reserved": [], "peak_allocated": [], "peak_reserved": []}
+        for task in model["tasks"]:
+            for episode in task["episodes"]:
+                view = episode["trace_view"]
+                combined["allocated"].extend(view["vram_allocated_mib"])
+                combined["reserved"].extend(view["vram_reserved_mib"])
+                combined["peak_allocated"].extend(view["vram_peak_allocated_mib"])
+                combined["peak_reserved"].extend(view["vram_peak_reserved_mib"])
+        labels = [str(index) for index in range(max((len(values) for values in combined.values()), default=0))]
+        for index, (name, values) in enumerate(combined.items()):
+            series.append({"name": name, "color": colors[index], "points": _sampled_points(values)})
+        finite = [point[1] for item in series for point in item["points"] if math.isfinite(point[1])]
+        y_min, y_max = (min(finite), max(finite)) if finite else (0.0, 1.0)
+    elif builder == "estimated_compute_timeseries":
+        values = []
+        for task in model["tasks"]:
+            for episode in task["episodes"]:
+                values.extend(episode["trace_view"]["estimated_gflops"])
+        labels = [str(index) for index in range(len(values))]
+        series.append({"name": "estimated_gflops", "color": colors[0], "points": _sampled_points(values)})
         finite = [float(value) for value in values if math.isfinite(float(value))]
         y_min, y_max = (min(finite), max(finite)) if finite else (0.0, 1.0)
     else:
@@ -914,6 +1074,10 @@ class DerivedReportEngine:
                         if chart["builder"] == "action_timeseries" else
                         ["tasks/*/episodes/*/trace.json:policy_predictions.inference_duration_ns"]
                         if chart["builder"] == "latency_distribution" else
+                        ["tasks/*/episodes/*/trace.json:policy_predictions.metadata.runtime.performance.cuda_memory_after"]
+                        if chart["builder"] == "vram_timeseries" else
+                        ["tasks/*/episodes/*/trace.json:policy_predictions.metadata.runtime.performance.estimated_compute"]
+                        if chart["builder"] == "estimated_compute_timeseries" else
                         ["tasks/*/episodes/*/trace.json:terminal_status"]
                     ),
                     "transformation": "deterministic ordered sampling; at most 400 points",

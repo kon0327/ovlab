@@ -117,6 +117,7 @@ def test_dataset_version_does_not_trigger_global_cli_version():
     ("train", "status", "--run", "training-1"),
     ("train", "inspect", "--run", "training-1"),
     ("train", "verify", "--run", "training-1"),
+    ("train", "report", "--run", "training-1"),
     ("checkpoint", "list"),
     ("checkpoint", "inspect", "--checkpoint", "checkpoint-1"),
     ("checkpoint", "verify", "--checkpoint", "checkpoint-1"),

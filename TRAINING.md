@@ -108,7 +108,7 @@ planning fails if either the profile limit or detected GPU memory is lower.
 Build the purpose-specific images after changing packaged source or locks:
 
 ```bash
-bash deploy/scripts/build-images.sh dataset training-openvla
+bash deploy/scripts/build-images.sh dataset training-openvla reporting
 ```
 
 Then start a bounded run:
@@ -122,8 +122,9 @@ The trainer has one requested GPU, no network, a read-only prepared dataset, a
 read-only base checkpoint and one writable training-run directory. It cannot
 write the finalized checkpoint registry. A second non-GPU, network-disabled
 finalizer reopens and validates the staged safetensors, creates the manifest
-last, and atomically publishes the bundle. Base weights are never modified and
-LoRA weights remain unmerged.
+last, and atomically publishes the bundle. The isolated reporting image then
+reads the finalized training run read-only and publishes its performance
+report. Base weights are never modified and LoRA weights remain unmerged.
 
 Inspect canonical evidence offline:
 
@@ -131,6 +132,8 @@ Inspect canonical evidence offline:
 ./ovlab train status --run TRAINING_RUN_ID
 ./ovlab train inspect --run TRAINING_RUN_ID
 ./ovlab train verify --run TRAINING_RUN_ID
+./ovlab train report --run TRAINING_RUN_ID
+./ovlab train report --run TRAINING_RUN_ID --verify
 ./ovlab checkpoint list
 ./ovlab checkpoint inspect --checkpoint CHECKPOINT_ID
 ./ovlab checkpoint verify --checkpoint CHECKPOINT_ID
@@ -139,6 +142,28 @@ Inspect canonical evidence offline:
 Add `--json` to any of these commands for one stable machine-readable document.
 Checkpoint verification parses safetensors metadata and finite floating-point
 payloads without importing or executing model code.
+
+Each optimizer step records a versioned system-performance sample: PyTorch CUDA
+allocator `allocated`, `reserved`, peak-allocated and peak-reserved bytes;
+exact total/trainable/frozen/adapter parameter counts; and an explicitly
+qualified estimated-GFLOPs value. VRAM is process allocator telemetry, not
+whole-device NVML usage. The compute value is the documented analytical proxy
+`(2 * total parameters + 4 * trainable parameters) * non-padding tokens`, not
+a measured hardware counter. This keeps LoRA backward cost separate from the
+frozen base-model forward path.
+
+`train report` runs in the locked reporting image. It mounts
+`training-runs/` read-only and writes a checksummed, self-contained HTML/JSON
+bundle to:
+
+```text
+derived/training/<training-run-id>/system-performance/<build-id>/
+```
+
+The report includes interactive VRAM and estimated-compute time series,
+descriptive statistics, runtime parameter classes, lifecycle peaks and source
+checksums. Use `--verify --build BUILD_ID` to verify an exact build. Report
+generation never changes canonical training evidence or checkpoint identity.
 
 ## Deployment handoff
 
@@ -155,9 +180,6 @@ policy:
   checkpoint:
     id: checkpoint-0123456789abcdef0123456789abcdef
 ```
-
-No training HTML report is generated in this gate. Future reporting should read
-canonical `training-runs/` without changing these schemas.
 
 ## Interruption and recovery
 

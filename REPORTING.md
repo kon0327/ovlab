@@ -15,7 +15,7 @@ The recommended host workspace is outside the source repository:
 ```text
 /home/kony/dissertation/ovlab-data/
 ├── runs/       # immutable traces, metrics, videos, configurations and provenance
-├── derived/    # regenerable HTML reports and report assets
+├── derived/    # regenerable benchmark and training HTML reports
 └── exports/    # explicitly selected figures and tables
 ```
 
@@ -192,6 +192,12 @@ The built-in `libero-task-default` profile includes:
   unavailable reasons;
 - applied-action trajectories and gripper transitions;
 - policy-service inference latency derived from canonical prediction timing;
+- policy-process PyTorch allocator VRAM tracking (`allocated`, `reserved`, and
+  scoped peaks) with an interactive time-series chart;
+- exact live runtime parameter counts, including separate active adapter counts
+  where an unmerged adapter exists;
+- estimated GFLOPs per prediction with estimator ID, formula inputs and an
+  explicit warning that the value is not a hardware measurement;
 - binary episode outcomes, explicit multi-episode denominators, and missing or
   interrupted counts;
 - links to canonical episode videos;
@@ -201,6 +207,37 @@ A one-episode task is reported as `success=true|false`, not as a statistical
 success rate. Multi-episode success rates expose both numerator and denominator.
 An unavailable metric remains `status=unavailable, value=null`; reporting does
 not substitute zero. Standard deviation is unavailable for `n < 2`.
+
+Merged LoRA checkpoints have no live adapter tensors, so the active adapter
+count is zero or unavailable; their historical LoRA configuration remains in
+method provenance and is not misreported as live runtime parameters. Vanilla,
+merged LoRA, 4-bit and OFT services all emit the same telemetry schema.
+
+## Training performance reports
+
+Finalized training runs use the same isolated reporting image and a distinct
+read-only source mount:
+
+```bash
+./ovlab train report --run TRAINING_RUN_ID
+./ovlab train report --run TRAINING_RUN_ID --verify
+./ovlab train report --run TRAINING_RUN_ID --verify --build BUILD_ID --json
+```
+
+`ovlab train run` generates this performance report automatically after the
+checkpoint finalizer succeeds. The commands above regenerate or verify it
+without starting a trainer.
+
+Output is stored under
+`derived/training/<training-run-id>/system-performance/<build-id>/`. Training
+reports show optimizer-step VRAM tracking and peaks, exact total/trainable/
+frozen/adapter counts, step duration and loss statistics, and estimated GFLOPs
+per optimizer step and in total. The estimator is the documented dense-model
+proxy `(2 * total parameters + 4 * trainable parameters) * non-padding tokens`;
+it deliberately does not pretend
+to measure Tensor Core utilization, optimizer work, vision preprocessing or
+gradient-checkpoint recomputation. See [`TRAINING.md`](TRAINING.md) for the
+canonical training evidence contract.
 
 ## Report profiles and templates
 

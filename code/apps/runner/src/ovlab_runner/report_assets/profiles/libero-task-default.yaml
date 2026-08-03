@@ -9,6 +9,8 @@
   "charts": [
     {"id": "action_components", "builder": "action_timeseries"},
     {"id": "inference_latency", "builder": "latency_distribution"},
+    {"id": "vram_tracking", "builder": "vram_timeseries"},
+    {"id": "estimated_compute", "builder": "estimated_compute_timeseries"},
     {"id": "episode_outcomes", "builder": "episode_outcomes"}
   ],
   "options": {
