@@ -32,4 +32,10 @@ def finalize_managed_directory(path: str | Path) -> None:
     directory = Path(path)
     if directory.is_symlink() or not directory.is_dir():
         raise ArtifactError(f"managed artifact parent is not a safe directory: {directory}")
+    # Deployment roots are host-owned bind mounts.  The reporting container is
+    # deliberately granted group access rather than ownership, so chmod(2) is
+    # not permitted even when the host has already applied the exact contract
+    # mode.  Avoid an unnecessary ownership-sensitive syscall in that case.
+    if directory.stat().st_mode & 0o7777 == MANAGED_DIRECTORY_MODE:
+        return
     directory.chmod(MANAGED_DIRECTORY_MODE)

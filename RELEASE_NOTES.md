@@ -9,6 +9,10 @@
 - Pinned the OFT container to the dispatch-compatible Accelerate 0.30.1 and
   BitsAndBytes 0.43.1 pair, preventing a post-load `.to()` call that is invalid
   for quantized models in the pinned OFT Transformers fork.
+- Fixed isolated reporting on host-owned bind mounts. Finalization now accepts
+  an already compliant managed root without issuing an ownership-sensitive
+  `chmod`, while still finalizing and verifying the generated report/export
+  trees.
 - Added the versioned `ovlab.performance-telemetry/v1` contract for inference
   and training, including PyTorch CUDA allocator allocated/reserved/peak memory,
   exact total/trainable/frozen/adapter parameter classes and explicitly

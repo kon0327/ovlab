@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from ovlab_runner import ArtifactError
-from ovlab_runner.permissions import finalize_managed_tree
+from ovlab_runner.permissions import (
+    MANAGED_DIRECTORY_MODE,
+    finalize_managed_directory,
+    finalize_managed_tree,
+)
 
 
 def test_finalized_managed_tree_is_host_group_deletable_but_files_are_read_only(tmp_path):
@@ -34,3 +38,16 @@ def test_permission_finalization_rejects_symbolic_links_before_chmod(tmp_path):
     with pytest.raises(ArtifactError, match="symbolic link"):
         finalize_managed_tree(root)
     assert outside.read_text(encoding="utf-8") == "immutable"
+
+
+def test_compliant_host_managed_directory_does_not_require_chmod(tmp_path, monkeypatch):
+    root = tmp_path / "derived"
+    root.mkdir()
+    root.chmod(MANAGED_DIRECTORY_MODE)
+
+    def reject_chmod(_path, _mode):
+        raise PermissionError(1, "Operation not permitted", str(root))
+
+    monkeypatch.setattr(Path, "chmod", reject_chmod)
+
+    finalize_managed_directory(root)
