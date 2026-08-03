@@ -151,6 +151,8 @@ class HuggingFaceOpenVlaRuntime:
                 bnb_4bit_compute_dtype=torch.bfloat16,
                 bnb_4bit_use_double_quant=True,
             )
+        elif settings.quantization is ModelQuantization.BITSANDBYTES_INT8:
+            kwargs["quantization_config"] = bits_and_bytes_config(load_in_8bit=True)
         return kwargs
 
     @staticmethod
@@ -163,12 +165,12 @@ class HuggingFaceOpenVlaRuntime:
 
     @staticmethod
     def _input_dtype(settings, model, torch):
-        if settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT:
+        if settings.quantization is not ModelQuantization.NONE:
             try:
                 return next(model.vision_backbone.parameters()).dtype
             except (AttributeError, StopIteration) as exc:
                 raise OpenVlaPreprocessingError(
-                    "4bit runtime cannot determine the vision-backbone input dtype"
+                    "quantized runtime cannot determine the vision-backbone input dtype"
                 ) from exc
         return {
             ModelDType.BFLOAT16: torch.bfloat16,
@@ -244,8 +246,12 @@ class HuggingFaceOpenVlaRuntime:
                 raise OpenVlaCheckpointError("unquantized runtime unexpectedly loaded quantized weights")
             if settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT and not loaded_in_4bit:
                 raise OpenVlaCheckpointError("4bit runtime did not load BitsAndBytes 4-bit weights")
-            if loaded_in_8bit:
-                raise OpenVlaCheckpointError("8-bit loading is not supported by this runtime contract")
+            if settings.quantization is ModelQuantization.BITSANDBYTES_INT8 and not loaded_in_8bit:
+                raise OpenVlaCheckpointError("8bit runtime did not load BitsAndBytes 8-bit weights")
+            if settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT and loaded_in_8bit:
+                raise OpenVlaCheckpointError("4bit runtime unexpectedly loaded 8-bit weights")
+            if settings.quantization is ModelQuantization.BITSANDBYTES_INT8 and loaded_in_4bit:
+                raise OpenVlaCheckpointError("8bit runtime unexpectedly loaded 4-bit weights")
             self._parameter_counts = parameter_inventory(model.named_parameters())
             total_parameter_count = self._parameter_counts["total"]
         except OpenVlaCheckpointError:

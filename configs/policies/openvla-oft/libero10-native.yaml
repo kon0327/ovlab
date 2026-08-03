@@ -16,6 +16,7 @@ settings:
   runtime:
     device_resource: primary_gpu
     dtype: bfloat16
+    quantization: none
     attention_implementation: null
     local_files_only: true
     trust_remote_code: true

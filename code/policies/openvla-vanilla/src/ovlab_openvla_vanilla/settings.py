@@ -11,6 +11,7 @@ import numpy as np
 from ovlab_core.contracts import ActionSpec, Metadata, normalize_metadata
 from ovlab_openvla_common import (
     LiberoActionCodecConfig,
+    ModelQuantization,
     OpenVlaMethodDescriptor,
     OpenVlaModelSource,
     OpenVlaPromptTemplate,
@@ -25,30 +26,6 @@ class ModelDType(str, Enum):
     BFLOAT16 = "bfloat16"
     FLOAT16 = "float16"
     FLOAT32 = "float32"
-
-
-class ModelQuantization(str, Enum):
-    """Supported inference-time weight representations.
-
-    ``4bit`` is the validated BitsAndBytes NF4 recipe. It describes runtime
-    inference and does not imply that a LoRA adapter was trained with QLoRA.
-    """
-
-    NONE = "none"
-    BITSANDBYTES_NF4_4BIT = "4bit"
-
-    def configuration(self) -> dict[str, object]:
-        if self is ModelQuantization.NONE:
-            return {"mode": "none"}
-        return {
-            "mode": self.value,
-            "backend": "bitsandbytes",
-            "bits": 4,
-            "quant_type": "nf4",
-            "compute_dtype": "bfloat16",
-            "storage_dtype": "float16",
-            "double_quantization": True,
-        }
 
 
 class InferenceSynchronization(str, Enum):

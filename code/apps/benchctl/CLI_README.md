@@ -118,7 +118,7 @@ Run the five-task cross-suite Vanilla NF4 experiment with:
   configs/experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml
 ```
 
-The selected policy component owns `runtime.quantization: none | 4bit`; there is
+The selected policy component owns `runtime.quantization: none | 8bit | 4bit`; there is
 no host-side quantization switch. This keeps the inference representation in the
 portable scientific configuration and its hash.
 

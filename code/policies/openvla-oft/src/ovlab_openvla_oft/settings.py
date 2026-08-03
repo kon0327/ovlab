@@ -3,7 +3,9 @@
 from dataclasses import dataclass, field
 
 from ovlab_core.contracts import ActionSpec, Metadata, normalize_metadata
-from ovlab_openvla_common import OpenVlaModelSource, action_specs_match, libero_target_action_spec
+from ovlab_openvla_common import (
+    ModelQuantization, OpenVlaModelSource, action_specs_match, libero_target_action_spec,
+)
 
 from .artifact import OpenVlaOftArtifact
 
@@ -20,6 +22,7 @@ class OpenVlaOftSettings:
     proprioception_dimension: int = 8
     action_chunk_size: int = 8
     device: str = "cuda:0"
+    quantization: ModelQuantization = ModelQuantization.NONE
     attention_implementation: str | None = None
     target_action_spec: ActionSpec = field(default_factory=libero_target_action_spec)
     record_raw_output: bool = False
@@ -40,4 +43,6 @@ class OpenVlaOftSettings:
             raise ValueError("Gate E canonical RGB inputs must be HWC uint8 [256,256,3]")
         if not action_specs_match(self.target_action_spec, libero_target_action_spec()):
             raise ValueError("OFT output ActionSpec differs from canonical LIBERO OSC_POSE")
+        if not isinstance(self.quantization, ModelQuantization):
+            raise TypeError("quantization must be ModelQuantization")
         object.__setattr__(self, "metadata", normalize_metadata(self.metadata, type(self).__name__))

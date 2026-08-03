@@ -408,12 +408,14 @@ class ConfigResolver:
             }
             artifact = OpenVlaOftArtifact.from_registry_entry(settings["checkpoint_id"], registry_entry)
             cameras = settings["input"]["cameras"]
+            quantization = ModelQuantization(runtime["quantization"])
             return OpenVlaOftSettings(
                 source(model), artifact, unnorm_key=settings["unnorm_key"],
                 primary_camera_name=cameras["primary"], wrist_camera_name=cameras["wrist"],
                 proprioception_name=settings["input"]["proprioception"],
                 input_image_shape=(obs["height"], obs["width"], 3),
-                device=device, attention_implementation=runtime["attention_implementation"],
+                device=device, quantization=quantization,
+                attention_implementation=runtime["attention_implementation"],
                 target_action_spec=action_spec, record_raw_output=settings["raw_output"]["enabled"],
                 metadata={"execution_strategy": "open_loop_chunk"},
             )

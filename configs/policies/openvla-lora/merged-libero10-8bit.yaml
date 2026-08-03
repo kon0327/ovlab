@@ -1,0 +1,8 @@
+schema_version: "0.1.0"
+kind: policy
+type: openvla_lora_merged
+extends: merged-libero10.yaml
+
+settings:
+  runtime:
+    quantization: 8bit

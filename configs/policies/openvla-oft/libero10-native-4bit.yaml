@@ -1,0 +1,8 @@
+schema_version: "0.1.0"
+kind: policy
+type: openvla_oft
+extends: libero10-native.yaml
+
+settings:
+  runtime:
+    quantization: 4bit

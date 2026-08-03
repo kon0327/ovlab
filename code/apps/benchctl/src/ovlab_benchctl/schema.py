@@ -197,15 +197,13 @@ def validate_policy(doc, path):
         "device_resource", "dtype", "attention_implementation", "local_files_only",
         "trust_remote_code", "deterministic", "synchronize_inference",
     )
-    if doc["type"] != "openvla_oft":
-        runtime_keys += ("quantization",)
+    runtime_keys += ("quantization",)
     runtime = mapping(
         settings["runtime"], f"{path}.settings.runtime", required=runtime_keys
     )
     exact_type(runtime["device_resource"], str, f"{path}.settings.runtime.device_resource")
     enum(runtime["dtype"], ("bfloat16", "float16", "float32"), f"{path}.settings.runtime.dtype")
-    if doc["type"] != "openvla_oft":
-        enum(runtime["quantization"], ("none", "4bit"), f"{path}.settings.runtime.quantization")
+    enum(runtime["quantization"], ("none", "8bit", "4bit"), f"{path}.settings.runtime.quantization")
     if runtime["attention_implementation"] is not None: exact_type(runtime["attention_implementation"], str, f"{path}.settings.runtime.attention_implementation")
     for key in ("local_files_only", "trust_remote_code", "deterministic", "synchronize_inference"):
         exact_type(runtime[key], bool, f"{path}.settings.runtime.{key}")

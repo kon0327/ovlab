@@ -45,9 +45,10 @@ pinned local source avoids a hidden second Hub-code dependency in the offline
 container without modifying the immutable checkpoint.
 
 With `quantization: none`, the model is put in evaluation mode and moved to the
-configured device. With `quantization: 4bit`, the pinned BitsAndBytes 0.43.1
-NF4 recipe uses BF16 compute, FP16 storage and double quantization; BitsAndBytes
-owns model placement and OVLAB must not call `model.to(...)`. Each
+configured device. `quantization: 8bit` uses the BitsAndBytes LLM.int8 runtime;
+`quantization: 4bit` uses the pinned NF4 recipe with BF16 compute, FP16 storage
+and double quantization. In both quantized modes BitsAndBytes owns model
+placement and OVLAB must not call `model.to(...)`. Each
 prediction calls the processor as `processor(prompt, PIL.Image)` and then calls
 `model.predict_action(..., unnorm_key=..., do_sample=False)` under
 `torch.inference_mode()`. The configured normalization statistics are checked

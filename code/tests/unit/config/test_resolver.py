@@ -63,6 +63,7 @@ def test_every_versioned_component_is_schema_valid():
         "benchmarks/libero/spatial-smoke.yaml": "benchmark",
         "benchmarks/libero/libero10-smoke.yaml": "benchmark",
         "benchmarks/libero/libero10-oft-five-tasks.yaml": "benchmark",
+        "benchmarks/libero/libero10-oft.yaml": "benchmark",
         "benchmarks/libero/libero10-five-tasks.yaml": "benchmark",
         "policies/mock/base.yaml": "policy",
         "policies/mock/libero-noop.yaml": "policy",
@@ -70,12 +71,18 @@ def test_every_versioned_component_is_schema_valid():
         "policies/openvla-vanilla/4bit.yaml": "policy",
         "policies/openvla-lora/merged-libero10.yaml": "policy",
         "policies/openvla-lora/merged-libero10-4bit.yaml": "policy",
+        "policies/openvla-lora/merged-libero10-8bit.yaml": "policy",
+        "policies/openvla-oft/libero10-native.yaml": "policy",
+        "policies/openvla-oft/libero10-native-8bit.yaml": "policy",
+        "policies/openvla-oft/libero10-native-4bit.yaml": "policy",
         "interfaces/actions/mock-delta-gripper-v1.yaml": "action_interface",
         "interfaces/actions/libero-osc-pose-v1.yaml": "action_interface",
         "metrics/action-safe-v1.yaml": "metric_set",
         "protocols/libero-standard-v1.yaml": "protocol",
         "protocols/libero-smoke-v1.yaml": "protocol",
         "protocols/libero-oft-episode-v1.yaml": "protocol",
+        "protocols/libero-three-episodes-v1.yaml": "protocol",
+        "protocols/libero-oft-three-episodes-v1.yaml": "protocol",
         "protocols/smoke-v1.yaml": "protocol",
         "profiles/libero-bench-egl.yaml": "execution_profile",
         "profiles/libero-playground-glfw.yaml": "execution_profile",
@@ -94,6 +101,12 @@ def test_every_versioned_component_is_schema_valid():
         "experiments/libero10-openvla-vanilla-4bit-rpc-smoke.yaml": "experiment",
         "experiments/libero10-openvla-oft-rpc-episode.yaml": "experiment",
         "experiments/libero10-openvla-oft-rpc-five-episodes.yaml": "experiment",
+        "experiments/libero10-lora-full-three-per-task.yaml": "experiment",
+        "experiments/libero10-lora-8bit-three-per-task.yaml": "experiment",
+        "experiments/libero10-lora-4bit-three-per-task.yaml": "experiment",
+        "experiments/libero10-oft-full-three-per-task.yaml": "experiment",
+        "experiments/libero10-oft-8bit-three-per-task.yaml": "experiment",
+        "experiments/libero10-oft-4bit-three-per-task.yaml": "experiment",
     }
     for reference, kind in components.items():
         document = resolver().load_component(reference, kind)
@@ -209,6 +222,34 @@ def test_runtime_quantization_changes_scientific_hash(tmp_path):
     assert full.scientific_config_hash != quantized.scientific_config_hash
     assert full.policy_settings.method_descriptor.quantization == "none"
     assert quantized.policy_settings.method_descriptor.quantization == "4bit"
+
+
+@pytest.mark.parametrize(
+    ("method", "mode", "expected_quantization", "expected_action_mode"),
+    [
+        ("lora", "full", ModelQuantization.NONE, "receding_horizon"),
+        ("lora", "8bit", ModelQuantization.BITSANDBYTES_INT8, "receding_horizon"),
+        ("lora", "4bit", ModelQuantization.BITSANDBYTES_NF4_4BIT, "receding_horizon"),
+        ("oft", "full", ModelQuantization.NONE, "open_loop_chunk"),
+        ("oft", "8bit", ModelQuantization.BITSANDBYTES_INT8, "open_loop_chunk"),
+        ("oft", "4bit", ModelQuantization.BITSANDBYTES_NF4_4BIT, "open_loop_chunk"),
+    ],
+)
+def test_three_per_task_deploy_experiments_cover_all_libero10_tasks(
+    tmp_path, method, mode, expected_quantization, expected_action_mode
+):
+    resolved = resolver().resolve(
+        f"configs/experiments/libero10-{method}-{mode}-three-per-task.yaml",
+        local_profile=profile(tmp_path, suffix=f"{method}-{mode}"),
+        environment={},
+    )
+    assert resolved.benchmark_settings.suite_names == ("LIBERO-10",)
+    assert resolved.benchmark_settings.task_indices is None
+    assert resolved.protocol_settings.rollouts_per_task == 3
+    assert resolved.protocol_settings.maximum_episode_steps == 520
+    assert resolved.protocol_settings.action_execution_policy.mode.value == expected_action_mode
+    assert resolved.policy_settings.quantization is expected_quantization
+    assert resolved.scientific_config["components"]["benchmark"]["settings"]["task_indices"] == "all"
 
 
 def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):

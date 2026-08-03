@@ -38,7 +38,7 @@ def _arguments() -> argparse.Namespace:
         choices=("flash_attention_2",),
         default="flash_attention_2",
     )
-    parser.add_argument("--quantization", choices=("none", "4bit"), default="none")
+    parser.add_argument("--quantization", choices=("none", "8bit", "4bit"), default="none")
     return parser.parse_args()
 
 

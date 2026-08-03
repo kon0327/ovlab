@@ -22,6 +22,7 @@ from .method import (
 )
 from .observations import select_canonical_rgb
 from .prompt import OpenVlaPromptFormatter, OpenVlaPromptTemplate
+from .quantization import ModelQuantization
 from .performance import (
     CUDA_ALLOCATOR_SOURCE, INFERENCE_COMPUTE_ESTIMATOR, PERFORMANCE_TELEMETRY_SCHEMA,
     TRAINING_COMPUTE_ESTIMATOR, cuda_allocator_snapshot, estimated_inference_compute,
@@ -33,7 +34,7 @@ __all__ = [
     "CheckpointFileIdentity", "LiberoActionCodec", "LiberoActionChunkCodec", "LiberoActionCodecConfig", "OpenVlaActionCodecError",
     "OpenVlaArtifactForm", "OpenVlaMergeStatus", "OpenVlaMethodDescriptor", "OpenVlaMethodFamily",
     "OpenVlaCheckpointIdentity", "OpenVlaCommonError", "OpenVlaDecodedAction", "OpenVlaDecodedActionChunk",
-    "OpenVlaModelSource", "OpenVlaObservationError", "OpenVlaPromptFormatter", "OpenVlaRuntimeArtifact",
+    "ModelQuantization", "OpenVlaModelSource", "OpenVlaObservationError", "OpenVlaPromptFormatter", "OpenVlaRuntimeArtifact",
     "OpenVlaPromptTemplate", "action_specs_match", "libero_target_action_spec",
     "method_descriptor_from_registry", "select_canonical_rgb", "vanilla_base_method_descriptor",
     "CUDA_ALLOCATOR_SOURCE", "INFERENCE_COMPUTE_ESTIMATOR", "PERFORMANCE_TELEMETRY_SCHEMA",

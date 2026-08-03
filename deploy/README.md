@@ -18,13 +18,14 @@ For a command-oriented build and launch guide, see
 | `ovlab-dataset` | Explicit dataset acquisition, offline verification and checkpoint finalization | dependency-light CLI plus pinned archive support | model runtimes, LIBERO, benchmark runs and GPU |
 | `ovlab-training-openvla` | Offline full/LoRA OpenVLA training | Torch/CUDA, Transformers, PEFT, FlashAttention, TensorFlow/RLDS and pinned OpenVLA source | LIBERO runtime, benchmark runs, reporting and finalized-checkpoint write access |
 | `ovlab-policy-openvla` | Vanilla and merged-LoRA OpenVLA service | Torch 2.2.0/CUDA 12.1, Transformers 4.40.1, PEFT 0.11.1, BitsAndBytes 0.43.1, FlashAttention 2.5.5 and pinned OpenVLA source | LIBERO, Robosuite, MuJoCo, datasets and run output |
-| `ovlab-policy-openvla-oft` | OpenVLA-OFT service | The distinct OFT Transformers commit, Torch/CUDA, FlashAttention and pinned OFT source | LIBERO, Robosuite, MuJoCo, datasets and run output |
+| `ovlab-policy-openvla-oft` | OpenVLA-OFT service | The distinct OFT Transformers commit, Torch/CUDA, BitsAndBytes 0.43.1, FlashAttention and pinned OFT source | LIBERO, Robosuite, MuJoCo, datasets and run output |
 
-Vanilla and merged-LoRA policies accept `runtime.quantization: none | 4bit`.
-The `4bit` identity denotes the pinned BitsAndBytes NF4 inference recipe with
-BF16 compute, FP16 storage and double quantization. Applying it to the published
-merged-LoRA full weights is quantized merged-LoRA inference; it is not evidence
-that the adapter was trained with QLoRA.
+Vanilla, merged-LoRA and OFT policies accept
+`runtime.quantization: none | 8bit | 4bit`. The `8bit` identity denotes the
+BitsAndBytes LLM.int8 runtime, while `4bit` denotes the pinned NF4 recipe with
+BF16 compute, FP16 storage and double quantization. Applying either mode to a
+published fine-tuned artifact is inference-time quantization; it is not
+evidence that the model or adapter was trained with QLoRA.
 
 QuIC remains descriptor-only. There is no QuIC image, Compose profile, provider
 selection, or claim of runtime readiness in Gate H.

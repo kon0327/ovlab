@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from ovlab_benchctl import ConfigResolver
-from ovlab_openvla_common import OpenVlaModelSource
+from ovlab_openvla_common import ModelQuantization, OpenVlaModelSource
 from ovlab_remote_policy.service import PolicyService
 
 from .adapter import OpenVlaOftAdapter
@@ -58,6 +58,7 @@ def main() -> int:
     parser.add_argument("--registry", required=True)
     parser.add_argument("--resource-id", default="openvla-oft-7b-finetuned-libero-10")
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--quantization", choices=("none", "8bit", "4bit"), default="none")
     args = parser.parse_args()
     if os.environ.get("HF_HUB_OFFLINE") != "1" or os.environ.get("TRANSFORMERS_OFFLINE") != "1":
         raise RuntimeError("OpenVLA-OFT service requires HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1")
@@ -69,7 +70,10 @@ def main() -> int:
     entry = registry["checkpoints"][args.resource_id]
     artifact = OpenVlaOftArtifact.from_registry_entry(args.resource_id, entry)
     source = OpenVlaModelSource(entry["repo_id"], entry["revision"], entry["expected_sha256"])
-    settings = OpenVlaOftSettings(source, artifact, device=args.device)
+    settings = OpenVlaOftSettings(
+        source, artifact, device=args.device,
+        quantization=ModelQuantization(args.quantization),
+    )
     PolicyService(args.socket, OpenVlaOftAdapter(settings), identity_provider=_identity).serve()
     return 0
 

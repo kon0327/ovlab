@@ -95,7 +95,7 @@ class ComposeDeployment:
         "benchmark": "resolved-checkpoint-config-bundle-v2",
         "reporting": "canonical-readonly-reporting-v1",
         "policy-openvla": "resolved-checkpoint-quantization-config-bundle-v2",
-        "policy-openvla-oft": "resolved-checkpoint-config-bundle-v2",
+        "policy-openvla-oft": "resolved-checkpoint-quantization-config-bundle-v2",
     }
     _PROFILE_IMAGES = {
         "openvla": (

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added shared OpenVLA inference quantization modes `none`, BitsAndBytes 8-bit
+  LLM.int8 and 4-bit NF4 across merged-LoRA and OpenVLA-OFT services. Added six
+  portable LIBERO-10 experiment configurations covering all ten tasks with
+  three complete episodes per task for both methods and all three modes.
+- Pinned the OFT container to the dispatch-compatible Accelerate 0.30.1 and
+  BitsAndBytes 0.43.1 pair, preventing a post-load `.to()` call that is invalid
+  for quantized models in the pinned OFT Transformers fork.
 - Added the versioned `ovlab.performance-telemetry/v1` contract for inference
   and training, including PyTorch CUDA allocator allocated/reserved/peak memory,
   exact total/trainable/frozen/adapter parameter classes and explicitly

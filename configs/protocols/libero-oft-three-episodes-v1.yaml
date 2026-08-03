@@ -1,0 +1,7 @@
+schema_version: "0.1.0"
+kind: protocol
+extends: libero-oft-episode-v1.yaml
+id: libero-oft-three-episodes-v1
+
+execution:
+  rollouts_per_task: 3

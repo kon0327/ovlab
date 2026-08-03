@@ -51,7 +51,7 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
         assert 'io.github.kon0327.ovlab.build-target="production"' in text
         expected_contract = (
             "resolved-checkpoint-quantization-config-bundle-v2"
-            if name == "Dockerfile.openvla"
+            if name in {"Dockerfile.openvla", "Dockerfile.openvla-oft"}
             else "canonical-readonly-reporting-v1"
             if name == "Dockerfile.reporting"
             else "resolved-checkpoint-config-bundle-v2"
@@ -79,6 +79,16 @@ def test_role_closures_do_not_cross_heavy_runtime_boundaries():
     assert "mujoco" not in reporting.lower()
     assert "resolved-checkpoint" not in reporting
     assert "openvla-quic" not in COMPOSE.lower()
+
+
+def test_oft_quantization_stack_pins_the_dispatch_compatible_accelerate_version():
+    source = (ROOT / "deploy/locks/openvla-oft.in").read_text(encoding="utf-8")
+    requirements = (ROOT / "deploy/locks/openvla-oft.requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    for document in (source, requirements):
+        assert "accelerate==0.30.1" in document
+        assert "bitsandbytes==0.43.1" in document
 
 
 def test_compose_is_socket_only_offline_and_least_privilege():

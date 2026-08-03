@@ -246,6 +246,45 @@ def test_nf4_loader_recipe_and_quantized_placement_avoid_model_to(tmp_path):
     assert model.to_calls == []
 
 
+def test_int8_loader_recipe_and_quantized_placement_avoid_model_to(tmp_path):
+    class Torch:
+        bfloat16 = "bf16"
+        float16 = "fp16"
+        float32 = "fp32"
+
+    class QuantizationConfig:
+        def __init__(self, **kwargs):
+            self.values = kwargs
+
+    class Model:
+        def __init__(self):
+            self.eval_count = 0
+            self.to_calls = []
+
+        def eval(self):
+            self.eval_count += 1
+
+        def to(self, device):
+            self.to_calls.append(device)
+
+    descriptor = replace(vanilla_base_method_descriptor(), quantization="8bit")
+    settings = OpenVlaVanillaSettings(
+        OpenVlaModelSource(str(tmp_path)),
+        "bridge_orig",
+        quantization=ModelQuantization.BITSANDBYTES_INT8,
+        method_descriptor=descriptor,
+    )
+    kwargs = HuggingFaceOpenVlaRuntime._model_load_kwargs(
+        settings, Torch, QuantizationConfig
+    )
+    assert kwargs["torch_dtype"] == "bf16"
+    assert kwargs["quantization_config"].values == {"load_in_8bit": True}
+    model = Model()
+    HuggingFaceOpenVlaRuntime._prepare_model_for_inference(model, settings)
+    assert model.eval_count == 1
+    assert model.to_calls == []
+
+
 def test_quantized_input_dtype_comes_from_vision_backbone(tmp_path):
     class Parameter:
         dtype = "vision-fp16"

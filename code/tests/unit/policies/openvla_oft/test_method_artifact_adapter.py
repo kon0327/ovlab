@@ -13,8 +13,8 @@ from ovlab_core.contracts import (
     InstructionId, InstructionSource, PolicyObservation, RunContext, RunId, StepId, TaskId,
     ProprioceptiveObservation,
 )
-from ovlab_openvla_common import OpenVlaDecodedActionChunk
-from ovlab_openvla_oft import OpenVlaOftAdapter, OpenVlaOftArtifact, validate_oft_method
+from ovlab_openvla_common import ModelQuantization, OpenVlaDecodedActionChunk
+from ovlab_openvla_oft import OpenVlaOftAdapter, OpenVlaOftArtifact, OpenVlaOftRuntime, validate_oft_method
 from ovlab_openvla_oft.runtime import OftRuntimePrediction
 from ovlab_openvla_oft.runtime import OPENVLA_OFT_GIT_COMMIT
 
@@ -84,6 +84,66 @@ def test_wrong_method_classifications_are_rejected(field, value):
         validate_oft_method(method)
 
 
+@pytest.mark.parametrize(
+    ("quantization", "expected"),
+    [
+        (ModelQuantization.NONE, None),
+        (ModelQuantization.BITSANDBYTES_INT8, {"load_in_8bit": True}),
+        (
+            ModelQuantization.BITSANDBYTES_NF4_4BIT,
+            {
+                "load_in_4bit": True,
+                "bnb_4bit_quant_type": "nf4",
+                "bnb_4bit_compute_dtype": "bf16",
+                "bnb_4bit_use_double_quant": True,
+            },
+        ),
+    ],
+)
+def test_oft_runtime_uses_the_shared_quantization_recipes(quantization, expected):
+    class Torch:
+        bfloat16 = "bf16"
+        float16 = "fp16"
+
+    class QuantizationConfig:
+        def __init__(self, **kwargs):
+            self.values = kwargs
+
+    settings = replace(_resolved().policy_settings, quantization=quantization)
+    kwargs = OpenVlaOftRuntime._model_load_kwargs(settings, Torch, QuantizationConfig)
+    if expected is None:
+        assert "quantization_config" not in kwargs
+        assert kwargs["torch_dtype"] == "bf16"
+    else:
+        assert kwargs["quantization_config"].values == expected
+        # The official OFT preprocessing path always casts pixel inputs to BF16,
+        # so non-quantized vision components must retain BF16 in both modes.
+        assert kwargs["torch_dtype"] == "bf16"
+
+
+@pytest.mark.parametrize(
+    "quantization",
+    [ModelQuantization.BITSANDBYTES_INT8, ModelQuantization.BITSANDBYTES_NF4_4BIT],
+)
+def test_quantized_oft_backbone_is_not_moved_after_bitsandbytes_placement(quantization):
+    class Model:
+        def __init__(self):
+            self.eval_count = 0
+            self.to_calls = []
+
+        def eval(self):
+            self.eval_count += 1
+
+        def to(self, device):
+            self.to_calls.append(device)
+
+    model = Model()
+    settings = replace(_resolved().policy_settings, quantization=quantization)
+    OpenVlaOftRuntime._prepare_backbone(model, settings)
+    assert model.eval_count == 1
+    assert model.to_calls == []
+
+
 class FakeOftRuntime:
     def __init__(self):
         self.load_counts = {"backbone": 0, "processor": 0, "published_peft_adapter": 0,
@@ -142,6 +202,8 @@ def test_adapter_negotiates_native_inputs_and_returns_exact_chunk_with_one_codec
     capabilities = adapter.initialize(run)
     assert capabilities.minimum_action_horizon == capabilities.maximum_action_horizon == 8
     assert not capabilities.supports_single_action and capabilities.supports_action_chunks
+    assert capabilities.metadata["method_descriptor"]["quantization"] == "none"
+    assert capabilities.metadata["method_descriptor"]["training_quantization"] == "none"
     assert [item.name for item in capabilities.observation_requirements.images] == [
         "camera.primary.rgb", "camera.wrist.rgb",
     ]

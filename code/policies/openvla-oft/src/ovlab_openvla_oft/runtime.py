@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from ovlab_openvla_common import (
-    OpenVlaDecodedActionChunk, cuda_allocator_snapshot, estimated_inference_compute,
+    ModelQuantization, OpenVlaDecodedActionChunk, cuda_allocator_snapshot, estimated_inference_compute,
     parameter_inventory, performance_sample, reset_cuda_peak,
 )
 
@@ -70,12 +70,40 @@ class OpenVlaOftRuntime:
     def _imports():
         import torch
         from huggingface_hub import snapshot_download
-        from transformers import AutoModelForVision2Seq, AutoProcessor
+        from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
         from experiments.robot.openvla_utils import get_vla_action, load_component_state_dict
         from prismatic.models.action_heads import L1RegressionActionHead
         from prismatic.models.projectors import ProprioProjector
-        return (torch, snapshot_download, AutoModelForVision2Seq, AutoProcessor, get_vla_action,
-                load_component_state_dict, L1RegressionActionHead, ProprioProjector)
+        return (torch, snapshot_download, AutoModelForVision2Seq, AutoProcessor,
+                BitsAndBytesConfig, get_vla_action, load_component_state_dict,
+                L1RegressionActionHead, ProprioProjector)
+
+    @staticmethod
+    def _model_load_kwargs(settings, torch, bits_and_bytes_config):
+        kwargs = {
+            "torch_dtype": torch.bfloat16,
+            "low_cpu_mem_usage": True,
+            "trust_remote_code": True,
+            "local_files_only": True,
+        }
+        if settings.attention_implementation is not None:
+            kwargs["attn_implementation"] = settings.attention_implementation
+        if settings.quantization is ModelQuantization.BITSANDBYTES_INT8:
+            kwargs["quantization_config"] = bits_and_bytes_config(load_in_8bit=True)
+        elif settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT:
+            kwargs["quantization_config"] = bits_and_bytes_config(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+        return kwargs
+
+    @staticmethod
+    def _prepare_backbone(model, settings) -> None:
+        model.eval()
+        if settings.quantization is ModelQuantization.NONE:
+            model.to(settings.device)
 
     def _sync(self) -> None:
         if self._torch is not None and self._torch.cuda.is_available():
@@ -84,8 +112,8 @@ class OpenVlaOftRuntime:
     def load(self, settings: OpenVlaOftSettings) -> dict[str, object]:
         if self._model is not None:
             raise RuntimeError("OFT runtime components may be loaded only once")
-        (torch, snapshot_download, AutoModel, AutoProcessor, get_vla_action,
-         load_state, L1Head, ProprioProjector) = self._imports()
+        (torch, snapshot_download, AutoModel, AutoProcessor, BitsAndBytesConfig,
+         get_vla_action, load_state, L1Head, ProprioProjector) = self._imports()
         if settings.model.local_path is not None:
             snapshot = Path(settings.model.local_path).resolve()
             if not snapshot.is_dir():
@@ -95,12 +123,7 @@ class OpenVlaOftRuntime:
                 repo_id=settings.model.source, revision=settings.model.revision, local_files_only=True,
             )).resolve()
         verified = settings.artifact.verify(snapshot)
-        kwargs = {
-            "torch_dtype": torch.bfloat16, "low_cpu_mem_usage": True,
-            "trust_remote_code": True, "local_files_only": True,
-        }
-        if settings.attention_implementation is not None:
-            kwargs["attn_implementation"] = settings.attention_implementation
+        kwargs = self._model_load_kwargs(settings, torch, BitsAndBytesConfig)
         load_started = self._clock_ns()
         processor = AutoProcessor.from_pretrained(str(snapshot), trust_remote_code=True, local_files_only=True)
         self.load_counts["processor"] += 1
@@ -110,9 +133,17 @@ class OpenVlaOftRuntime:
         model.norm_stats = json.loads((snapshot / "dataset_statistics.json").read_text(encoding="utf-8"))
         if settings.unnorm_key not in model.norm_stats:
             raise RuntimeError(f"OFT normalization key is absent: {settings.unnorm_key}")
-        model.eval().to(settings.device)
-        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
-            raise RuntimeError("Gate E OFT runtime must not be quantized")
+        self._prepare_backbone(model, settings)
+        loaded_in_4bit = bool(getattr(model, "is_loaded_in_4bit", False))
+        loaded_in_8bit = bool(getattr(model, "is_loaded_in_8bit", False))
+        if settings.quantization is ModelQuantization.NONE and (loaded_in_4bit or loaded_in_8bit):
+            raise RuntimeError("unquantized OFT runtime unexpectedly loaded quantized weights")
+        if settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT and not loaded_in_4bit:
+            raise RuntimeError("4bit OFT runtime did not load BitsAndBytes 4-bit weights")
+        if settings.quantization is ModelQuantization.BITSANDBYTES_INT8 and not loaded_in_8bit:
+            raise RuntimeError("8bit OFT runtime did not load BitsAndBytes 8-bit weights")
+        if loaded_in_4bit and loaded_in_8bit:
+            raise RuntimeError("OFT backbone cannot be both 4-bit and 8-bit")
         if any("lora_" in name.lower() for name, _ in model.named_parameters()):
             raise RuntimeError("published OFT runtime must use merged backbone weights, not active PEFT")
         action_head = L1Head(input_dim=model.llm_dim, hidden_dim=model.llm_dim, action_dim=7)
@@ -153,7 +184,8 @@ class OpenVlaOftRuntime:
             "cuda_memory_after_load": load_memory,
             "runtime_active_adapter": False,
             "backbone_merge_status": "merged",
-            "quantization": "none",
+            "quantized": settings.quantization is not ModelQuantization.NONE,
+            "quantization": settings.quantization.configuration(),
             "verified_artifact": verified,
             "action_statistics_identity": "sha256:" + hashlib.sha256(
                 json.dumps(
@@ -180,7 +212,9 @@ class OpenVlaOftRuntime:
         cfg = SimpleNamespace(
             pretrained_checkpoint="immutable-local-snapshot", use_l1_regression=True,
             use_diffusion=False, use_film=False, num_images_in_input=2, use_proprio=True,
-            load_in_8bit=False, load_in_4bit=False, center_crop=True,
+            load_in_8bit=self._settings.quantization is ModelQuantization.BITSANDBYTES_INT8,
+            load_in_4bit=self._settings.quantization is ModelQuantization.BITSANDBYTES_NF4_4BIT,
+            center_crop=True,
             num_open_loop_steps=8, unnorm_key=self._settings.unnorm_key,
         )
         try:

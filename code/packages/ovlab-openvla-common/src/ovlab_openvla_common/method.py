@@ -26,7 +26,7 @@ class OpenVlaMergeStatus(str, Enum):
     MERGED = "merged"
 
 
-SUPPORTED_RUNTIME_QUANTIZATIONS = frozenset({"none", "4bit"})
+SUPPORTED_RUNTIME_QUANTIZATIONS = frozenset({"none", "8bit", "4bit"})
 
 
 def _plain(value):

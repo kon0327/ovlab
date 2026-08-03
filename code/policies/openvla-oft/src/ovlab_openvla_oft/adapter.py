@@ -48,6 +48,9 @@ class OpenVlaOftAdapter(PolicyAdapter):
         method = {**self.settings.artifact.method, **{
             "method_name": "OpenVLA-OFT", "published_unmerged_adapter": "available",
             "runtime_active_adapter": False, "backbone_merge_status": "merged",
+            "training_quantization": self.settings.artifact.method["quantization"],
+            "quantization": self.settings.quantization.value,
+            "runtime_quantization": self.settings.quantization.configuration(),
             "checkpoint_identity": self.settings.artifact.as_metadata(),
             "load_counts": dict(self.runtime.load_counts),
             "parameter_counts": dict(self.settings.artifact.parameter_counts),

@@ -83,6 +83,21 @@ def test_quantization_is_explicit_and_part_of_settings_identity(tmp_path):
             quantization=ModelQuantization.BITSANDBYTES_NF4_4BIT,
         )
 
+    int8_descriptor = replace(vanilla_base_method_descriptor(), quantization="8bit")
+    int8 = OpenVlaVanillaSettings(
+        source,
+        "bridge_orig",
+        quantization=ModelQuantization.BITSANDBYTES_INT8,
+        method_descriptor=int8_descriptor,
+    )
+    assert int8.canonical_dict()["quantization"] == {
+        "backend": "bitsandbytes",
+        "bits": 8,
+        "compute_dtype": "bfloat16",
+        "mode": "8bit",
+        "quant_type": "llm_int8",
+    }
+
 
 def test_import_is_torch_free():
     assert "torch" not in sys.modules
