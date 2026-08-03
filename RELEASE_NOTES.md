@@ -27,6 +27,10 @@
   group-read-only. `data delete` performs a complete recursive permission
   preflight before removing any selected target and reports ownership problems
   as a typed safety error.
+- Corrected OCI image provenance metadata: OVLAB-specific labels now use the
+  user-owned `io.github.kon0327.ovlab` namespace instead of the erroneous CVUT
+  placeholder, and standard OCI author metadata identifies Jiří Konečný of
+  VSB – Technical University of Ostrava.
 
 ## 0.2.0 — 2026-07-31
 

@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ovlab-openvla-quic"
 version = "0.2.0"
 description = "Contract-only QuIC-PEFT and QuIC-WC OVLAB wrappers"
+authors = [{ name = "Jiří Konečný" }]
 requires-python = ">=3.10"
 dependencies = [
   "ovlab-core>=0.2.0",

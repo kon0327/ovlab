@@ -11,15 +11,16 @@ ARG OVLAB_VERSION=0.2.0
 
 LABEL org.opencontainers.image.title="OVLAB dataset acquisition and finalization" \
       org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
+      org.opencontainers.image.authors="Jiří Konečný, VSB - Technical University of Ostrava" \
       org.opencontainers.image.revision="$OVLAB_REVISION" \
       org.opencontainers.image.version="$OVLAB_VERSION" \
       org.opencontainers.image.licenses="NOASSERTION" \
-      cz.cvut.ovlab.role="dataset" \
-      cz.cvut.ovlab.deployment.contract="dataset-write-only-or-finalizer-v1" \
-      cz.cvut.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
-      cz.cvut.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
-      cz.cvut.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
-      cz.cvut.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
+      io.github.kon0327.ovlab.role="dataset" \
+      io.github.kon0327.ovlab.deployment.contract="dataset-write-only-or-finalizer-v1" \
+      io.github.kon0327.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
+      io.github.kon0327.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
+      io.github.kon0327.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
+      io.github.kon0327.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
 
 ENV OVLAB_ROOT=/opt/ovlab \
     OVLAB_IMAGE_ROLE=dataset \

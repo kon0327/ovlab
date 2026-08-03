@@ -2,6 +2,8 @@
 
 OpenVLABenchmark (OVLAB) is a reproducible experimental framework for evaluating OpenVLA-derived Vision–Language–Action policies, initially with the LIBERO benchmark.
 
+OVLAB is authored by **Jiří Konečný**, VSB – Technical University of Ostrava.
+
 Current project version: **0.2.0**. See the complete
 [`release notes`](RELEASE_NOTES.md) for implemented capabilities, compatibility
 boundaries and current scope limits.

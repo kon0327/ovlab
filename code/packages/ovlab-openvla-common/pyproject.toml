@@ -7,6 +7,7 @@ name = "ovlab-openvla-common"
 version = "0.2.0"
 description = "Dependency-light OpenVLA contracts and codecs for OVLAB"
 readme = "README.md"
+authors = [{ name = "Jiří Konečný" }]
 requires-python = ">=3.10"
 dependencies = ["ovlab-core>=0.2.0", "numpy>=1.24"]
 

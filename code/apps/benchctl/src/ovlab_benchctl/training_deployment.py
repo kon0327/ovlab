@@ -10,6 +10,7 @@ import uuid
 
 from .application import OvlabApplication
 from .datasets import DatasetRequest, DatasetStore, LiberoDatasetBridge
+from .image_metadata import IMAGE_ROLE_LABEL
 from .strict_yaml import load
 from .training_errors import DatasetUnavailableError, TrainingRuntimeError
 from .training_profiles import TrainingProfile, TrainingPlanner
@@ -59,8 +60,11 @@ class TrainingDeployment:
             raise TrainingRuntimeError(f"required image is unavailable: {image}")
         labels_payload, digest = completed.stdout.strip().split("|", 1)
         labels = json.loads(labels_payload)
-        if labels.get("cz.cvut.ovlab.role") != expected_role:
-            raise TrainingRuntimeError(f"image {image} has role {labels.get('cz.cvut.ovlab.role')!r}, expected {expected_role!r}")
+        if labels.get(IMAGE_ROLE_LABEL) != expected_role:
+            raise TrainingRuntimeError(
+                f"image {image} has role {labels.get(IMAGE_ROLE_LABEL)!r}, "
+                f"expected {expected_role!r}"
+            )
         return image, digest
 
     def _explicit_dataset_acquisition(self, profile: TrainingProfile, dataset_image: str) -> None:

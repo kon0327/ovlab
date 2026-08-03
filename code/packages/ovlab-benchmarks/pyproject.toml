@@ -7,6 +7,7 @@ name = "ovlab-benchmarks"
 version = "0.2.0"
 description = "Abstract benchmark adapter boundary for OpenVLABenchmark"
 readme = "README.md"
+authors = [{ name = "Jiří Konečný" }]
 requires-python = ">=3.10"
 dependencies = ["ovlab-core>=0.2.0"]
 

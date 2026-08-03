@@ -15,6 +15,7 @@ import sys
 from .schema import validate
 from .strict_yaml import load
 from .config_bundle import ConfigBundleBuilder
+from .image_metadata import IMAGE_CONTRACT_LABEL, SOURCE_MANIFEST_LABEL
 
 
 class ComposeDeploymentError(RuntimeError):
@@ -88,8 +89,8 @@ class ComposeDeployment:
         "egl": "profiles/libero-bench-egl.yaml",
         "glfw": "profiles/libero-playground-glfw.yaml",
     }
-    _IMAGE_CONTRACT_LABEL = "cz.cvut.ovlab.deployment.contract"
-    _SOURCE_MANIFEST_LABEL = "cz.cvut.ovlab.source-manifest.sha256"
+    _IMAGE_CONTRACT_LABEL = IMAGE_CONTRACT_LABEL
+    _SOURCE_MANIFEST_LABEL = SOURCE_MANIFEST_LABEL
     _IMAGE_CONTRACTS = {
         "benchmark": "resolved-checkpoint-config-bundle-v2",
         "reporting": "canonical-readonly-reporting-v1",

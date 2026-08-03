@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ovlab-openvla-oft"
 version = "0.2.0"
 description = "OpenVLA-OFT methodological reference adapter"
+authors = [{ name = "Jiří Konečný" }]
 requires-python = ">=3.10"
 dependencies = [
   "ovlab-core>=0.2.0",

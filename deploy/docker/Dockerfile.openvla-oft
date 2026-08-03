@@ -26,20 +26,21 @@ ARG OVLAB_VERSION=0.2.0
 
 LABEL org.opencontainers.image.title="OVLAB OpenVLA-OFT policy service" \
       org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
+      org.opencontainers.image.authors="Jiří Konečný, VSB - Technical University of Ostrava" \
       org.opencontainers.image.revision="$OVLAB_REVISION" \
       org.opencontainers.image.version="$OVLAB_VERSION" \
       org.opencontainers.image.licenses="NOASSERTION" \
       org.opencontainers.image.description="Offline OpenVLA-OFT service with its distinct dependency closure; no LIBERO" \
-      cz.cvut.ovlab.role="policy-openvla-oft" \
-      cz.cvut.ovlab.build-target="production" \
-      cz.cvut.ovlab.deployment.contract="resolved-checkpoint-config-bundle-v2" \
-      cz.cvut.ovlab.python.version="3.10.20" \
-      cz.cvut.ovlab.cuda.version="12.1" \
-      cz.cvut.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1-oft-bc339d9;peft=0.11.1;flash-attn=2.5.5" \
-      cz.cvut.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
-      cz.cvut.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
-      cz.cvut.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
-      cz.cvut.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
+      io.github.kon0327.ovlab.role="policy-openvla-oft" \
+      io.github.kon0327.ovlab.build-target="production" \
+      io.github.kon0327.ovlab.deployment.contract="resolved-checkpoint-config-bundle-v2" \
+      io.github.kon0327.ovlab.python.version="3.10.20" \
+      io.github.kon0327.ovlab.cuda.version="12.1" \
+      io.github.kon0327.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1-oft-bc339d9;peft=0.11.1;flash-attn=2.5.5" \
+      io.github.kon0327.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
+      io.github.kon0327.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
+      io.github.kon0327.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
+      io.github.kon0327.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
 
 ENV OVLAB_ROOT=/opt/ovlab \
     OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \

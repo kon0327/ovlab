@@ -7,6 +7,7 @@ name = "ovlab-benchctl"
 version = "0.2.0"
 description = "Strict configuration composition root for OpenVLABenchmark"
 readme = "README.md"
+authors = [{ name = "Jiří Konečný" }]
 requires-python = ">=3.10"
 dependencies = [
   "ovlab-core>=0.2.0",

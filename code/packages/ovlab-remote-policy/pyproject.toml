@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ovlab-remote-policy"
 version = "0.2.0"
 description = "Versioned local RPC boundary for OVLAB policy adapters"
+authors = [{ name = "Jiří Konečný" }]
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24,<3",

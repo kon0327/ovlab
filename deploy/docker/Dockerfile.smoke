@@ -4,8 +4,9 @@ FROM python:3.10.20-slim-bookworm@sha256:5cc3381b18ec240e4462510648ed7970917ac8e
 ARG OVLAB_VERSION=0.2.0
 
 LABEL org.opencontainers.image.version="$OVLAB_VERSION" \
-      cz.cvut.ovlab.role="test-only-transport-smoke" \
-      cz.cvut.ovlab.production="false"
+      org.opencontainers.image.authors="Jiří Konečný, VSB - Technical University of Ostrava" \
+      io.github.kon0327.ovlab.role="test-only-transport-smoke" \
+      io.github.kon0327.ovlab.production="false"
 ENV OVLAB_ROOT=/opt/ovlab \
     OVLAB_VERSION=$OVLAB_VERSION \
     OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \
