@@ -764,16 +764,16 @@ class OvlabApplication:
     def data_list(self, *, kind="all", archived=False, detail=False):
         return self._data_manager().list(kind=kind, archived=archived, detail=detail)
 
-    def data_preview(self, action, **selector):
+    def data_preview(self, action, *, force=False, **selector):
         if action not in {"archive", "delete"}:
             raise ValueError("data action must be archive or delete")
-        return self._data_manager().preview(action, **selector)
+        return self._data_manager().preview(action, force=force, **selector)
 
     def data_archive(self, **selector):
         return self._data_manager().archive(**selector)
 
-    def data_delete(self, **selector):
-        return self._data_manager().delete(**selector)
+    def data_delete(self, *, force=False, **selector):
+        return self._data_manager().delete(force=force, **selector)
 
     # Gate I dataset, training, and checkpoint application services. These
     # compose domain owners but never import model runtimes during read-only work.

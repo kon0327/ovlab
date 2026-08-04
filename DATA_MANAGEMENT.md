@@ -152,6 +152,17 @@ Delete every benchmark run, derived report, and export:
 ```
 
 As with archival, an active or incomplete item refuses the complete operation.
+To deliberately delete an interrupted legacy run or another incomplete artifact,
+add `--force` after first reviewing the forced dry-run:
+
+```bash
+./ovlab data delete --run RUN_ID --force --dry-run
+./ovlab data delete --run RUN_ID --force
+```
+
+`--force` bypasses only the artifact-state check. It does not bypass confirmation,
+root-containment checks, symbolic-link rejection, or the recursive permission
+preflight, and it is not accepted by `data archive`.
 
 Deletion is irreversible and always requires interactive confirmation or
 `--yes`. Deleting a run does not implicitly delete its report or isolated
@@ -171,6 +182,11 @@ The manager:
   repository;
 - does not delete archived data. Archive retention and restore commands remain
   separate future operations.
+
+A benchmark stopped by SIGINT or SIGTERM is finalized with run status `aborted`
+and an `aborted` terminal trace for the in-progress episode. Such a finalized run
+can be listed, inspected, archived, or deleted normally. `--force` is primarily
+for older or externally killed runs that never received a final manifest.
 
 Before deletion, OVLAB checks write and execute permission on every selected
 directory. The complete operation is rejected before `rmtree` starts if even

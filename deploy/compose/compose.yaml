@@ -65,6 +65,7 @@ services:
   benchmark-openvla:
     <<: *policy-security
     profiles: [openvla]
+    stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
     command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs]
     environment:
@@ -151,6 +152,7 @@ services:
   benchmark-oft:
     <<: *policy-security
     profiles: [oft]
+    stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
     command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs]
     environment:

@@ -9,6 +9,7 @@ class RunnerState(str, Enum):
     CONNECTED = "connected"
     RUNNING = "running"
     COMPLETED = "completed"
+    ABORTED = "aborted"
     FAILED = "failed"
     CLOSED = "closed"
 

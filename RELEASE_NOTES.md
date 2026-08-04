@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Finalize user-interrupted benchmark executions as `aborted`, including the
+  in-progress episode and immutable run manifest. Docker benchmark services now
+  receive a bounded shutdown grace period, and `data delete --force` can remove
+  legacy/incomplete artifacts without bypassing path, symlink, confirmation, or
+  permission safeguards.
 - Added shared OpenVLA inference quantization modes `none`, BitsAndBytes 8-bit
   LLM.int8 and 4-bit NF4 across merged-LoRA and OpenVLA-OFT services. Added six
   portable LIBERO-10 experiment configurations covering all ten tasks with

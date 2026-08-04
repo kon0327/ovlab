@@ -161,7 +161,14 @@ class DataManager:
     def _run_state(path: Path) -> str:
         if (path / "manifest.completed.json").is_file():
             return "completed"
-        if (path / "manifest.failed.json").is_file():
+        failed = path / "manifest.failed.json"
+        if failed.is_file():
+            try:
+                status = json.loads(failed.read_text(encoding="utf-8")).get("status")
+            except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+                status = None
+            if status in {"aborted", "interrupted"}:
+                return "aborted"
             return "failed"
         return "active-or-incomplete"
 
@@ -319,6 +326,7 @@ class DataManager:
     def select(
         self, *, run_id: str | None = None, report_id: str | None = None,
         export_id: str | None = None, all_data: bool = False,
+        allow_incomplete: bool = False,
     ) -> tuple[DataTarget, ...]:
         selected = sum(
             value is not None for value in (run_id, report_id, export_id)
@@ -340,15 +348,17 @@ class DataManager:
         if not targets:
             raise DataSourceUnavailableError("the selected data set is empty")
         for target in targets:
-            if target.state in {"active-or-incomplete", "incomplete"}:
+            if not allow_incomplete and target.state in {"active-or-incomplete", "incomplete"}:
                 raise DataSafetyError(
                     f"refusing to modify {target.kind} {target.identifier!r} in state {target.state!r}"
                 )
             _directory_inventory(target.path, hashes=False)
         return tuple(targets)
 
-    def preview(self, action: str, **selector) -> dict[str, object]:
-        targets = self.select(**selector)
+    def preview(self, action: str, *, force: bool = False, **selector) -> dict[str, object]:
+        if force and action != "delete":
+            raise DataSafetyError("--force is supported only for delete operations")
+        targets = self.select(allow_incomplete=force, **selector)
         if action == "delete":
             self._require_delete_permissions(targets)
         return {
@@ -356,13 +366,14 @@ class DataManager:
             "action": action,
             "status": "planned",
             "dry_run": True,
+            "force": force,
             "target_count": len(targets),
             "targets": [target.document(detail=False) for target in targets],
             "archive_root": str(self.archive_root),
         }
 
-    def delete(self, **selector) -> dict[str, object]:
-        targets = self.select(**selector)
+    def delete(self, *, force: bool = False, **selector) -> dict[str, object]:
+        targets = self.select(allow_incomplete=force, **selector)
         self._require_delete_permissions(targets)
         deleted = []
         for target in targets:
@@ -377,6 +388,7 @@ class DataManager:
         return {
             "schema_version": DATA_OPERATION_SCHEMA,
             "action": "delete", "status": "completed", "dry_run": False,
+            "force": force,
             "target_count": len(deleted), "targets": deleted,
             "archive_root": str(self.archive_root),
         }

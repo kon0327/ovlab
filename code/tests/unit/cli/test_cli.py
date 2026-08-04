@@ -9,10 +9,12 @@ import subprocess
 import sys
 
 import pytest
+import ovlab_benchctl.cli as cli_module
 
 from ovlab_benchctl.application import OvlabApplication
 from ovlab_benchctl.cli import (
-    ExitCode, _SUMMARY_FIELDS, _classify, _compact, _configured_artifact_umask, _parser,
+    ExitCode, _SUMMARY_FIELDS, _classify, _compact, _configured_artifact_umask,
+    _dispatch, _parser,
 )
 from ovlab_benchctl.datasets import DatasetRequest, DatasetStore
 from ovlab_benchctl.run_references import (
@@ -87,6 +89,37 @@ def test_dataset_version_does_not_trigger_global_cli_version():
     ])
     assert fetched.show_version is False and fetched.version == "1"
     assert imported.show_version is False and imported.version == "1"
+
+
+def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
+    events = []
+
+    class Application:
+        def run(self, config, *, output_root=None):
+            events.append(("run", config, output_root))
+            return {"status": "completed"}
+
+    monkeypatch.setattr(cli_module, "_application", lambda: Application())
+    monkeypatch.setattr(
+        cli_module, "_install_interrupt_handlers",
+        lambda: events.append(("install",)) or {"previous": "handlers"},
+    )
+    monkeypatch.setattr(
+        cli_module, "_restore_handlers",
+        lambda previous: events.append(("restore", previous)),
+    )
+
+    result, json_mode, render = _dispatch(
+        _parser().parse_args(["run", "configs/experiments/mock-e2e-smoke.yaml"])
+    )
+
+    assert result == {"status": "completed"}
+    assert json_mode is False and render is None
+    assert events == [
+        ("install",),
+        ("run", "configs/experiments/mock-e2e-smoke.yaml", None),
+        ("restore", {"previous": "handlers"}),
+    ]
 
 
 @pytest.mark.parametrize("arguments", [

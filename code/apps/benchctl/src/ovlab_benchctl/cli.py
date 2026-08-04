@@ -237,10 +237,18 @@ def _parser() -> argparse.ArgumentParser:
         )
         selectors.add_argument(
             "--all", dest="all_data", action="store_true",
-            help="select all runs, reports, and exports; fail if any is incomplete",
+            help=(
+                "select all runs, reports, and exports; incomplete entries are refused"
+                + (" unless --force is supplied" if action == "delete" else "")
+            ),
         )
         command.add_argument("--dry-run", action="store_true", help="show the exact selection without changing files")
         command.add_argument("--yes", action="store_true", help="confirm the operation non-interactively")
+        if action == "delete":
+            command.add_argument(
+                "--force", action="store_true",
+                help="allow deletion of active or incomplete artifacts; path and permission safety checks remain enforced",
+            )
         _output_options(command)
 
     dataset = commands.add_parser("dataset", help="resolve, acquire, prepare, and verify immutable datasets")
@@ -789,7 +797,12 @@ def _dispatch(args):
             offline=args.offline,
             project_name=args.project_name,
         )
-        return deployment.run(plan, dry_run=args.dry_run), args.json, None
+        previous = _install_interrupt_handlers()
+        try:
+            result = deployment.run(plan, dry_run=args.dry_run)
+        finally:
+            _restore_handlers(previous)
+        return result, args.json, None
     if args.command == "run":
         app = _application()
         if args.target in {"inspect", "verify"}:
@@ -799,10 +812,14 @@ def _dispatch(args):
         else:
             if args.path is not None:
                 raise CliUsageError("run CONFIG accepts no second positional argument")
-            result = (
-                app.execution_plan(args.target, output_root=args.output_root)
-                if args.dry_run else app.run(args.target, output_root=args.output_root)
-            )
+            if args.dry_run:
+                result = app.execution_plan(args.target, output_root=args.output_root)
+            else:
+                previous = _install_interrupt_handlers()
+                try:
+                    result = app.run(args.target, output_root=args.output_root)
+                finally:
+                    _restore_handlers(previous)
         return result, args.json, None
     if args.command == "metrics":
         return _application().recompute_metrics(args.run_path), args.json, None
@@ -856,14 +873,15 @@ def _dispatch(args):
             "export_id": args.export_id,
             "all_data": args.all_data,
         }
-        preview = app.data_preview(args.data_command, **selector)
+        force = args.force if args.data_command == "delete" else False
+        preview = app.data_preview(args.data_command, force=force, **selector)
         if args.dry_run:
             return preview, args.json, None
         if not _confirm_data_operation(args, preview):
             return {**preview, "status": "cancelled", "dry_run": False}, False, None
         result = (
             app.data_archive(**selector)
-            if args.data_command == "archive" else app.data_delete(**selector)
+            if args.data_command == "archive" else app.data_delete(force=force, **selector)
         )
         return result, args.json, None
     if args.command == "dataset":

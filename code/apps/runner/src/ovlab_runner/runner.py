@@ -128,9 +128,10 @@ class ExperimentRunner:
             self._postprocess("run", "completed")
             return all_task_results
         except BaseException as exc:
-            self.state = RunnerState.FAILED
-            status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
-            category = "interrupted" if isinstance(exc, KeyboardInterrupt) else "runtime_failure"
+            interrupted = isinstance(exc, KeyboardInterrupt)
+            self.state = RunnerState.ABORTED if interrupted else RunnerState.FAILED
+            status = "aborted" if interrupted else "failed"
+            category = "interrupted" if interrupted else "runtime_failure"
             failed = self._final_manifest(
                 status, terminal_counts, episode_count, metric_errors, type(exc).__name__, category
             )

@@ -188,6 +188,58 @@ def test_incomplete_artifacts_and_archive_collisions_are_rejected_before_mutatio
     assert (data / "runs/run-1").is_dir()
 
 
+def test_force_delete_removes_incomplete_run_but_archive_remains_protected(tmp_path):
+    data = tmp_path / "data"
+    active = data / "runs/active-run"
+    active.mkdir(parents=True)
+    (active / "manifest.started.json").write_text("{}", encoding="utf-8")
+    manager = DataManager(data, data / "runs", data / "derived")
+
+    preview = manager.preview("delete", run_id="active-run", force=True)
+    assert preview["force"] is True
+    assert preview["targets"][0]["state"] == "active-or-incomplete"
+    with pytest.raises(DataSafetyError, match="only for delete"):
+        manager.preview("archive", run_id="active-run", force=True)
+
+    result = manager.delete(run_id="active-run", force=True)
+    assert result["force"] is True
+    assert not active.exists()
+
+
+def test_cli_force_delete_wires_preview_and_mutation_for_incomplete_run(tmp_path):
+    data = tmp_path / "data"
+    active = data / "runs/active-run"
+    active.mkdir(parents=True)
+    (active / "manifest.started.json").write_text("{}", encoding="utf-8")
+
+    refused = _invoke(data, "data", "delete", "--run", "active-run", "--yes")
+    assert refused.returncode == 7 and active.is_dir()
+    preview = _invoke(
+        data, "data", "delete", "--run", "active-run", "--force", "--dry-run", "--json",
+    )
+    assert preview.returncode == 0 and active.is_dir()
+    assert json.loads(preview.stdout)["result"]["force"] is True
+    deleted = _invoke(
+        data, "data", "delete", "--run", "active-run", "--force", "--yes", "--json",
+    )
+    assert deleted.returncode == 0 and not active.exists()
+    assert json.loads(deleted.stdout)["result"]["force"] is True
+
+
+def test_aborted_manifest_has_distinct_list_state(tmp_path):
+    data = tmp_path / "data"
+    run = data / "runs/aborted-run"
+    run.mkdir(parents=True)
+    (run / "manifest.failed.json").write_text(
+        '{"status":"aborted","failure_type":"KeyboardInterrupt"}', encoding="utf-8",
+    )
+    manager = DataManager(data, data / "runs", data / "derived")
+
+    listing = manager.list(kind="runs")
+    assert listing["items"][0]["state"] == "aborted"
+    assert manager.preview("delete", run_id="aborted-run")["target_count"] == 1
+
+
 def test_delete_permission_preflight_fails_before_any_selected_target_is_removed(tmp_path):
     data = tmp_path / "data"
     run, report, *_ = _tree(data)
@@ -248,7 +300,7 @@ def test_all_selection_rejects_symbolic_links(tmp_path):
     (data / "runs/linked-run").symlink_to(outside, target_is_directory=True)
     manager = DataManager(data, data / "runs", data / "derived")
     with pytest.raises(DataSafetyError, match="symbolic link"):
-        manager.preview("delete", all_data=True)
+        manager.preview("delete", all_data=True, force=True)
 
 
 def test_managed_roots_must_not_overlap(tmp_path):

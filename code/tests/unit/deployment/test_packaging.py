@@ -180,6 +180,7 @@ def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
     assert "install -d -o 10001 -g 10001 -m 0700 /run/ovlab /var/lib/ovlab/runs" in benchmark
     assert COMPOSE.count("OVLAB_POSTPROCESSING_MODE: external") == 2
     benchmark_services = COMPOSE.split("  benchmark-openvla:\n", 1)[1].split("  policy-openvla-oft:\n", 1)[0] + COMPOSE.split("  benchmark-oft:\n", 1)[1].split("  reporting:\n", 1)[0]
+    assert benchmark_services.count("stop_grace_period: 5m") == 2
     assert "/var/lib/ovlab/derived" not in benchmark_services
     assert "/var/lib/ovlab/exports" not in benchmark_services
 

@@ -451,6 +451,7 @@ failure cannot change canonical benchmark status or timing. The legacy `report g
 ./ovlab data archive --all
 ./ovlab data delete --report RUN_ID
 ./ovlab data delete --export isolated:RUN_ID
+./ovlab data delete --run INCOMPLETE_RUN_ID --force
 ./ovlab data list --archived
 ```
 
@@ -462,6 +463,10 @@ operations require an interactive confirmation; automation must supply
 benchmark runs, derived reports, and exports only—it never includes datasets,
 checkpoints, training-runs, or source files. If any selected item is active or
 incomplete, the complete operation is refused rather than silently skipping it.
+`data delete --force` explicitly permits deletion of active, aborted legacy, or
+incomplete artifacts. It bypasses only the state guard: confirmation, managed-root
+containment, symbolic-link rejection, and recursive permission preflight still
+apply. `--force` is intentionally unavailable for archival.
 Training report IDs use `training:TRAINING_RUN_ID`. See
 [`DATA_MANAGEMENT.md`](../../../DATA_MANAGEMENT.md) for archive layout, safety
 checks and concurrency guidance.
