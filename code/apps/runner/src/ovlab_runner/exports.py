@@ -33,12 +33,18 @@ from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
 EXPORT_METADATA_SCHEMA = "ovlab.export-metadata/v2"
-EXPORT_ENGINE_VERSION = "2.0.0"
+EXPORT_ENGINE_VERSION = "2.1.0"
 ISOLATED_TEMPLATE = "isolated-default-v1"
 GROUPED_TEMPLATE = "grouped-default-v1"
 LEGACY_EXPORT_SPEC_SCHEMA = "ovlab.export-spec/v1"
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _FIGURE_FORMATS = ("png", "pdf")
+_ACTION_METRICS = (
+    ("action.variance", "Action variance"),
+    ("action.smoothness_1", "First-order smoothness"),
+    ("action.smoothness_2", "Second-order smoothness"),
+)
+_ACTION_METRIC_IDS = frozenset(metric_id for metric_id, _ in _ACTION_METRICS)
 
 
 def _atomic_json(path: Path, value) -> None:
@@ -150,6 +156,31 @@ def _model_key(record: dict[str, object]) -> str:
     return hashlib.sha256(_canonical_bytes(identity)).hexdigest()
 
 
+def _model_columns(record: dict[str, object]) -> dict[str, object]:
+    model = record["identity"].get("model") or {}
+    checkpoint = record["identity"].get("checkpoint") or {}
+    method = model.get("method") or {}
+    configuration = model.get("configuration") or {}
+    runtime = configuration.get("runtime") or {}
+    quantization = method.get("quantization") or runtime.get("quantization")
+    model_name = model.get("name") or method.get("method_id") or "unknown-model"
+    method_id = method.get("method_id")
+    label_parts = [str(model_name)]
+    if method_id and method_id != model_name:
+        label_parts.append(str(method_id))
+    if quantization and quantization != "none":
+        label_parts.append(str(quantization))
+    return {
+        "model_key": _model_key(record),
+        "model": model_name,
+        "model_label": " / ".join(label_parts),
+        "method_family": method.get("family"),
+        "method_id": method_id,
+        "quantization": quantization,
+        "checkpoint": checkpoint.get("checkpoint_id") or checkpoint.get("repository"),
+    }
+
+
 def _source_record(run_path: Path) -> dict[str, object]:
     verification = verify_run(run_path)
     model = build_report_model(run_path)
@@ -226,6 +257,7 @@ def _record(runs_root: Path, run_id: str) -> dict[str, object]:
 def _episode_data(record: dict[str, object], selected_episode_id: str | None = None) -> list[dict[str, object]]:
     codec = TraceCodec()
     rows = []
+    model_columns = _model_columns(record)
     for task in record["model"]["tasks"]:
         for episode in task["episodes"]:
             episode_id = str(episode["episode_id"])
@@ -249,6 +281,7 @@ def _episode_data(record: dict[str, object], selected_episode_id: str | None = N
                         break
             rows.append({
                 "run_id": record["run_id"],
+                **model_columns,
                 "task_id": str(task["task_id"]),
                 "episode_id": episode_id,
                 "episode_key": safe_key(episode_id),
@@ -268,6 +301,116 @@ def _episode_data(record: dict[str, object], selected_episode_id: str | None = N
     if selected_episode_id is not None and not rows:
         raise ArtifactError(f"episode is not present in canonical run: {selected_episode_id}")
     return rows
+
+
+def _action_metric_rows(episodes: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows = []
+    for episode in episodes:
+        metrics = {
+            str(metric.get("metric_id")): metric
+            for metric in episode["metrics"]
+            if str(metric.get("metric_id")) in _ACTION_METRIC_IDS
+        }
+        for metric_id, label in _ACTION_METRICS:
+            metric = metrics.get(metric_id)
+            if metric is None:
+                rows.append({
+                    "run_id": episode["run_id"],
+                    "model_key": episode["model_key"],
+                    "model": episode["model"],
+                    "model_label": episode["model_label"],
+                    "method_family": episode["method_family"],
+                    "method_id": episode["method_id"],
+                    "quantization": episode["quantization"],
+                    "checkpoint": episode["checkpoint"],
+                    "task_id": episode["task_id"],
+                    "episode_id": episode["episode_id"],
+                    "rollout_index": episode["rollout_index"],
+                    "seed": episode["seed"],
+                    "success": episode["success"],
+                    "terminal_status": episode["terminal_status"],
+                    "metric_id": metric_id,
+                    "metric_label": label,
+                    "metric_version": None,
+                    "metric_config_hash": None,
+                    "status": "unavailable",
+                    "value": None,
+                    "unit": None,
+                    "sample_count": 0,
+                    "reason": "metric was not enabled or recorded",
+                })
+                continue
+            rows.append({
+                "run_id": episode["run_id"],
+                "model_key": episode["model_key"],
+                "model": episode["model"],
+                "model_label": episode["model_label"],
+                "method_family": episode["method_family"],
+                "method_id": episode["method_id"],
+                "quantization": episode["quantization"],
+                "checkpoint": episode["checkpoint"],
+                "task_id": episode["task_id"],
+                "episode_id": episode["episode_id"],
+                "rollout_index": episode["rollout_index"],
+                "seed": episode["seed"],
+                "success": episode["success"],
+                "terminal_status": episode["terminal_status"],
+                "metric_id": metric_id,
+                "metric_label": label,
+                "metric_version": metric.get("metric_version"),
+                "metric_config_hash": metric.get("metric_config_hash"),
+                "status": metric.get("status"),
+                "value": metric.get("value") if metric.get("status") == "available" else None,
+                "unit": metric.get("unit"),
+                "sample_count": metric.get("sample_count"),
+                "reason": metric.get("reason"),
+            })
+    return rows
+
+
+def _action_metric_summary(
+    rows: list[dict[str, object]], *, scope: str, group_fields: tuple[str, ...] = (),
+) -> list[dict[str, object]]:
+    grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for row in rows:
+        key = tuple(row.get(field) for field in group_fields) + (row["metric_id"],)
+        grouped.setdefault(key, []).append(row)
+    summary = []
+    for key, selected in grouped.items():
+        metric_id = str(key[-1])
+        values = [
+            float(row["value"])
+            for row in selected
+            if row.get("status") == "available"
+            and isinstance(row.get("value"), (int, float))
+            and math.isfinite(float(row["value"]))
+        ]
+        statuses = [str(row.get("status")) for row in selected]
+        reasons = sorted({str(row["reason"]) for row in selected if row.get("reason")})
+        units = sorted({str(row["unit"]) for row in selected if row.get("unit")})
+        versions = sorted({str(row["metric_version"]) for row in selected if row.get("metric_version")})
+        configurations = sorted({
+            str(row["metric_config_hash"]) for row in selected if row.get("metric_config_hash")
+        })
+        identity = {field: value for field, value in zip(group_fields, key[:-1])}
+        summary.append({
+            "scope": scope,
+            **identity,
+            "metric_id": metric_id,
+            "metric_label": next(label for candidate, label in _ACTION_METRICS if candidate == metric_id),
+            "metric_version": versions[0] if len(versions) == 1 else None,
+            "metric_config_hash": configurations[0] if len(configurations) == 1 else None,
+            "unit": units[0] if len(units) == 1 else None,
+            "episode_count": len(selected),
+            "available_count": len(values),
+            "non_available_count": sum(status != "available" for status in statuses),
+            "unavailable_count": statuses.count("unavailable"),
+            "insufficient_data_count": statuses.count("insufficient_data"),
+            "error_count": statuses.count("error"),
+            "non_available_reasons": "; ".join(reasons) or None,
+            **_descriptive_statistics(values),
+        })
+    return sorted(summary, key=lambda row: tuple(str(row.get(field) or "") for field in group_fields) + (str(row["metric_id"]),))
 
 
 def _episode_statistics(episode: dict[str, object]) -> list[dict[str, object]]:
@@ -412,6 +555,114 @@ def _episode_figures(episode: dict[str, object], root: Path) -> list[str]:
     return omitted
 
 
+def _episode_action_metric_figure(episode: dict[str, object], root: Path) -> None:
+    plt = _plot_backend()
+    rows = _action_metric_rows([episode])
+    figure, axes = plt.subplots(1, 3, figsize=(13, 4.2))
+    for axis, row in zip(axes, rows):
+        value = row.get("value")
+        if row.get("status") == "available" and isinstance(value, (int, float)):
+            axis.bar([0], [float(value)], color="#155eef", width=.55)
+            axis.text(0, float(value), format(float(value), ".5g"), ha="center", va="bottom")
+        else:
+            axis.text(
+                .5, .5, f"UNAVAILABLE\n{row.get('reason') or 'no reason recorded'}",
+                ha="center", va="center", transform=axis.transAxes, wrap=True,
+            )
+        axis.set(
+            title=str(row["metric_label"]),
+            ylabel=str(row.get("unit") or "Canonical metric value"),
+        )
+        axis.set_xticks([])
+        axis.grid(axis="y", alpha=.25)
+    figure.suptitle("Canonical action metrics for this episode")
+    figure.tight_layout()
+    _save_figure(figure, root / f"{episode['episode_key']}__action-metrics")
+
+
+def _action_metric_episode_figure(rows: list[dict[str, object]], root: Path) -> None:
+    plt = _plot_backend()
+    episode_order = []
+    for row in rows:
+        if row["episode_id"] not in episode_order:
+            episode_order.append(row["episode_id"])
+    positions = {episode_id: index for index, episode_id in enumerate(episode_order)}
+    figure, axes = plt.subplots(3, 1, figsize=(max(9, len(episode_order) * .42), 11), sharex=True)
+    for axis, (metric_id, label) in zip(axes, _ACTION_METRICS):
+        selected = [
+            row for row in rows
+            if row["metric_id"] == metric_id and row.get("status") == "available"
+            and isinstance(row.get("value"), (int, float))
+        ]
+        for success, marker, color, outcome in (
+            (True, "o", "#039855", "success"),
+            (False, "x", "#d92d20", "non-success"),
+        ):
+            outcome_rows = [row for row in selected if bool(row["success"]) is success]
+            if outcome_rows:
+                axis.scatter(
+                    [positions[row["episode_id"]] for row in outcome_rows],
+                    [float(row["value"]) for row in outcome_rows],
+                    marker=marker, color=color, label=outcome, zorder=3,
+                )
+        if selected:
+            ordered = sorted(selected, key=lambda row: positions[row["episode_id"]])
+            axis.plot(
+                [positions[row["episode_id"]] for row in ordered],
+                [float(row["value"]) for row in ordered],
+                color="#98a2b3", linewidth=.8, alpha=.65, zorder=1,
+            )
+            axis.legend(fontsize=8)
+        unit = next((row.get("unit") for row in rows if row["metric_id"] == metric_id and row.get("unit")), None)
+        axis.set(title=label, ylabel=str(unit or "Canonical value"))
+        axis.grid(alpha=.25)
+    axes[-1].set(xlabel="Episode (canonical order)")
+    axes[-1].set_xticks(
+        range(len(episode_order)), [episode_id[-8:] for episode_id in episode_order], rotation=45, ha="right",
+    )
+    figure.suptitle("Episode-level canonical action metrics")
+    figure.tight_layout()
+    _save_figure(figure, root / "action-metrics-by-episode")
+
+
+def _action_metric_boxplots(
+    rows: list[dict[str, object]], root: Path, *, group_field: str, display_field: str,
+    title: str, filename: str,
+) -> None:
+    plt = _plot_backend()
+    groups: list[object] = []
+    labels: dict[object, str] = {}
+    for row in rows:
+        group = row.get(group_field)
+        if group not in groups:
+            groups.append(group)
+            display = str(row.get(display_field) or group or "unknown")
+            labels[group] = display[-20:] if display_field in {"run_id", "task_id"} else display
+    figure, axes = plt.subplots(3, 1, figsize=(max(9, len(groups) * 1.1), 12))
+    for axis, (metric_id, label) in zip(axes, _ACTION_METRICS):
+        samples = []
+        sample_labels = []
+        for group in groups:
+            values = [
+                float(row["value"]) for row in rows
+                if row.get(group_field) == group and row["metric_id"] == metric_id
+                and row.get("status") == "available" and isinstance(row.get("value"), (int, float))
+            ]
+            if values:
+                samples.append(values)
+                sample_labels.append(labels[group])
+        if samples:
+            axis.boxplot(samples, tick_labels=sample_labels, showfliers=True)
+        unit = next((row.get("unit") for row in rows if row["metric_id"] == metric_id and row.get("unit")), None)
+        axis.set(title=label, ylabel=str(unit or "Canonical value"))
+        axis.tick_params(axis="x", rotation=35)
+        axis.grid(axis="y", alpha=.25)
+    axes[-1].set(xlabel=display_field.replace("_", " ").title())
+    figure.suptitle(title)
+    figure.tight_layout()
+    _save_figure(figure, root / filename)
+
+
 def _outcome_value(model: dict[str, object]) -> float | None:
     outcome = model["outcome"]
     if outcome["presentation"] == "success_rate":
@@ -521,6 +772,12 @@ def _run_overview_figures(record: dict[str, object], episodes: list[dict[str, ob
         _save_figure(figure, root / "eef-trajectories-3d")
     else:
         omitted.append("eef-trajectories-3d: canonical end-effector positions unavailable")
+    action_metric_rows = _action_metric_rows(episodes)
+    _action_metric_episode_figure(action_metric_rows, root)
+    _action_metric_boxplots(
+        action_metric_rows, root, group_field="task_id", display_field="task_id",
+        title="Canonical action metrics by task", filename="action-metrics-by-task",
+    )
     return omitted
 
 
@@ -642,6 +899,17 @@ def _group_figures(records, episode_map, run_rows, root: Path) -> list[str]:
         _save_figure(figure, root / "eef-trajectories-3d")
     else:
         omitted.append("eef-trajectories-3d: canonical end-effector positions unavailable")
+    action_metric_rows = _action_metric_rows([
+        episode for record in records for episode in episode_map[record["run_id"]]
+    ])
+    _action_metric_boxplots(
+        action_metric_rows, root, group_field="run_id", display_field="run_id",
+        title="Canonical action metrics by run", filename="action-metrics-by-run",
+    )
+    _action_metric_boxplots(
+        action_metric_rows, root, group_field="model_key", display_field="model_label",
+        title="Canonical action metrics by model", filename="action-metrics-by-model",
+    )
     return omitted
 
 
@@ -729,7 +997,11 @@ class ExportEngine:
                 key = episode["episode_key"]
                 _write_csv(episode_tables / f"{key}__statistics.csv", _episode_statistics(episode))
                 _write_csv(episode_tables / f"{key}__timeseries.csv", _episode_timeseries(episode))
+                _write_csv(
+                    episode_tables / f"{key}__action-metrics.csv", _action_metric_rows([episode]),
+                )
                 omitted.extend(f"{episode['episode_id']}: {value}" for value in _episode_figures(episode, episode_figures))
+                _episode_action_metric_figure(episode, episode_figures)
 
             if episode_id is None:
                 overview_tables = stage / "overview" / "tables"
@@ -740,6 +1012,17 @@ class ExportEngine:
                     _aggregate_statistics(episodes, scope="run", run_id=record["run_id"]),
                 )
                 _write_csv(overview_tables / "metric-summary.csv", _metric_rows([record]))
+                action_metric_rows = _action_metric_rows(episodes)
+                _write_csv(overview_tables / "action-metrics-by-episode.csv", action_metric_rows)
+                action_metric_summary = _action_metric_summary(
+                    action_metric_rows, scope="run",
+                    group_fields=("run_id", "model_key", "model_label", "checkpoint"),
+                )
+                action_metric_summary.extend(_action_metric_summary(
+                    action_metric_rows, scope="task",
+                    group_fields=("run_id", "model_key", "model_label", "checkpoint", "task_id"),
+                ))
+                _write_csv(overview_tables / "action-metrics-summary.csv", action_metric_summary)
                 omitted.extend(_run_overview_figures(record, episodes, overview_figures))
 
             metadata = {
@@ -831,6 +1114,22 @@ class ExportEngine:
             )
             _write_csv(tables / "descriptive-statistics.csv", run_statistics + group_statistics)
             _write_csv(tables / "metric-summary.csv", _metric_rows(records))
+            action_metric_rows = _action_metric_rows([
+                episode for record in records for episode in episode_map[record["run_id"]]
+            ])
+            _write_csv(tables / "action-metrics-by-episode.csv", action_metric_rows)
+            action_metric_summary = _action_metric_summary(
+                action_metric_rows, scope="run",
+                group_fields=("run_id", "model_key", "model_label", "checkpoint"),
+            )
+            action_metric_summary.extend(_action_metric_summary(
+                action_metric_rows, scope="model",
+                group_fields=("model_key", "model_label", "checkpoint"),
+            ))
+            action_metric_summary.extend(_action_metric_summary(
+                action_metric_rows, scope="group",
+            ))
+            _write_csv(tables / "action-metrics-summary.csv", action_metric_summary)
             omitted = _group_figures(records, episode_map, run_rows, figures)
             model_identities = []
             checkpoint_identities = []

@@ -1,12 +1,13 @@
 """Gate H.2 focused report, export, identity, and integrity qualification."""
 
 from dataclasses import replace
+import csv
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
@@ -26,27 +27,31 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 
 
 def test_trace_report_extracts_policy_allocator_vram_and_estimated_compute(tmp_path):
-    performance = {
+    performance = MappingProxyType({
         "schema_version": "ovlab.performance-telemetry/v1",
-        "cuda_memory_after": {
+        "cuda_memory_after": MappingProxyType({
             "status": "available", "allocated_bytes": 1024 * 1024,
             "reserved_bytes": 2 * 1024 * 1024,
             "peak_allocated_bytes": 3 * 1024 * 1024,
             "peak_reserved_bytes": 4 * 1024 * 1024,
-        },
-        "estimated_compute": {"status": "available", "estimated_gflops": 12.5},
-    }
+        }),
+        "estimated_compute": MappingProxyType({
+            "status": "available", "estimated_gflops": 12.5,
+            "method": "test-estimator", "formula": "test", "qualification": "estimated",
+        }),
+    })
     trace = SimpleNamespace(
         executed_actions=(SimpleNamespace(applied_action=[0.0] * 7, metadata={}),),
         policy_predictions=(SimpleNamespace(
             inference_duration_ns=1_000_000,
-            metadata={"runtime": {"performance": performance}},
+            metadata=MappingProxyType({"runtime": MappingProxyType({"performance": performance})}),
         ),),
     )
     view = _trace_view(tmp_path / "episode", trace)
     assert view["vram_allocated_mib"] == [1.0]
     assert view["vram_peak_reserved_mib"] == [4.0]
     assert view["estimated_gflops"] == [12.5]
+    assert view["estimated_compute_identity"]["method"] == "test-estimator"
 
 
 class AlternatingBenchmark(TrackingBenchmark):
@@ -73,25 +78,30 @@ def _snapshot():
     )
 
 
-def _canonical_run(root: Path, name="report-fixture", *, rollouts=1, alternating=False, requested=False):
+def _canonical_run(
+    root: Path, name="report-fixture", *, rollouts=1, alternating=False, requested=False,
+    maximum_steps=3,
+):
     run_id = _run_id(name)
     plan = runner_plan(
         run_context=make_run_context(run_id=run_id, seed=5),
         rollout_count_per_task=rollouts,
         enabled_metric_ids=(
             "task.success", "task.success_rate", "action.variance",
+            "action.smoothness_1", "action.smoothness_2",
             "system.inference_latency", "failure.collision_rate",
         ),
         metric_configurations={
-            "action.variance": ActionSequenceMetricConfig(
+            metric_id: ActionSequenceMetricConfig(
                 ActionSource.REQUESTED if requested else ActionSource.APPLIED
             )
+            for metric_id in ("action.variance", "action.smoothness_1", "action.smoothness_2")
         },
         metadata={"experiment_id": name, "experiment_name": name, "experiment_tags": ("report",)},
     )
     benchmark_type = AlternatingBenchmark if alternating else TrackingBenchmark
     runner = ExperimentRunner(
-        plan, benchmark_type(maximum_steps=3), TrackingPolicy(), FilesystemRunArtifactStore(root),
+        plan, benchmark_type(maximum_steps=maximum_steps), TrackingPolicy(), FilesystemRunArtifactStore(root),
         clock=DeterministicClock(), configuration_snapshot=_snapshot(),
     )
     runner.connect(); runner.run()
@@ -149,6 +159,7 @@ def test_single_episode_report_is_binary_offline_traceable_and_tamper_evident(tm
     assert task["outcome"] == {
         "eligible_episode_count": 1, "successful_episode_count": 1,
         "failed_episode_count": 0, "interrupted_or_invalid_episode_count": 0,
+        "non_success_episode_count": 0, "terminal_status_counts": {"success": 1},
         "missing_episode_count": 0,
         "denominator_semantics": "all finalized episodes; missing episodes are displayed separately and never silently excluded",
         "presentation": "binary_success", "success": True, "success_rate": None,
@@ -160,8 +171,8 @@ def test_single_episode_report_is_binary_offline_traceable_and_tamper_evident(tm
     chart_versions = {chart["builder"]: chart["builder_version"] for chart in report["charts"]}
     assert chart_versions == {
         "action_timeseries": "1.2.0", "latency_distribution": "1.2.0",
-        "episode_outcomes": "1.2.0", "vram_timeseries": "1.0.0",
-        "estimated_compute_timeseries": "1.0.0",
+        "episode_outcomes": "1.2.0", "vram_timeseries": "1.1.0",
+        "estimated_compute_timeseries": "1.1.0",
     }
     assert all(chart["interaction"]["runtime"] == "self-contained SVG; no network dependency" for chart in report["charts"])
     charts = {chart["builder"]: chart for chart in report["charts"]}
@@ -240,12 +251,53 @@ def test_multi_episode_denominator_mixed_success_and_n_less_than_two_stddev(tmp_
     assert outcome["presentation"] == "success_rate"
     assert outcome["eligible_episode_count"] == 2
     assert outcome["successful_episode_count"] == 1
+    assert outcome["non_success_episode_count"] == 1
     assert outcome["success_rate"] == 0.5
     single_id, single_path = _canonical_run(tmp_path / "runs", name="single")
     single = build_report_model(single_path)
     summaries = [metric["value"] for metric in single["tasks"][0]["metrics"] if isinstance(metric["value"], dict)]
     assert summaries and all(value["standard_deviation"] is None for value in summaries)
     assert all(value["standard_deviation_qualification"] == "unavailable for n < 2" for value in summaries)
+
+
+def test_time_limit_is_visible_non_success_with_terminal_reason_table(tmp_path):
+    runs = tmp_path / "runs"
+    run_id = _run_id("time-limit")
+    plan = runner_plan(
+        run_context=make_run_context(run_id=run_id, seed=13),
+        enabled_metric_ids=("task.success", "action.variance", "system.inference_latency"),
+        metadata={"experiment_id": "time-limit"},
+    )
+    runner = ExperimentRunner(
+        plan, TrackingBenchmark(maximum_steps=2, terminal_outcomes=("time_limit",)),
+        TrackingPolicy(), FilesystemRunArtifactStore(runs), clock=DeterministicClock(),
+        configuration_snapshot=_snapshot(),
+    )
+    runner.connect(); runner.run()
+
+    model = build_report_model(runs / run_id)
+    outcome = model["outcome"]
+    assert outcome["successful_episode_count"] == 0
+    assert outcome["non_success_episode_count"] == 1
+    assert outcome["failed_episode_count"] == 0
+    assert outcome["terminal_status_counts"] == {"time_limit": 1}
+    episode = model["tasks"][0]["episodes"][0]
+    assert episode["terminal_status"] == "time_limit"
+    assert episode["terminal_reason"] == (
+        "maximum episode step limit reached before benchmark success (2/2 executed steps)"
+    )
+
+    generated = DerivedReportEngine(runs, tmp_path / "derived").generate(run_id)
+    root = Path(generated["output"])
+    run_html = (root / "index.html").read_text(encoding="utf-8")
+    task_html = next(root.glob("tasks/*/index.html")).read_text(encoding="utf-8")
+    assert "Non-success: <strong>1</strong>" in run_html
+    assert "<code>time_limit</code>=1" in run_html
+    assert "Episode terminal outcomes" in run_html
+    assert "maximum episode step limit reached before benchmark success" in run_html
+    action_section = task_html.split("<h2>Action metrics</h2>", 1)[1].split("</section>", 1)[0]
+    assert "valid_episode_count" not in action_section
+    assert "<th>Mean</th>" in task_html and "<th>Sample SD</th>" in task_html
 
 
 def test_failed_task_is_distinct_from_report_or_infrastructure_failure(tmp_path):
@@ -287,7 +339,7 @@ def test_interrupted_partial_run_renders_available_evidence(tmp_path):
     with pytest.raises(KeyboardInterrupt):
         runner.run()
     model = build_report_model(runs / run_id)
-    assert model["run"]["status"] == "interrupted"
+    assert model["run"]["status"] == "aborted"
     assert model["tasks"][0]["status"] == "interrupted"
     assert model["tasks"][0]["partial"] is True
     generated = DerivedReportEngine(runs, tmp_path / "derived").generate(run_id)
@@ -346,8 +398,11 @@ def test_isolated_episode_and_run_exports_are_readable_atomic_units(tmp_path):
     assert set(metadata) >= {"source", "experiment", "model", "checkpoint", "config", "template", "datetime"}
     assert len(list((target / "episodes/tables").glob("*__statistics.csv"))) == 1
     assert len(list((target / "episodes/tables").glob("*__timeseries.csv"))) == 1
+    assert len(list((target / "episodes/tables").glob("*__action-metrics.csv"))) == 1
     assert list((target / "episodes/figures").glob("*__actions-over-time.png"))
     assert list((target / "episodes/figures").glob("*__actions-over-time.pdf"))
+    assert list((target / "episodes/figures").glob("*__action-metrics.png"))
+    assert list((target / "episodes/figures").glob("*__action-metrics.pdf"))
     assert not (target / "overview").exists()
     assert not (target / "manifest.json").exists() and not (target / "export.json").exists()
 
@@ -359,8 +414,22 @@ def test_isolated_episode_and_run_exports_are_readable_atomic_units(tmp_path):
     assert (target / "overview/tables/episode-summary.csv").is_file()
     assert (target / "overview/tables/descriptive-statistics.csv").is_file()
     assert (target / "overview/tables/metric-summary.csv").is_file()
+    assert (target / "overview/tables/action-metrics-by-episode.csv").is_file()
+    assert (target / "overview/tables/action-metrics-summary.csv").is_file()
     assert (target / "overview/figures/success-by-task.png").is_file()
     assert (target / "overview/figures/action-boxplots.pdf").is_file()
+    assert (target / "overview/figures/action-metrics-by-episode.png").is_file()
+    assert (target / "overview/figures/action-metrics-by-task.pdf").is_file()
+    with (target / "overview/tables/action-metrics-by-episode.csv").open(newline="") as stream:
+        action_rows = list(csv.DictReader(stream))
+    assert {row["metric_id"] for row in action_rows} == {
+        "action.variance", "action.smoothness_1", "action.smoothness_2",
+    }
+    assert all(row["status"] == "available" for row in action_rows)
+    with (target / "overview/tables/action-metrics-summary.csv").open(newline="") as stream:
+        action_summary = list(csv.DictReader(stream))
+    assert {row["scope"] for row in action_summary} == {"run", "task"}
+    assert all(row["available_count"] == "2" for row in action_summary)
     statistics_text = (target / "overview/tables/descriptive-statistics.csv").read_text(encoding="utf-8")
     assert "scope" in statistics_text.splitlines()[0]
     assert any(line.startswith("run,") for line in statistics_text.splitlines()[1:])
@@ -387,16 +456,25 @@ def test_grouped_manual_all_and_same_model_exports(tmp_path):
     assert (target / "tables/episode-summary.csv").is_file()
     assert (target / "tables/descriptive-statistics.csv").is_file()
     assert (target / "tables/metric-summary.csv").is_file()
+    assert (target / "tables/action-metrics-by-episode.csv").is_file()
+    assert (target / "tables/action-metrics-summary.csv").is_file()
     statistics_text = (target / "tables/descriptive-statistics.csv").read_text(encoding="utf-8")
     assert any(line.startswith("run,") for line in statistics_text.splitlines()[1:])
     assert any(line.startswith("group,") for line in statistics_text.splitlines()[1:])
     for name in (
         "success-comparison", "task-success-heatmap", "inference-latency-boxplots",
         "inference-latency-ecdf", "success-latency-pareto", "terminal-outcome-composition",
+        "action-metrics-by-run", "action-metrics-by-model",
     ):
         assert (target / f"figures/{name}.png").is_file()
         assert (target / f"figures/{name}.pdf").is_file()
     assert engine.verify("grouped", "manual-comparison")["source_run_ids"] == sorted([first, second])
+    with (target / "tables/action-metrics-summary.csv").open(newline="") as stream:
+        action_summary = list(csv.DictReader(stream))
+    assert {row["scope"] for row in action_summary} == {"run", "model", "group"}
+    assert {row["metric_id"] for row in action_summary} == {
+        "action.variance", "action.smoothness_1", "action.smoothness_2",
+    }
 
     same = engine.generate_grouped("same-model", same_model_as=first)
     assert same["source_run_ids"] == sorted([first, second])
@@ -406,6 +484,27 @@ def test_grouped_manual_all_and_same_model_exports(tmp_path):
         engine.generate_grouped("invalid", all_runs=True, run_ids=[first])
     with pytest.raises(ArtifactError, match="unknown grouped export template"):
         engine.generate_grouped("invalid-template", run_ids=[first], template="made-up")
+
+
+def test_action_metric_exports_preserve_unavailable_status_and_reason(tmp_path):
+    runs, exports = tmp_path / "runs", tmp_path / "exports"
+    run_id, _ = _canonical_run(runs, name="short-action", maximum_steps=1)
+    generated = ExportEngine(runs, exports).generate_isolated(run_id)
+    table = next((Path(generated["output"]) / "episodes/tables").glob("*__action-metrics.csv"))
+    with table.open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert {row["metric_id"] for row in rows} == {
+        "action.variance", "action.smoothness_1", "action.smoothness_2",
+    }
+    assert all(row["status"] == "insufficient_data" for row in rows)
+    assert all(row["value"] == "" for row in rows)
+    assert all(row["reason"] for row in rows)
+    summary = Path(generated["output"]) / "overview/tables/action-metrics-summary.csv"
+    with summary.open(newline="") as stream:
+        summary_rows = list(csv.DictReader(stream))
+    assert all(row["available_count"] == "0" for row in summary_rows)
+    assert all(row["insufficient_data_count"] == "1" for row in summary_rows)
+    assert all(row["unavailable_count"] == "0" for row in summary_rows)
 
 
 def test_grouped_export_rejects_incompatible_metrics_empty_selection_and_unsafe_legacy_spec(tmp_path):

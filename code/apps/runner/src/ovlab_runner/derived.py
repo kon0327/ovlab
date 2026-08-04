@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import base64
@@ -30,13 +32,13 @@ REPORT_PROFILE_SCHEMA = "ovlab.report-profile/v1"
 REPORT_SCHEMA = "ovlab.report/v1"
 REPORT_MANIFEST_SCHEMA = "ovlab.report-manifest/v1"
 REPORT_RENDERER_ID = "ovlab-jinja-static-html"
-REPORT_RENDERER_VERSION = "1.3.0"
+REPORT_RENDERER_VERSION = "1.4.0"
 CHART_BUILDERS = {
     "action_timeseries": "1.2.0",
     "latency_distribution": "1.2.0",
     "episode_outcomes": "1.2.0",
-    "vram_timeseries": "1.0.0",
-    "estimated_compute_timeseries": "1.0.0",
+    "vram_timeseries": "1.1.0",
+    "estimated_compute_timeseries": "1.1.0",
 }
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SECTIONS = {
@@ -290,19 +292,49 @@ def _normalized_metric(metric: dict[str, object]) -> dict[str, object]:
             "canonical task aggregation" if result.get("scope") == "task" else "canonical episode metric"
         ),
     }
+    result["statistics"] = _metric_statistics(result)
     return result
+
+
+def _metric_statistics(metric: Mapping[str, object]) -> dict[str, object] | None:
+    """Present canonical aggregate metric values as columns, never Python/JSON literals."""
+    if metric.get("status") != "available":
+        return None
+    value = metric.get("value")
+    if not isinstance(value, Mapping):
+        return None
+    statistic_keys = {"minimum", "median", "mean", "standard_deviation", "maximum"}
+    if not statistic_keys & set(value):
+        return None
+    return {
+        "valid_n": value.get("valid_episode_count", metric.get("sample_count", 0)),
+        "excluded_n": value.get("excluded_episode_count", 0),
+        "unavailable_n": value.get("unavailable_episode_count", 0),
+        "minimum": value.get("minimum"),
+        "median": value.get("median"),
+        "mean": value.get("mean"),
+        "standard_deviation": value.get("standard_deviation"),
+        "maximum": value.get("maximum"),
+    }
 
 
 def _success_summary(episodes: list[dict[str, object]], expected: int) -> dict[str, object]:
     finalized = len(episodes)
     successful = sum(item["terminal_status"] == "success" for item in episodes)
-    failed = sum(item["terminal_status"] == "failure" for item in episodes)
+    non_successful = finalized - successful
+    explicit_failures = sum(item["terminal_status"] == "failure" for item in episodes)
     interrupted = sum(item["terminal_status"] in {"aborted", "policy_error", "benchmark_error"} for item in episodes)
     missing = max(expected - finalized, 0)
+    terminal_counts = Counter(str(item["terminal_status"]) for item in episodes)
     base = {
         "eligible_episode_count": finalized,
         "successful_episode_count": successful,
-        "failed_episode_count": failed,
+        # Backward-compatible strict terminal-status count. This is deliberately
+        # not the complement of success: time_limit is scientific non-success,
+        # but not an execution failure.
+        "failed_episode_count": explicit_failures,
+        "non_success_episode_count": non_successful,
+        "terminal_status_counts": dict(sorted(terminal_counts.items())),
         "interrupted_or_invalid_episode_count": interrupted,
         "missing_episode_count": missing,
         "denominator_semantics": "all finalized episodes; missing episodes are displayed separately and never silently excluded",
@@ -312,6 +344,33 @@ def _success_summary(episodes: list[dict[str, object]], expected: int) -> dict[s
     if finalized > 1:
         return {**base, "presentation": "success_rate", "success": None, "success_rate": successful / finalized}
     return {**base, "presentation": "unavailable", "success": None, "success_rate": None}
+
+
+def _terminal_reason(trace) -> str:
+    metadata = trace.metadata
+    failure_message = metadata.get("failure_message")
+    if isinstance(failure_message, str) and failure_message.strip():
+        return failure_message.strip()
+    status = trace.terminal_status.value
+    executed = metadata.get("executed_step_count")
+    maximum = metadata.get("task_maximum_steps")
+    if status == "success":
+        return "benchmark success condition satisfied"
+    if status == "time_limit":
+        step_detail = (
+            f" ({executed}/{maximum} executed steps)"
+            if isinstance(executed, int) and isinstance(maximum, int) else ""
+        )
+        return f"maximum episode step limit reached before benchmark success{step_detail}"
+    if status == "failure":
+        return "benchmark terminated without satisfying the success condition"
+    if status == "aborted":
+        return "execution interrupted before a terminal benchmark outcome"
+    if status == "policy_error":
+        return "policy prediction failed"
+    if status == "benchmark_error":
+        return "benchmark execution failed"
+    return f"canonical terminal status: {status}"
 
 
 def _downsample(values: list, maximum: int = 500) -> list:
@@ -369,12 +428,12 @@ def _trace_view(episode_path: Path, trace) -> dict[str, object]:
     compute_identity = None
     for prediction in trace.policy_predictions:
         runtime = prediction.metadata.get("runtime", {})
-        performance = runtime.get("performance", {}) if isinstance(runtime, dict) else {}
-        if not performance and isinstance(prediction.metadata.get("performance"), dict):
+        performance = runtime.get("performance", {}) if isinstance(runtime, Mapping) else {}
+        if not performance and isinstance(prediction.metadata.get("performance"), Mapping):
             performance = prediction.metadata["performance"]
-        after = performance.get("cuda_memory_after", {}) if isinstance(performance, dict) else {}
-        compute = performance.get("estimated_compute", {}) if isinstance(performance, dict) else {}
-        if isinstance(after, dict) and after.get("status") == "available":
+        after = performance.get("cuda_memory_after", {}) if isinstance(performance, Mapping) else {}
+        compute = performance.get("estimated_compute", {}) if isinstance(performance, Mapping) else {}
+        if isinstance(after, Mapping) and after.get("status") == "available":
             for target, key in (
                 (allocated, "allocated_bytes"), (reserved, "reserved_bytes"),
                 (peak_allocated, "peak_allocated_bytes"), (peak_reserved, "peak_reserved_bytes"),
@@ -382,10 +441,10 @@ def _trace_view(episode_path: Path, trace) -> dict[str, object]:
                 value = after.get(key)
                 if isinstance(value, int | float) and not isinstance(value, bool):
                     target.append(float(value) / (1024 * 1024))
-        value = compute.get("estimated_gflops") if isinstance(compute, dict) else None
+        value = compute.get("estimated_gflops") if isinstance(compute, Mapping) else None
         if isinstance(value, int | float) and not isinstance(value, bool):
             estimated_gflops.append(float(value))
-        if compute_identity is None and isinstance(compute, dict) and compute.get("method"):
+        if compute_identity is None and isinstance(compute, Mapping) and compute.get("method"):
             compute_identity = {
                 key: compute.get(key) for key in ("method", "formula", "qualification")
             }
@@ -483,6 +542,9 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
                 "initial_state_identity": trace.metadata.get("benchmark_reset", {}).get("initial_state_index"),
                 "failure_type": trace.metadata.get("failure_type"),
                 "failure_message": trace.metadata.get("failure_message"),
+                "terminal_reason": _terminal_reason(trace),
+                "executed_step_count": trace.metadata.get("executed_step_count"),
+                "maximum_step_count": trace.metadata.get("task_maximum_steps"),
                 "partial": trace.terminal_status.value in {"aborted", "policy_error", "benchmark_error"},
                 "metrics": [_normalized_metric(item) for item in metrics],
                 "video": video,
@@ -508,7 +570,7 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
         if terminal_values & {"benchmark_error", "policy_error", "failure"}:
             task_status = "failed"
         elif terminal_values & {"aborted"} or len(episode_views) < expected_per_task:
-            task_status = "interrupted" if final.get("status") == "interrupted" else "partial"
+            task_status = "interrupted" if final.get("status") in {"interrupted", "aborted"} else "partial"
         task_views.append({
             "task_id": task_id or task_path.name,
             "task_key": task_path.name,

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added publication-oriented action-metric exports for canonical action
+  variance and first/second-order smoothness. Isolated exports now include
+  episode tables/figures and run/task summaries; grouped exports include
+  episode-level data, run/model/group statistics and run/model boxplots while
+  preserving metric identity, units and distinct non-available statuses.
+- Fixed benchmark report telemetry extraction from immutable contract mappings,
+  restoring per-inference CUDA allocator VRAM and analytical compute series.
+  Action and system metric aggregates now render as statistical columns instead
+  of mapping literals. Outcome summaries count every finalized non-success and
+  include a per-episode terminal-state/reason table, including time limits.
 - Finalize user-interrupted benchmark executions as `aborted`, including the
   in-progress episode and immutable run manifest. Docker benchmark services now
   receive a bounded shutdown grace period, and `data delete --force` can remove

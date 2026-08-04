@@ -151,6 +151,18 @@ mean, sample standard deviation, P95, and maximum. Sample standard deviation is
 reported as unavailable for `n < 2`; the exact population and quantile semantics
 are preserved in `report.json`.
 
+Task pages also expand canonical action and system metric aggregates into
+statistical columns (valid/excluded/unavailable counts, minimum, median, mean,
+sample standard deviation and maximum). Aggregate mappings are retained in
+`report.json` for machine use but are not printed as JSON/Python literals in the
+HTML report.
+
+The run outcome section reports both success rate and its complete complement as
+`Non-success`. It also lists canonical terminal-state counts and one row per
+episode with task, rollout, seed, terminal state, classification and reason. A
+`time_limit` is therefore visible as scientific non-success without being
+mislabelled as a policy, benchmark or infrastructure failure.
+
 `latest.json` identifies the most recently generated run- or task-scoped build.
 For archival automation, retain the returned build ID and pass it explicitly to
 verification.
@@ -301,20 +313,26 @@ exports/isolated/<run-name>/
 ├── episodes/
 │   ├── tables/
 │   │   ├── <episode>__statistics.csv
-│   │   └── <episode>__timeseries.csv
+│   │   ├── <episode>__timeseries.csv
+│   │   └── <episode>__action-metrics.csv
 │   └── figures/
 │       ├── <episode>__actions-over-time.{png,pdf}
 │       ├── <episode>__action-boxplots.{png,pdf}
+│       ├── <episode>__action-metrics.{png,pdf}
 │       ├── <episode>__timing-over-time.{png,pdf}
 │       └── <episode>__eef-trajectory-3d.{png,pdf}  # when recorded
 ├── overview/                         # complete-run exports only
 │   ├── tables/
 │   │   ├── episode-summary.csv
 │   │   ├── descriptive-statistics.csv
-│   │   └── metric-summary.csv
+│   │   ├── metric-summary.csv
+│   │   ├── action-metrics-by-episode.csv
+│   │   └── action-metrics-summary.csv
 │   └── figures/
 │       ├── success-by-task.{png,pdf}
 │       ├── action-boxplots.{png,pdf}
+│       ├── action-metrics-by-episode.{png,pdf}
+│       ├── action-metrics-by-task.{png,pdf}
 │       ├── inference-latency-boxplots.{png,pdf}
 │       ├── episode-lengths.{png,pdf}
 │       └── eef-trajectories-3d.{png,pdf}           # when recorded
@@ -356,10 +374,14 @@ exports/grouped/<group-name>/
 │   ├── run-summary.csv
 │   ├── episode-summary.csv
 │   ├── descriptive-statistics.csv
-│   └── metric-summary.csv
+│   ├── metric-summary.csv
+│   ├── action-metrics-by-episode.csv
+│   └── action-metrics-summary.csv
 ├── figures/
 │   ├── success-comparison.{png,pdf}
 │   ├── task-success-heatmap.{png,pdf}
+│   ├── action-metrics-by-run.{png,pdf}
+│   ├── action-metrics-by-model.{png,pdf}
 │   ├── inference-latency-boxplots.{png,pdf}
 │   ├── inference-latency-ecdf.{png,pdf}
 │   ├── success-latency-pareto.{png,pdf}
@@ -375,6 +397,16 @@ success/latency plot exposes deployment trade-offs. Terminal composition keeps
 timeouts and benchmark or policy failures separate. Three-dimensional
 end-effector trajectories are generated only when canonical position signals
 were recorded; absence is declared in `metadata.json`, never fabricated.
+
+Action-metric exports prioritize the canonical `action.variance`,
+`action.smoothness_1`, and `action.smoothness_2` results. Episode tables retain
+metric version, configuration hash, unit, status, reason, model method,
+quantization and checkpoint identity. Overview summaries aggregate the
+available episode values by run and task; grouped summaries add run, model and
+whole-group scopes. Boxplots compare episode distributions without combining
+the three metrics onto a misleading shared scale. `unavailable`,
+`insufficient_data`, and `error` counts remain separate, and no missing value is
+converted to zero.
 
 `descriptive-statistics.csv` contains `n`, non-finite count, minimum, P05,
 median, mean, sample standard deviation, P95, and maximum. Episode files compute

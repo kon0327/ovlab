@@ -22,7 +22,11 @@
 {% if model.outcome.presentation == 'binary_success' %}<p>Success: <strong>{{ 'true' if model.outcome.success else 'false' }}</strong></p>
 {% elif model.outcome.presentation == 'success_rate' %}<p>Success rate: <strong>{{ '%.3f'|format(model.outcome.success_rate) }}</strong> ({{ model.outcome.successful_episode_count }}/{{ model.outcome.eligible_episode_count }})</p>
 {% else %}<p class="unavailable">Outcome unavailable.</p>{% endif %}
-<p>Failed: {{ model.outcome.failed_episode_count }} · Interrupted/invalid: {{ model.outcome.interrupted_or_invalid_episode_count }} · Missing: {{ model.outcome.missing_episode_count }}</p></section>
+<p>Non-success: <strong>{{ model.outcome.non_success_episode_count }}</strong> · Interrupted/invalid: {{ model.outcome.interrupted_or_invalid_episode_count }} · Missing: {{ model.outcome.missing_episode_count }}</p>
+<p>Terminal states: {% for status, count in model.outcome.terminal_status_counts.items() %}<code>{{ status }}</code>={{ count }}{% if not loop.last %} · {% endif %}{% endfor %}. A time limit is a scientific non-success, not an execution failure.</p></section>
+<section class="card"><h2>Episode terminal outcomes</h2><div class="table-scroll"><table><thead><tr><th>Task</th><th>Episode</th><th>Rollout</th><th>Seed</th><th>Terminal state</th><th>Classification</th><th>Reason</th></tr></thead><tbody>
+{% for task in model.tasks %}{% for episode in task.episodes %}<tr><td>{{ task.task_id }}</td><td>{{ episode.episode_id }}</td><td>{{ episode.rollout_index }}</td><td>{{ episode.seed }}</td><td><code>{{ episode.terminal_status }}</code></td><td>{{ 'success' if episode.success else 'non-success' }}</td><td>{{ episode.terminal_reason }}</td></tr>{% endfor %}{% endfor %}
+</tbody></table></div></section>
 <section class="card"><h2>Tasks</h2><table><thead><tr><th>Task</th><th>Status</th><th>Instruction</th><th>Outcome</th></tr></thead><tbody>
 {% for task in model.tasks %}<tr><td><a href="{{ task_links[task.task_id] }}">{{ task.task_id }}</a></td><td>{{ task.status }}</td><td>{{ task.instruction }}</td><td>{% if task.outcome.presentation == 'binary_success' %}success={{ 'true' if task.outcome.success else 'false' }}{% elif task.outcome.presentation == 'success_rate' %}{{ '%.3f'|format(task.outcome.success_rate) }} (n={{ task.outcome.eligible_episode_count }}){% else %}unavailable{% endif %}</td></tr>{% endfor %}
 </tbody></table></section>
