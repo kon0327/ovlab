@@ -13,12 +13,13 @@ import uuid
 
 from .derived import _chart_statistics, _chart_svg, _descriptive_statistics
 from .errors import ArtifactError, ReportingSourceUnavailableError
+from .interactive import publish_dashboard, verify_dashboard
 from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
 TRAINING_REPORT_SCHEMA = "ovlab.training-performance-report/v1"
 TRAINING_REPORT_MANIFEST_SCHEMA = "ovlab.training-performance-report-manifest/v1"
-TRAINING_REPORT_RENDERER = "ovlab-training-performance-html@1.0.0"
+TRAINING_REPORT_RENDERER = "ovlab-training-performance-html@1.1.0"
 
 
 def _canonical(value) -> bytes:
@@ -65,6 +66,12 @@ def _verify_training_run(root: Path) -> dict[str, object]:
     manifest = _read_json(root / "manifest.json")
     if manifest.get("schema_version") != "ovlab.training-run/v1" or manifest.get("status") != "completed":
         raise ArtifactError("training performance reports require a finalized completed training run")
+    recorded_paths = {entry.get("path") for entry in manifest.get("files", [])}
+    required = {"training-plan.json", "result.json", "metrics.jsonl"}
+    if (root / "data-flow.json").is_file():
+        required.add("data-flow.json")
+    if not required.issubset(recorded_paths):
+        raise ArtifactError("training report source is absent from the finalized inventory")
     for entry in manifest.get("files", []):
         relative = Path(str(entry.get("path", "")))
         if relative.is_absolute() or ".." in relative.parts:
@@ -147,6 +154,8 @@ def build_training_performance_model(training_run: str | Path) -> dict[str, obje
             "training_manifest_sha256": _sha256(root / "manifest.json"),
             "metrics_sha256": _sha256(root / "metrics.jsonl"),
             "result_sha256": _sha256(root / "result.json"),
+            "plan_sha256": _sha256(root / "training-plan.json"),
+            "data_flow_sha256": _sha256(root / "data-flow.json") if (root / "data-flow.json").is_file() else None,
         },
     }
 
@@ -213,6 +222,9 @@ class TrainingDerivedReportEngine:
     def _display_path(self, target: Path) -> str:
         return str(self.display_root / target.relative_to(self.derived_root))
 
+    def _interactive_display_path(self, target: Path) -> str:
+        return str((self.display_root.parent / "interactive") / target.relative_to(self.derived_root.parent / "interactive"))
+
     def _source(self, run_id: str) -> Path:
         if not run_id or Path(run_id).name != run_id:
             raise ArtifactError("training run must be a portable run ID")
@@ -229,6 +241,8 @@ class TrainingDerivedReportEngine:
         profile_root = self.derived_root / "training" / run_id / "system-performance"
         target = profile_root / build_id
         if target.is_dir():
+            self.verify(run_id, build_id=build_id, _verify_interactive=False)
+            publish_dashboard(target, self.derived_root, source, training=True)
             return {**self.verify(run_id, build_id=build_id), "reused": True, "output": self._display_path(target)}
         stage = profile_root / f".{build_id}.{uuid.uuid4().hex}.partial"
         (stage / "assets").mkdir(parents=True)
@@ -258,9 +272,10 @@ class TrainingDerivedReportEngine:
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             raise
+        publish_dashboard(target, self.derived_root, source, training=True)
         return {**self.verify(run_id, build_id=build_id), "reused": False, "output": self._display_path(target)}
 
-    def verify(self, run_id: str, *, build_id: str | None = None) -> dict[str, object]:
+    def verify(self, run_id: str, *, build_id: str | None = None, _verify_interactive: bool = True) -> dict[str, object]:
         source = self._source(run_id)
         _verify_training_run(source)
         profile_root = self.derived_root / "training" / run_id / "system-performance"
@@ -281,7 +296,8 @@ class TrainingDerivedReportEngine:
         if recorded != _digest(manifest):
             raise ArtifactError("training report manifest checksum mismatch")
         current = build_training_performance_model(source)
-        if current["source"] != manifest.get("identity_inputs", {}).get("source"):
+        recorded_source = manifest.get("identity_inputs", {}).get("source", {})
+        if any(current["source"].get(key) != value for key, value in recorded_source.items()):
             raise ArtifactError("canonical training report inputs changed")
         expected = {"manifest.json"}
         for row in manifest.get("files", []):
@@ -292,7 +308,13 @@ class TrainingDerivedReportEngine:
         actual = {str(path.relative_to(target)) for path in target.rglob("*") if path.is_file()}
         if actual != expected:
             raise ArtifactError("training report contains missing or unexpected files")
+        interactive = {}
+        if _verify_interactive and manifest["identity_inputs"].get("renderer") == TRAINING_REPORT_RENDERER:
+            dashboard = verify_dashboard(target, self.derived_root)
+            interactive = {"interactive_output": self._interactive_display_path(dashboard), "interactive_build_id": dashboard.name,
+                "interactive_integrity": "verified"}
         return {
             "schema_version": TRAINING_REPORT_MANIFEST_SCHEMA, "training_run_id": run_id,
             "derived_build_id": build_id, "integrity": "verified", "canonical_training_run_modified": False,
+            **interactive,
         }

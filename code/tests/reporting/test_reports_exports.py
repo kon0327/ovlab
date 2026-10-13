@@ -54,6 +54,68 @@ def test_trace_report_extracts_policy_allocator_vram_and_estimated_compute(tmp_p
     assert view["estimated_compute_identity"]["method"] == "test-estimator"
 
 
+def test_interactive_eval_preserves_counts_records_hierarchy_and_integrity(tmp_path):
+    runs, derived = tmp_path / "runs", tmp_path / "derived"
+    run_id, source = _canonical_run(runs, name="interactive-eval", rollouts=2, alternating=True, maximum_steps=5)
+    canonical_before = (source / "integrity.json").read_bytes()
+    interactive_root = derived.parent / "interactive"
+    interactive_root.mkdir(parents=True)
+    interactive_root.chmod(0o2770)
+    engine = DerivedReportEngine(runs, derived)
+    result = engine.generate(run_id)
+    target = Path(result["interactive_output"])
+    assert target.parent == derived.parent / "interactive" / run_id / "libero-task-default"
+    model = json.loads((target / "report.json").read_text())
+    assert model["counts"] == {"tasks": 1, "episodes": 2, "observations": 10,
+        "predictions": 10, "predicted_actions": 10, "executed_actions": 10}
+    episode = model["tasks"][0]["episodes"][0]
+    row = episode["records"][0]
+    assert row["input"]["step_id"] == row["output"]["step_id"]
+    assert row["input"]["images"][0]["preview"].startswith("data:image/png;base64,")
+    assert row["output"]["shape"] == [1, 3]
+    assert row["output"]["actions"][0] == row["output"]["executed"][0]["requested"]
+    assert row["output"]["raw_output"]["value"] == {"token_ids": [0]}
+    task_html = next(target.glob("tasks/*/index.html")).read_text()
+    assert '"index":4' in task_html
+    overview = (target / "index.html").read_text()
+    assert '"index":4' not in overview
+    assert 'src="assets/dashboard.js"' in overview
+    assert "http://" not in overview and "https://" not in overview
+    assert engine.generate(run_id)["interactive_build_id"] == result["interactive_build_id"]
+    assert engine.verify(run_id)["interactive_integrity"] == "verified"
+    assert interactive_root.stat().st_mode & 0o7777 == 0o2770
+    assert (source / "integrity.json").read_bytes() == canonical_before
+    # Regeneration must not incorporate publication timestamps or durations into identity.
+    import shutil
+    shutil.rmtree(derived)
+    rebuilt = engine.generate(run_id)
+    assert rebuilt["interactive_build_id"] == result["interactive_build_id"]
+    (target / "assets/dashboard.js").write_text("tampered")
+    with pytest.raises(ArtifactError, match="interactive report file checksum mismatch"):
+        engine.verify(run_id)
+
+
+def test_interactive_eval_chunk_alignment_and_script_escaping(tmp_path):
+    from ovlab_runner.interactive import build_eval_dashboard, _page
+
+    run_id = _run_id("interactive-chunk")
+    plan = runner_plan(run_context=make_run_context(run_id=run_id, seed=5))
+    runner = ExperimentRunner(plan, TrackingBenchmark(maximum_steps=3), TrackingPolicy(horizon=2),
+        FilesystemRunArtifactStore(tmp_path / "runs"), clock=DeterministicClock(), configuration_snapshot=_snapshot())
+    runner.connect(); runner.run()
+    source = tmp_path / "runs" / run_id
+    model = build_eval_dashboard(source, build_report_model(source))
+    episode = model["tasks"][0]["episodes"][0]
+    assert episode["counts"]["predicted_actions"] == episode["counts"]["predictions"] * 2
+    for row in episode["records"]:
+        for action in row["output"]["executed"]:
+            assert action["requested"] == row["output"]["actions"][action["selected_chunk_index"]]
+    model["tasks"][0]["instruction"] = '</script><script>alert("injected")</script>'
+    page = _page(model, "", [], "index.html")
+    assert '</script><script>alert("injected")' not in page
+    assert "\\u003c/script\\u003e" in page
+
+
 class AlternatingBenchmark(TrackingBenchmark):
     def _reset_episode(self, context):
         result = super()._reset_episode(context)
@@ -542,7 +604,6 @@ def test_external_publish_can_skip_html_but_keeps_isolated_export_and_read_only_
     app = OvlabApplication(REPOSITORY, environment={
         "OVLAB_DATA_ROOT": str(data),
         "OVLAB_RUNS_ROOT": str(data / "runs"),
-        "OVLAB_DERIVED_ROOT": str(data / "derived"),
         "OVLAB_EXPORTS_ROOT": str(data / "exports"),
     })
 
@@ -550,7 +611,7 @@ def test_external_publish_can_skip_html_but_keeps_isolated_export_and_read_only_
 
     assert result["report"] is None
     assert result["isolated_export"]["integrity"] == "verified"
-    assert not (data / "derived").exists()
+    assert not (data / "exports/derived").exists()
     assert (run_path / "integrity.json").read_bytes() == before
 
 
@@ -558,14 +619,16 @@ def test_unified_cli_report_and_export_json_workflows(tmp_path):
     repository = Path(__file__).resolve().parents[3]
     data = tmp_path / "data"
     run_id, _ = _canonical_run(data / "runs", name="cli-report")
+    matplotlib_config = tmp_path / "matplotlib-config"
+    matplotlib_config.mkdir()
     environment = {
         **os.environ,
         "OVLAB_PYTHON": sys.executable,
         "OVLAB_DATA_ROOT": str(data),
         "OVLAB_RUNS_ROOT": str(data / "runs"),
-        "OVLAB_DERIVED_ROOT": str(data / "derived"),
         "OVLAB_EXPORTS_ROOT": str(data / "exports"),
         "OVLAB_REPORTING_RUNTIME": "host",
+        "MPLCONFIGDIR": str(matplotlib_config),
     }
 
     def invoke(*arguments):
@@ -588,7 +651,7 @@ def test_unified_cli_report_and_export_json_workflows(tmp_path):
     generated = invoke("report", "generate", "--run", run_id, "--profile", "libero-task-default", "--json")
     assert generated.returncode == 0 and generated.stderr == ""
     result = json.loads(generated.stdout)["result"]
-    assert Path(result["output"]).is_relative_to(data / "derived")
+    assert Path(result["output"]).is_relative_to(data / "exports/derived")
     verified = invoke("report", "verify", "--run", run_id, "--profile", "libero-task-default", "--build", result["derived_build_id"], "--json")
     assert verified.returncode == 0 and json.loads(verified.stdout)["result"]["integrity"] == "verified"
     task = invoke("report", "generate", "--run", run_id, "--task", "mock-task-0", "--profile", "libero-task-default", "--json")

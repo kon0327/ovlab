@@ -286,16 +286,15 @@ def test_source_launcher_uses_dedicated_reporting_container(tmp_path):
     assert arguments[0] == "run"
     assert "--network" in arguments and "none" in arguments
     assert "OVLAB_RUNS_ROOT=/var/lib/ovlab/runs" in arguments
-    assert "OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived" in arguments
     assert "OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports" in arguments
-    assert f"OVLAB_DERIVED_DISPLAY_ROOT={data / 'derived'}" in arguments
+    assert f"OVLAB_DERIVED_DISPLAY_ROOT={data / 'exports' / 'derived'}" in arguments
     assert f"OVLAB_EXPORTS_DISPLAY_ROOT={data / 'exports'}" in arguments
     assert any("target=/var/lib/ovlab/runs,readonly" in value for value in arguments)
-    assert any("target=/var/lib/ovlab/derived" in value for value in arguments)
     assert any("target=/var/lib/ovlab/exports" in value for value in arguments)
     assert arguments[-4:] == ["export", "isolated", "--run", "run-id"]
     assert (data / "exports").stat().st_mode & 0o7777 == 0o2770
-    assert (data / "derived").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/derived").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/interactive").stat().st_mode & 0o7777 == 0o2770
     assert (data / "exports/isolated").stat().st_mode & 0o7777 == 0o2770
     assert (data / "exports/grouped").stat().st_mode & 0o7777 == 0o2770
 
@@ -336,7 +335,7 @@ def test_report_profiles_uses_read_only_registry_container_without_data_director
 @pytest.mark.parametrize(
     ("arguments", "artifact_directory", "target"),
     [
-        (("report", "verify", "--run", "run-1"), "derived", "/var/lib/ovlab/derived"),
+        (("report", "verify", "--run", "run-1"), "exports/derived", "/var/lib/ovlab/exports"),
         (("export", "verify", "--kind", "isolated", "--name", "run-1"), "exports", "/var/lib/ovlab/exports"),
     ],
 )
@@ -357,7 +356,7 @@ def test_reporting_verification_uses_read_only_artifacts_without_chmod(
     data = tmp_path / "data"
     (data / "runs").mkdir(parents=True)
     artifact = data / artifact_directory
-    artifact.mkdir()
+    artifact.mkdir(parents=True)
     artifact.chmod(0o555)
 
     result = _run(

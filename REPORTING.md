@@ -2,8 +2,7 @@
 
 This guide explains how to generate, inspect, verify, and export OVLAB reports.
 Reporting is an offline postprocessing workflow: it reads canonical benchmark
-evidence from `runs/`, writes regenerable reports to `derived/`, and writes
-explicit publication exports to `exports/`.
+evidence from `runs/` and writes all generated outputs below `exports/`.
 
 Reporting never starts LIBERO, loads a policy checkpoint, or performs model
 inference. Canonical run artifacts remain authoritative and read-only.
@@ -14,9 +13,14 @@ The recommended host workspace is outside the source repository:
 
 ```text
 /home/kony/dissertation/ovlab-data/
-├── runs/       # immutable traces, metrics, videos, configurations and provenance
-├── derived/    # regenerable benchmark and training HTML reports
-└── exports/    # explicitly selected figures and tables
+├── runs/
+│   ├── evaluate/ # immutable traces, metrics, videos and provenance
+│   └── train/    # canonical training evidence and staged output
+└── exports/
+    ├── grouped/     # explicitly selected comparison exports
+    ├── isolated/    # per-run publication exports
+    ├── derived/     # regenerable benchmark and training HTML reports
+    └── interactive/ # offline graphical report companions
 ```
 
 The CLI uses the repository sibling `ovlab-data/` by default. Override the
@@ -25,9 +29,13 @@ locations only when required by the host:
 ```bash
 export OVLAB_DATA_ROOT=/home/kony/dissertation/ovlab-data
 export OVLAB_RUNS_ROOT="$OVLAB_DATA_ROOT/runs"
-export OVLAB_DERIVED_ROOT="$OVLAB_DATA_ROOT/derived"
 export OVLAB_EXPORTS_ROOT="$OVLAB_DATA_ROOT/exports"
 ```
+
+Evaluation and training runs share `OVLAB_RUNS_ROOT`: evaluation evidence is
+stored in `runs/evaluate/<run-id>/` and training evidence in `runs/train/<run-id>/`.
+Both appear in `ovlab data list --kind runs`. Prefix a selector with
+`evaluate:` or `train:` if IDs collide.
 
 Host paths, creation timestamps, renderer devices, and Docker tags do not enter
 the scientific configuration hash.
@@ -49,8 +57,8 @@ reporting:
 In Docker deployment, the benchmark process only finalizes the canonical run.
 After benchmark and policy teardown, the orchestrator starts the dedicated
 `ovlab-reporting` image and hands it the single new run ID. That container mounts
-`runs/` read-only and atomically publishes both the complete HTML report under
-`derived/` and the isolated run export under `exports/`.
+`runs/` read-only and atomically publishes the complete HTML report, interactive
+dashboard and isolated run export under `exports/`.
 
 `reporting.enabled: false` skips the HTML report but retains the automatic
 isolated export. The historical task-finalization fields remain accepted for
@@ -120,7 +128,7 @@ the same build instead of creating a semantically duplicate report.
 Reports are stored by canonical run ID, profile, and deterministic build ID:
 
 ```text
-derived/<run-id>/<profile-id>/
+exports/derived/<run-id>/<profile-id>/
 ├── latest.json
 └── <derived-build-id>/
     ├── index.html
@@ -135,7 +143,7 @@ derived/<run-id>/<profile-id>/
 Open `index.html` directly in a browser. Reports are self-contained and do not
 use a CDN, external font, analytics service, or remote JavaScript. Episode video
 links are relative links to the canonical MP4 files under the sibling `runs/`
-tree, so keep `runs/` and `derived/` under the same data root when moving them.
+tree, so keep `runs/` and `exports/` under the same data root when moving them.
 
 Charts are self-contained interactive SVG documents with labeled X/Y axes and
 units. Hover or move the pointer over the plot for the nearest displayed sample
@@ -166,6 +174,70 @@ mislabelled as a policy, benchmark or infrastructure failure.
 `latest.json` identifies the most recently generated run- or task-scoped build.
 For archival automation, retain the returned build ID and pass it explicitly to
 verification.
+
+## Interactive dashboards
+
+The existing `report generate`, `report publish`, and `train report` commands
+generate both report variants automatically. Their JSON result includes
+`interactive_output`, `interactive_build_id`, and `interactive_integrity`.
+
+```text
+exports/interactive/
+├── <run-id>/<profile-id>/
+│   ├── latest.json
+│   └── <interactive-build-id>/
+│       ├── index.html
+│       ├── report.json
+│       ├── manifest.json
+│       ├── assets/dashboard.{css,js}
+│       └── tasks/<task-key>/index.html
+└── training/<training-run-id>/system-performance/
+    ├── latest.json
+    └── <interactive-build-id>/
+        ├── index.html
+        ├── report.json
+        ├── manifest.json
+        └── assets/dashboard.{css,js}
+```
+
+Open `interactive_output/index.html` directly in a browser. The dashboard embeds
+its evidence and needs neither a web server nor network access. The run view
+embeds the first three policy calls of each episode; task pages let you select
+every prediction. `report.json` retains the complete dashboard evidence. Sidebar
+links lead to task dashboards and the existing HTML reports.
+
+Dashboards show counts for the full run, a graphical input → model → output
+flow, actual batch and record evidence, searchable hyperparameters, and charts
+with exact-value hover, wheel zoom, drag pan and reset. Eval details preserve
+instructions, camera shapes/dtypes, proprioception, predicted action chunks,
+action specifications and units, and requested/applied actions joined by
+prediction ID. Raw RGB previews are embedded for the first three predictions
+per episode; remaining records preserve their canonical image references.
+Observations, prediction calls, predicted actions and executed actions have
+separate counts. A policy call is one observation; it does not claim knowledge
+of an unrecorded internal model tensor batch.
+
+New training runs record `data-flow.json` from the first actual forward pass:
+full input/output tensor shapes and dtypes, a bounded first-record token/pixel
+preview, decoded prompt and predicted supervised tokens, transformed-image
+preview, loss, and optimizer defaults. Pixel previews rescale the first three
+processed tensor channels and are explicitly distinguished from original RGB.
+Training metrics record examples, microbatches, non-padding tokens and supervised
+action-token accuracy for each optimizer step. Dataset size and examples seen
+(which can include repeated records) remain separate. Loss retains its existing
+meaning: the last microbatch loss at the recorded optimizer step.
+
+Historical runs can be regenerated immediately. Missing batch captures,
+dataset counts or accuracy remain **Unavailable**, without inferred example
+counts or fabricated samples. Robot task success is shown for eval; train
+reports show loss and action-token accuracy, with robot task success unavailable.
+A single eval episode has a binary outcome rather than a statistical rate.
+
+Dashboard builds have deterministic identities and file manifests. Existing
+`report verify` and `train report --verify` commands also verify the companion
+dashboard for new builds, including missing, extra and modified files. Previous
+HTML builds remain verifiable without a dashboard. Keep `exports/derived/` and
+`exports/interactive/` together when relocating reports.
 
 ## Verify a report
 
@@ -248,7 +320,7 @@ checkpoint finalizer succeeds. The commands above regenerate or verify it
 without starting a trainer.
 
 Output is stored under
-`derived/training/<training-run-id>/system-performance/<build-id>/`. Training
+`exports/derived/training/<training-run-id>/system-performance/<build-id>/`. Training
 reports show optimizer-step VRAM tracking and peaks, exact total/trainable/
 frozen/adapter counts, step duration and loss statistics, and estimated GFLOPs
 per optimizer step and in total. The estimator is the documented dense-model
@@ -463,8 +535,9 @@ Prepare an untracked deployment environment once:
 cp deploy/compose/.env.example deploy/compose/.env
 ```
 
-Set at least the real `OVLAB_RUNS_ROOT`, `OVLAB_DERIVED_ROOT`,
-`OVLAB_EXPORTS_ROOT`, and host artifact GID. Then publish a report and isolated
+Set at least the real `OVLAB_RUNS_ROOT`, `OVLAB_EXPORTS_ROOT`, and host artifact
+GID. Reports, interactive dashboards and publication exports share the
+`OVLAB_EXPORTS_ROOT` tree. Then publish a report and isolated
 export:
 
 ```bash
@@ -548,8 +621,8 @@ metric results, or `integrity.json` to make verification pass.
 
 ### Report exists but a video link is broken
 
-Keep the canonical `runs/` and regenerated `derived/` directories as siblings
-under one data root. Verify that the episode contains both `video.mp4` and its
+Keep the canonical `runs/` and generated `exports/` directories under one data
+root. Verify that the episode contains both `video.mp4` and its
 canonical `video.json`, then run `ovlab report verify` for the affected build.
 
 ## Operator checklist

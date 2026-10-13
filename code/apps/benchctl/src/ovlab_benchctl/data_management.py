@@ -18,6 +18,7 @@ from .run_references import (
     RunReferenceError,
     RunReferenceUnavailableError,
     resolve_run_reference,
+    resolve_run_reference_across,
     run_hash,
 )
 
@@ -55,6 +56,8 @@ def _atomic_json(path: Path, value: dict[str, object]) -> None:
 
 
 def _directory_inventory(root: Path, *, hashes: bool) -> dict[str, object]:
+    if root.is_symlink():
+        raise DataSafetyError(f"managed data contains a forbidden symbolic link: {root}")
     file_count = 0
     size_bytes = 0
     digest = hashlib.sha256() if hashes else None
@@ -91,10 +94,13 @@ class DataTarget:
     path: Path
     archive_relative: Path
     state: str
+    run_type: str | None = None
+    companion_path: Path | None = None
+    companion_relative: Path | None = None
 
     @property
     def run_hash(self) -> str | None:
-        return run_hash(self.identifier) if self.kind == "run" else None
+        return run_hash(self.identifier.split(":", 1)[-1]) if self.kind == "run" else None
 
     def document(self, *, detail: bool = False) -> dict[str, object]:
         value = {
@@ -105,6 +111,8 @@ class DataTarget:
         }
         if self.run_hash is not None:
             value["run_hash"] = self.run_hash
+        if self.run_type is not None:
+            value["run_type"] = self.run_type
         if detail:
             value.update(_directory_inventory(self.path, hashes=False))
         return value
@@ -114,22 +122,22 @@ class DataManager:
     """Manage canonical runs plus regenerable derived reports and exports."""
 
     def __init__(
-        self, data_root: str | Path, runs_root: str | Path, derived_root: str | Path,
+        self, data_root: str | Path, runs_root: str | Path,
         *, exports_root: str | Path | None = None,
         archive_root: str | Path | None = None,
     ) -> None:
         self.data_root = Path(data_root).expanduser().resolve()
         self.runs_root = Path(runs_root).expanduser().resolve()
-        self.derived_root = Path(derived_root).expanduser().resolve()
         self.exports_root = Path(
             exports_root if exports_root is not None else self.data_root / "exports"
         ).expanduser().resolve()
+        self.derived_root = self.exports_root / "derived"
+        self.interactive_root = self.exports_root / "interactive"
         self.archive_root = Path(
             archive_root if archive_root is not None else self.data_root / "archive"
         ).expanduser().resolve()
         managed_roots = (
             ("runs", self.runs_root),
-            ("derived", self.derived_root),
             ("exports", self.exports_root),
             ("archive", self.archive_root),
         )
@@ -198,11 +206,31 @@ class DataManager:
 
     def _run_target(self, identifier: str, *, archived: bool = False) -> DataTarget:
         root = self.archive_root / "runs" if archived else self.runs_root
-        resolved = self._run_reference(root, identifier, "run")
-        path = self._managed_directory(resolved.path, root, "run")
+        requested_type = None
+        plain = identifier
+        if ":" in identifier:
+            requested_type, plain = identifier.split(":", 1)
+            if requested_type not in {"train", "evaluate"} or not plain:
+                raise DataSafetyError("run ID prefix must be train: or evaluate:")
+        legacy_train = self.archive_root / "training-runs" if archived else self.data_root / "training-runs"
+        roots = (
+            (root / requested_type, legacy_train) if requested_type == "train" else
+            (root / requested_type,) if requested_type else
+            (root / "train", legacy_train, root / "evaluate", root)
+        )
+        try:
+            resolved = resolve_run_reference_across(roots, plain, label="run")
+        except RunReferenceUnavailableError as exc:
+            raise DataSourceUnavailableError(str(exc)) from exc
+        except (RunReferenceAmbiguousError, RunReferenceError) as exc:
+            raise DataSafetyError(str(exc)) from exc
+        DataManager._identifier(resolved.run_id, "run ID")
+        variant = requested_type or ("train" if resolved.path == legacy_train.resolve() / resolved.run_id else resolved.path.parent.name if resolved.path.parent.name in {"train", "evaluate"} else "evaluate")
+        allowed_root = root if resolved.path.is_relative_to(root) else resolved.path.parent
+        path = self._managed_directory(resolved.path, allowed_root, "run")
         return DataTarget(
-            "run", resolved.run_id, path, Path("runs") / resolved.run_id,
-            self._run_state(path),
+            "run", resolved.run_id, path, Path("runs") / variant / resolved.run_id,
+            self._run_state(path), variant,
         )
 
     @staticmethod
@@ -219,7 +247,7 @@ class DataManager:
     def _report_target(self, identifier: str, *, archived: bool = False) -> DataTarget:
         training = identifier.startswith("training:")
         plain = identifier.split(":", 1)[1] if training else identifier
-        root = self.archive_root / "derived" if archived else self.derived_root
+        root = self.archive_root / "exports" / "derived" if archived else self.derived_root
         if training:
             resolved = self._run_reference(root / "training", plain, "training report")
             plain = resolved.run_id
@@ -229,7 +257,17 @@ class DataManager:
         relative = Path("training") / plain if training else Path(plain)
         path = self._managed_directory(root / relative, root, "report")
         display = f"training:{plain}" if training else plain
-        return DataTarget("report", display, path, Path("derived") / relative, self._report_state(path))
+        companion_relative = Path("interactive") / relative
+        companion_path = (self.archive_root / "exports" / companion_relative) if archived else (self.exports_root / companion_relative)
+        if companion_path.is_symlink():
+            raise DataSafetyError(f"managed interactive report contains a symbolic link: {companion_path}")
+        return DataTarget(
+            "report", display, path,
+            Path("exports") / "derived" / relative,
+            self._report_state(path),
+            companion_path=companion_path,
+            companion_relative=Path("exports") / companion_relative,
+        )
 
     def _export_target(self, identifier: str, *, archived: bool = False) -> DataTarget:
         if not isinstance(identifier, str) or ":" not in identifier:
@@ -255,15 +293,33 @@ class DataManager:
         if not root.is_dir():
             return []
         targets = []
+        for run_type in ("train", "evaluate"):
+            typed_root = root / run_type
+            if typed_root.is_symlink():
+                raise DataSafetyError(f"managed {run_type} run root contains a symbolic link: {typed_root}")
+            if not typed_root.is_dir():
+                continue
+            for path in sorted(typed_root.iterdir()):
+                if path.is_symlink():
+                    raise DataSafetyError(f"managed {run_type} run root contains a symbolic link: {path}")
+                if path.is_dir():
+                    targets.append(self._run_target(f"{run_type}:{path.name}", archived=archived))
+        legacy_train = self.archive_root / "training-runs" if archived else self.data_root / "training-runs"
+        if legacy_train.is_dir():
+            for path in sorted(legacy_train.iterdir()):
+                if path.is_symlink():
+                    raise DataSafetyError(f"legacy training run root contains a symbolic link: {path}")
+                if path.is_dir():
+                    targets.append(self._run_target(f"train:{path.name}", archived=archived))
         for path in sorted(root.iterdir()):
             if path.is_symlink():
                 raise DataSafetyError(f"managed run root contains a symbolic link: {path}")
-            if path.is_dir():
+            if path.is_dir() and path.name not in {"train", "evaluate"}:
                 targets.append(self._run_target(path.name, archived=archived))
         return targets
 
     def _list_reports(self, *, archived: bool) -> list[DataTarget]:
-        root = self.archive_root / "derived" if archived else self.derived_root
+        root = self.archive_root / "exports" / "derived" if archived else self.derived_root
         if not root.is_dir():
             return []
         targets = []
@@ -353,6 +409,8 @@ class DataManager:
                     f"refusing to modify {target.kind} {target.identifier!r} in state {target.state!r}"
                 )
             _directory_inventory(target.path, hashes=False)
+            if target.companion_path is not None and target.companion_path.is_dir():
+                _directory_inventory(target.companion_path, hashes=False)
         return tuple(targets)
 
     def preview(self, action: str, *, force: bool = False, **selector) -> dict[str, object]:
@@ -379,6 +437,8 @@ class DataManager:
         for target in targets:
             try:
                 shutil.rmtree(target.path)
+                if target.companion_path is not None and target.companion_path.is_dir():
+                    shutil.rmtree(target.companion_path)
             except PermissionError as exc:
                 raise DataSafetyError(
                     f"delete permission changed after preflight for {target.kind} "
@@ -398,9 +458,12 @@ class DataManager:
         blocked: list[Path] = []
         seen: set[Path] = set()
         for target in targets:
-            directories = [target.path.parent, target.path]
+            roots = [target.path]
+            if target.companion_path is not None and target.companion_path.is_dir():
+                roots.append(target.companion_path)
+            directories = [directory for root in roots for directory in (root.parent, root)]
             directories.extend(
-                path for path in target.path.rglob("*")
+                path for root in roots for path in root.rglob("*")
                 if path.is_dir() and not path.is_symlink()
             )
             for directory in directories:
@@ -428,6 +491,14 @@ class DataManager:
             raise DataSafetyError(
                 f"archive destination already exists for {target.kind} {target.identifier!r}"
             )
+        companion_destination = None
+        if target.companion_path is not None and target.companion_path.is_dir():
+            assert target.companion_relative is not None
+            companion_destination = (self.archive_root / target.companion_relative).resolve()
+            if not companion_destination.is_relative_to(self.archive_root) or companion_destination.exists():
+                raise DataSafetyError(
+                    f"archive destination already exists for interactive report {target.identifier!r}"
+                )
         destination.parent.mkdir(parents=True, exist_ok=True)
         cross_filesystem = False
         try:
@@ -449,6 +520,27 @@ class DataManager:
                 shutil.rmtree(stage, ignore_errors=True)
                 raise
         inventory = _directory_inventory(destination, hashes=False)
+        companion_inventory = None
+        if companion_destination is not None and target.companion_path is not None:
+            companion_destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(target.companion_path, companion_destination)
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+                cross_filesystem = True
+                stage = companion_destination.with_name(f".{companion_destination.name}.{uuid.uuid4().hex}.partial")
+                source_inventory = _directory_inventory(target.companion_path, hashes=True)
+                try:
+                    shutil.copytree(target.companion_path, stage, symlinks=False)
+                    if _directory_inventory(stage, hashes=True) != source_inventory:
+                        raise DataSafetyError("cross-filesystem interactive archive verification failed")
+                    stage.rename(companion_destination)
+                    shutil.rmtree(target.companion_path)
+                except Exception:
+                    shutil.rmtree(stage, ignore_errors=True)
+                    raise
+            companion_inventory = _directory_inventory(companion_destination, hashes=False)
         entry = {
             "schema_version": ARCHIVE_ENTRY_SCHEMA,
             "kind": target.kind,
@@ -458,15 +550,29 @@ class DataManager:
             "archive_relative": str(target.archive_relative),
             "archived_at_utc": _utc_now(),
             "cross_filesystem_copy": cross_filesystem,
+            "interactive_archive_path": None if companion_destination is None else str(companion_destination),
+            "interactive_file_count": None if companion_inventory is None else companion_inventory["file_count"],
+            "interactive_size_bytes": None if companion_inventory is None else companion_inventory["size_bytes"],
             **inventory,
         }
         manifest_name = target.identifier.replace(":", "--") + ".json"
-        _atomic_json(self.archive_root / "manifests" / target.kind / manifest_name, entry)
+        manifest_root = self.archive_root / "manifests" / target.kind
+        if target.run_type is not None:
+            entry["run_type"] = target.run_type
+            manifest_root = manifest_root / target.run_type
+        _atomic_json(manifest_root / manifest_name, entry)
         return entry
 
     def archive(self, **selector) -> dict[str, object]:
         targets = self.select(**selector)
         destinations = [self.archive_root / target.archive_relative for target in targets]
+        destinations.extend(
+            self.archive_root / target.companion_relative
+            for target in targets
+            if target.companion_relative is not None
+            and target.companion_path is not None
+            and target.companion_path.is_dir()
+        )
         collisions = [str(path) for path in destinations if path.exists()]
         if collisions:
             raise DataSafetyError("archive destination already exists: " + ", ".join(collisions))

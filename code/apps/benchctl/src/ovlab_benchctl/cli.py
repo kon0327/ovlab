@@ -226,7 +226,10 @@ def _parser() -> argparse.ArgumentParser:
     for action in ("archive", "delete"):
         command = data_commands.add_parser(action, help=f"{action} selected canonical data")
         selectors = command.add_mutually_exclusive_group(required=True)
-        selectors.add_argument("--run", dest="run_id", metavar="RUN_ID_OR_HASH")
+        selectors.add_argument(
+            "--run", dest="run_id", metavar="RUN_ID_OR_HASH",
+            help="run ID/hash; prefix train: or evaluate: when IDs collide",
+        )
         selectors.add_argument(
             "--report", dest="report_id", metavar="REPORT_ID",
             help="benchmark RUN_ID/RUN_HASH, or training:TRAINING_RUN_ID/RUN_HASH",
@@ -485,10 +488,12 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("run", ("run_id", "source_run")), ("profile", ("profile_id",)),
         ("build", ("derived_build_id",)), ("status", ("status",)),
         ("integrity", ("integrity",)), ("output", ("output",)), ("reused", ("reused",)),
+        ("interactive", ("interactive_output",)), ("interactive integrity", ("interactive_integrity",)),
     ),
     "report publish": (
         ("status", ("status",)), ("run", ("run_id",)),
         ("report", ("report.output",)), ("export", ("isolated_export.output",)),
+        ("interactive", ("report.interactive_output",)),
         ("canonical run modified", ("canonical_run_modified",)),
     ),
     "report verify": (
@@ -496,6 +501,7 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("build", ("derived_build_id",)), ("status", ("status",)),
         ("integrity", ("integrity",)), ("files", ("verified_file_count",)),
         ("output", ("output",)),
+        ("interactive", ("interactive_output",)), ("interactive integrity", ("interactive_integrity",)),
     ),
     "export isolated": (
         ("type", ("export_type",)), ("name", ("name",)),
@@ -590,6 +596,7 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     "train report": (
         ("training run", ("training_run_id",)), ("build", ("derived_build_id",)),
         ("integrity", ("integrity",)), ("output", ("output",)), ("reused", ("reused",)),
+        ("interactive", ("interactive_output",)), ("interactive integrity", ("interactive_integrity",)),
     ),
     "checkpoint inspect": (
         ("checkpoint", ("checkpoint.checkpoint_id", "manifest.checkpoint_id")),
@@ -618,7 +625,8 @@ def _compact(command: str, result) -> str:
             if isinstance(row, dict) and row.get("kind") == "run":
                 lines.append(
                     f"run {_scalar(row.get('id'))} ({_scalar(row.get('run_hash'))}) "
-                    f"{_scalar(row.get('state'))} {_scalar(row.get('path'))}"
+                    f"{_scalar(row.get('state'))} {_scalar(row.get('path'))} "
+                    f"[{_scalar(row.get('run_type', 'evaluate'))}]"
                 )
             elif isinstance(row, dict):
                 lines.append(

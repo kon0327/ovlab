@@ -15,7 +15,7 @@ For the complete reproducibility and security contract, see
 | Image | Responsibility | Persistent access |
 |---|---|---|
 | `ovlab-benchmark-libero:local` | OVLAB CLI, runner, LIBERO, Robosuite and MuJoCo | datasets read-only, canonical runs read-write |
-| `ovlab-reporting:local` | Offline HTML reports and isolated/grouped exports | canonical runs read-only, derived/exports read-write |
+| `ovlab-reporting:local` | Offline HTML reports, dashboards and exports | canonical runs read-only, exports read-write |
 | `ovlab-policy-openvla:local` | OpenVLA Vanilla and merged-LoRA policy service | checkpoints read-only |
 | `ovlab-policy-openvla-oft:local` | OpenVLA-OFT policy service | checkpoints read-only |
 
@@ -83,17 +83,23 @@ Keep deployment evidence outside the source checkout:
 │   └── local/         # unpublished QuIC and experimental artifacts
 ├── datasets/
 │   └── libero/        # LIBERO demonstrations mounted read-only
-├── runs/              # canonical traces, per-episode videos, metrics, config and provenance
-├── derived/           # regenerated reports, plots and tables
-└── exports/           # curated publication and sharing outputs
+├── runs/
+│   ├── evaluate/      # canonical traces, per-episode videos, metrics and provenance
+│   └── train/         # canonical training evidence and staged output
+└── exports/
+    ├── grouped/       # comparison tables and figures
+    ├── isolated/      # per-run publication exports
+    ├── derived/       # regenerated HTML reports and plots
+    └── interactive/   # offline report dashboards
 ```
 
 The CLI creates a missing `runs/` directory with mode `2770` and passes the
 invoking user's primary GID to benchmark containers as a supplementary group.
 For direct Compose use, create the directories yourself and set
-`OVLAB_HOST_ARTIFACT_GID` to `id -g`. Only the benchmark writes canonical runs.
+`OVLAB_HOST_ARTIFACT_GID` to `id -g`. Evaluation writes under `runs/evaluate/`;
+the isolated trainer writes under `runs/train/`.
 After runtime teardown, the reporting image mounts `runs/` read-only and
-`derived/` plus `exports/` read-write. Neither output root is mounted into the
+`exports/` read-write. The exports root is not mounted into the
 benchmark or policy containers.
 
 Copy the environment template and replace every host-specific value:
@@ -110,7 +116,6 @@ OVLAB_MANAGED_CHECKPOINTS_ROOT=/home/kony/dissertation/ovlab-data/checkpoints/hu
 # Optional; defaults to /home/kony/dissertation/ovlab-data/datasets/libero
 OVLAB_DATASETS_PATH=/home/kony/dissertation/ovlab-data/datasets/libero
 OVLAB_RUNS_ROOT=/home/kony/dissertation/ovlab-data/runs
-OVLAB_DERIVED_ROOT=/home/kony/dissertation/ovlab-data/derived
 OVLAB_EXPORTS_ROOT=/home/kony/dissertation/ovlab-data/exports
 OVLAB_GPU_DEVICE=0
 OVLAB_EGL_DEVICE_ID=0
@@ -224,7 +229,7 @@ docker compose \
 ```
 
 The report service reads `/var/lib/ovlab/runs` read-only and atomically writes
-the HTML bundle to `/var/lib/ovlab/derived/<run>/<profile>/<derived-build-id>`
+the HTML bundle to `/var/lib/ovlab/exports/derived/<run>/<profile>/<derived-build-id>`
 plus the isolated export to `/var/lib/ovlab/exports/isolated/<run>`. It verifies
 canonical checksums and publishes manifests last. Grouped exports use the same
 image through the `export` Compose profile.

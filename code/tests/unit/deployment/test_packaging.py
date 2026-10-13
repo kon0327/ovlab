@@ -134,20 +134,20 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     assert "config-bundle-ro" in COMPOSE
 
 
-def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
+def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports():
     assert "OVLAB_RUNS_PATH" not in COMPOSE
     assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 4
     assert COMPOSE.count("target: /var/lib/ovlab/runs") == 4
-    assert COMPOSE.count("--output-root, /var/lib/ovlab/runs") == 2
+    assert COMPOSE.count("--output-root, /var/lib/ovlab/runs/evaluate") == 2
     assert COMPOSE.count("target: /var/lib/ovlab/runs\n        read_only: true") == 2
-    assert COMPOSE.count("source: ${OVLAB_DERIVED_ROOT:-../../../ovlab-data/derived}") == 1
-    assert COMPOSE.count("target: /var/lib/ovlab/derived") == 1
-    assert "OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,derived-rw,exports-rw" in COMPOSE
+    assert "OVLAB_DERIVED_ROOT" not in COMPOSE
+    assert "/var/lib/ovlab/derived" not in COMPOSE
+    assert "OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw" in COMPOSE
     assert COMPOSE.count("source: ${OVLAB_CONFIGS_ROOT:-../../configs}") == 2
     assert COMPOSE.count("target: /opt/ovlab/configs\n        read_only: true") == 2
     assert COMPOSE.count("source: ${OVLAB_EXPORTS_ROOT:-../../../ovlab-data/exports}") == 2
     assert COMPOSE.count("target: /var/lib/ovlab/exports") == 2
-    assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,derived-rw,exports-rw") == 1
+    assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw") == 2
     assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro") == 1
     for service, successor in (
         ("benchmark-openvla", "policy-openvla-oft"),
@@ -161,7 +161,6 @@ def test_host_artifact_mounts_separate_canonical_runs_from_derived_outputs():
     assert "image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}" in reporting
     assert "report\n      - publish" in reporting
     assert "target: /var/lib/ovlab/runs\n        read_only: true" in reporting
-    assert "target: /var/lib/ovlab/derived" in reporting
     assert "target: /var/lib/ovlab/exports" in reporting
     assert "gpus:" not in reporting
     assert "rpc-openvla" not in reporting and "rpc-oft" not in reporting

@@ -145,7 +145,8 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
         data_root="${OVLAB_DATA_ROOT:-$repository_root/../ovlab-data}"
         model_data_root="${OVLAB_MODEL_DATA_ROOT:-$data_root}"
         training_runs_root="$(realpath -m -- "$model_data_root/training-runs")"
-        derived_root="$(realpath -m -- "${OVLAB_DERIVED_ROOT:-$data_root/derived}")"
+        exports_root="$(realpath -m -- "${OVLAB_EXPORTS_ROOT:-$data_root/exports}")"
+        derived_root="$exports_root/derived"
         if [[ ! -d "$training_runs_root" ]]; then
             echo "ovlab: canonical training run directory does not exist: $training_runs_root" >&2
             exit 4
@@ -165,22 +166,22 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
                 echo "ovlab: derived report directory does not exist: $derived_root" >&2
                 exit 4
             fi
-            derived_mount="type=bind,source=$derived_root,target=/var/lib/ovlab/derived,readonly"
+            exports_mount="type=bind,source=$exports_root,target=/var/lib/ovlab/exports,readonly"
         else
-            mkdir -p -- "$derived_root"
-            chmod 2770 -- "$derived_root"
-            derived_mount="type=bind,source=$derived_root,target=/var/lib/ovlab/derived"
+            mkdir -p -- "$derived_root" "$exports_root/interactive"
+            chmod 2770 -- "$exports_root" "$derived_root" "$exports_root/interactive"
+            exports_mount="type=bind,source=$exports_root,target=/var/lib/ovlab/exports"
         fi
         echo "ovlab: reporting: using isolated image $reporting_image for training performance." >&2
         exec docker run --rm \
             --network none --read-only --user 10001:10001 --group-add "$(id -g)" \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
             --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data \
-            --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
+            --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
             --env OVLAB_ARTIFACT_UMASK=0007 \
             --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
             --mount "type=bind,source=$training_runs_root,target=/var/lib/ovlab/model-data/training-runs,readonly" \
-            --mount "$derived_mount" \
+            --mount "$exports_mount" \
             "$reporting_image" "$@"
     fi
 fi
@@ -197,12 +198,11 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
         fi
         data_root="${OVLAB_DATA_ROOT:-$repository_root/../ovlab-data}"
         runs_root="${OVLAB_RUNS_ROOT:-$data_root/runs}"
-        derived_root="${OVLAB_DERIVED_ROOT:-$data_root/derived}"
         exports_root="${OVLAB_EXPORTS_ROOT:-$data_root/exports}"
         configs_root="${OVLAB_CONFIGS_ROOT:-$repository_root/configs}"
         runs_root="$(realpath -m -- "$runs_root")"
-        derived_root="$(realpath -m -- "$derived_root")"
         exports_root="$(realpath -m -- "$exports_root")"
+        derived_root="$exports_root/derived"
         configs_root="$(realpath -m -- "$configs_root")"
         if [[ "${1:-}" != "report" || "${2:-}" != "profiles" ]] && [[ ! -d "$runs_root" ]]; then
             echo "ovlab: canonical run source directory does not exist: $runs_root" >&2
@@ -244,7 +244,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                     exit 4
                 fi
                 verification_mounts+=(
-                    --mount "type=bind,source=$derived_root,target=/var/lib/ovlab/derived,readonly"
+                    --mount "type=bind,source=$exports_root,target=/var/lib/ovlab/exports,readonly"
                 )
             else
                 if [[ ! -d "$exports_root" ]]; then
@@ -263,7 +263,6 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 --group-add "$(id -g)" \
                 --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
                 --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
-                --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
                 --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
                 --env OVLAB_ARTIFACT_UMASK=0007 \
                 --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
@@ -271,8 +270,8 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 "${verification_mounts[@]}" \
                 "$reporting_image" "$@"
         fi
-        mkdir -p -- "$runs_root" "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"
-        if ! chmod 2770 -- "$derived_root" "$exports_root" "$exports_root/isolated" "$exports_root/grouped"; then
+        mkdir -p -- "$runs_root" "$exports_root/derived" "$exports_root/interactive" "$exports_root/isolated" "$exports_root/grouped"
+        if ! chmod 2770 -- "$exports_root" "$exports_root/derived" "$exports_root/interactive" "$exports_root/isolated" "$exports_root/grouped"; then
             echo "ovlab: cannot establish group-writable reporting output directories." >&2
             exit 6
         fi
@@ -284,14 +283,12 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
             --group-add "$(id -g)" \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
             --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
-            --env OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived \
             --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
             --env OVLAB_ARTIFACT_UMASK=0007 \
             --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
             --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
             --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly" \
             --mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly" \
-            --mount "type=bind,source=$derived_root,target=/var/lib/ovlab/derived" \
             --mount "type=bind,source=$exports_root,target=/var/lib/ovlab/exports" \
             "$reporting_image" "$@"
     fi

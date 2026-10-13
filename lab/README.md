@@ -16,13 +16,14 @@ metric-plugin versions.
 - `queries/` contains reusable DuckDB and SQL queries.
 - `templates/` and `static/` contain HTML templates, CSS, JavaScript, and other report assets.
 - `reports/` contains repo-local exploratory HTML reports. Reproducible deployment
-  outputs belong under `OVLAB_DERIVED_ROOT`, conventionally
-  `/home/kony/dissertation/ovlab-data/derived`.
+  outputs belong under `OVLAB_EXPORTS_ROOT/derived`, conventionally
+  `/home/kony/dissertation/ovlab-data/exports/derived`.
 
 Reports must preserve links to their source run IDs and analysis configurations so that results remain traceable and reproducible. Generated reports are ignored by Git and are not committed by default.
 
 Canonical `runs/`, regenerated `derived/`, and curated `exports/` are separate
-ownership domains. Only the benchmark runtime may create canonical runs; analysis
+ownership domains. Evaluation and training runtimes write to their own canonical
+run categories; analysis
 and reporting read them without write permission. Promotion from `derived/` into
 `exports/` is a deliberate host-side publication step.
 

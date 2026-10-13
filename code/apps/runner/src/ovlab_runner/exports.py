@@ -235,7 +235,12 @@ def _all_records(runs_root: Path) -> list[dict[str, object]]:
     records = []
     if not runs_root.is_dir():
         raise ArtifactError(f"runs root is unavailable: {runs_root}")
-    for path in sorted(item for item in runs_root.iterdir() if item.is_dir()):
+    candidates = []
+    evaluate_root = runs_root / "evaluate"
+    if evaluate_root.is_dir():
+        candidates.extend(item for item in evaluate_root.iterdir() if item.is_dir())
+    candidates.extend(item for item in runs_root.iterdir() if item.is_dir() and item.name not in {"train", "evaluate"})
+    for path in sorted(set(candidates)):
         if not (path / "manifest.started.json").is_file():
             continue
         try:
@@ -248,10 +253,13 @@ def _all_records(runs_root: Path) -> list[dict[str, object]]:
 def _record(runs_root: Path, run_id: str) -> dict[str, object]:
     if not isinstance(run_id, str) or Path(run_id).name != run_id or not run_id:
         raise ArtifactError(f"invalid run ID: {run_id}")
-    path = _inside(runs_root / run_key(run_id), runs_root, "selected run")
-    if not path.is_dir():
+    candidates = [runs_root / "evaluate" / run_key(run_id), runs_root / run_key(run_id)]
+    paths = [_inside(path, runs_root, "selected run") for path in candidates if path.is_dir()]
+    if len(paths) > 1:
+        raise ArtifactError(f"selected run exists in multiple run categories: {run_id}")
+    if not paths:
         raise ArtifactError(f"selected run is unavailable: {run_id}")
-    return _source_record(path)
+    return _source_record(paths[0])
 
 
 def _episode_data(record: dict[str, object], selected_episode_id: str | None = None) -> list[dict[str, object]]:

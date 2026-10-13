@@ -5,7 +5,9 @@ from pathlib import Path
 import subprocess
 import sys
 
-from ovlab_runner import TrainingDerivedReportEngine, build_training_performance_model
+import pytest
+
+from ovlab_runner import ArtifactError, TrainingDerivedReportEngine, build_training_performance_model
 
 
 def _write_json(path, value):
@@ -85,6 +87,70 @@ def test_training_performance_report_tracks_vram_compute_and_parameter_classes(t
     html = (target / "index.html").read_text(encoding="utf-8")
     assert "Model complexity" in html and "not measured hardware FLOPs" in html
     assert engine.verify(run.name)["canonical_training_run_modified"] is False
+    interactive = Path(generated["interactive_output"])
+    assert interactive.parent == tmp_path / "interactive/training/training-fixture/system-performance"
+    dashboard = json.loads((interactive / "report.json").read_text())
+    assert dashboard["evidence"] is None
+    assert dashboard["counts"]["examples_seen"] is None
+    assert dashboard["counts"]["dataset_records"] is None
+    assert generated["interactive_integrity"] == "verified"
+    assert engine.generate(run.name)["reused"] is True
+    (interactive / "index.html").write_text("tamper")
+    with pytest.raises(ArtifactError, match="interactive report file checksum mismatch"):
+        engine.verify(run.name)
+
+
+def test_interactive_training_uses_actual_counts_and_forward_pass_evidence(tmp_path):
+    from ovlab_benchctl.training_evidence import action_token_counts, capture_data_flow
+    from types import SimpleNamespace
+    torch = pytest.importorskip("torch")
+
+    batch = {"input_ids": torch.tensor([[1, 10, 11, 2]]), "attention_mask": torch.ones((1, 4), dtype=torch.long),
+        "labels": torch.tensor([[-100, 10, 11, 2]]), "pixel_values": torch.zeros((1, 6, 64, 64))}
+    # Two vision tokens, then aligned text logits. EOS is excluded from action accuracy.
+    logits = torch.zeros((1, 6, 16))
+    logits[0, 2, 10] = 1
+    logits[0, 3, 12] = 1
+    logits[0, 4, 2] = 1
+    output = SimpleNamespace(logits=logits, loss=torch.tensor(.75))
+    assert action_token_counts(output, batch["labels"], 9) == (1, 2)
+    tokenizer = SimpleNamespace(decode=lambda ids: "decoded " + str(ids))
+    evidence = capture_data_flow(batch, output, tokenizer, dataset_records=123,
+        pixel_dtype=torch.bfloat16, optimizer=SimpleNamespace(defaults={"lr": .001, "betas": (.9, .999)}))
+    assert evidence["input_batch"]["pixel_values"]["shape"] == [1, 6, 64, 64]
+    assert evidence["input_batch"]["pixel_values"]["dtype"] == "torch.bfloat16"
+    assert evidence["input_record"]["pixel_values"]["dtype"] == "torch.bfloat16"
+    assert evidence["input_record"]["pixel_values"]["truncated"] is True
+    assert evidence["output_record"]["predicted_tokens"]["values"] == [10, 12, 2]
+    assert evidence["output_batch"]["logits"]["shape"] == [1, 6, 16]
+    run = _training_run(tmp_path / "training-runs")
+    _write_json(run / "data-flow.json", evidence)
+    plan = json.loads((run / "training-plan.json").read_text())
+    plan["scientific"]["training"] = {"per_device_batch_size": 1, "gradient_accumulation_steps": 2, "learning_rate": .001}
+    _write_json(run / "training-plan.json", plan)
+    rows = [json.loads(line) for line in (run / "metrics.jsonl").read_text().splitlines()]
+    for row in rows:
+        row.update(examples_seen=2, microbatches=2, action_token_count=4, action_token_correct=2, action_token_accuracy=.5)
+    (run / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    manifest = json.loads((run / "manifest.json").read_text())
+    manifest["files"] = [{"path": path.name, "size": path.stat().st_size, "sha256": _sha(path)}
+        for path in sorted(run.iterdir()) if path.name != "manifest.json"]
+    _write_json(run / "manifest.json", manifest)
+    before = {path.name: _sha(path) for path in run.iterdir()}
+    generated = TrainingDerivedReportEngine(run.parent, tmp_path / "derived").generate(run.name)
+    dashboard = json.loads((Path(generated["interactive_output"]) / "report.json").read_text())
+    assert dashboard["counts"] == {"optimizer_steps": 2, "dataset_records": 123, "examples_seen": 4,
+        "microbatches": 4, "supervised_action_tokens": 8}
+    assert dashboard["hyperparameters"]["optimizer"]["betas"] == [.9, .999]
+    assert dashboard["evidence"]["output_record"]["targets"]["values"] == [10, 11, 2]
+    assert {path.name: _sha(path) for path in run.iterdir()} == before
+
+
+def test_training_report_rejects_unfinalized_batch_evidence(tmp_path):
+    run = _training_run(tmp_path / "training-runs")
+    _write_json(run / "data-flow.json", {"dataset_records": 999})
+    with pytest.raises(ArtifactError, match="absent from the finalized inventory"):
+        TrainingDerivedReportEngine(run.parent, tmp_path / "derived").generate(run.name)
 
 
 def test_training_performance_report_cli_uses_read_only_source_contract(tmp_path):
@@ -98,7 +164,7 @@ def test_training_performance_report_cli_uses_read_only_source_contract(tmp_path
             **os.environ, "OVLAB_PYTHON": sys.executable,
             "OVLAB_REPORTING_RUNTIME": "host",
             "OVLAB_MODEL_DATA_ROOT": str(model_data),
-            "OVLAB_DERIVED_ROOT": str(tmp_path / "derived"),
+            "OVLAB_EXPORTS_ROOT": str(tmp_path / "exports"),
         },
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )

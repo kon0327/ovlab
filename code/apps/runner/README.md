@@ -72,7 +72,7 @@ duration nanoseconds. Neither is labelled RPC latency.
 The filesystem store derives hashed safe keys rather than using IDs as paths:
 
 ```text
-runs/<run-key>/
+runs/evaluate/<run-key>/
 ├── manifest.started.json
 ├── source_config.yaml
 ├── resolved_config.yaml

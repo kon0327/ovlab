@@ -97,3 +97,50 @@ def resolve_run_reference(
             f"{label} hash {requested_hash!r} is ambiguous; matching IDs: {identifiers}"
         )
     return matches[0]
+
+
+def resolve_run_reference_across(
+    roots: tuple[str | Path, ...], reference: str, *, label: str = "run",
+) -> ResolvedRunReference:
+    """Resolve one run across typed roots, failing closed on hash collisions."""
+    root_paths = tuple(dict.fromkeys(Path(root).expanduser().resolve() for root in roots))
+    if not isinstance(reference, str) or not reference:
+        raise RunReferenceUnavailableError(f"{label} reference must be a non-empty string")
+    candidate = Path(reference)
+    if len(candidate.parts) != 1 or candidate.name in {"", ".", ".."}:
+        raise RunReferenceUnavailableError(
+            f"{label} reference must be one run ID or an {RUN_HASH_LENGTH}-character hash"
+        )
+    exact = []
+    for root in root_paths:
+        path = root / reference
+        if path.is_symlink():
+            raise RunReferenceError(f"{label} reference resolves to a forbidden symbolic link: {reference}")
+        if path.is_dir():
+            exact.append(ResolvedRunReference(reference, run_hash(reference), path.resolve()))
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise RunReferenceAmbiguousError(f"{label} ID exists in multiple run categories: {reference}")
+    if _RUN_HASH.fullmatch(reference) is None:
+        raise RunReferenceUnavailableError(
+            f"{label} is unavailable: {reference!r}; use its full ID or displayed "
+            f"{RUN_HASH_LENGTH}-character hash"
+        )
+    requested_hash = reference.lower()
+    matches = []
+    for root in root_paths:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.iterdir()):
+            if path.is_symlink() or not path.is_dir():
+                continue
+            if run_hash(path.name) == requested_hash:
+                matches.append(ResolvedRunReference(path.name, requested_hash, path.resolve()))
+    unique = {item.path: item for item in matches}
+    if not unique:
+        raise RunReferenceUnavailableError(f"no {label} matches hash {requested_hash!r} under configured run roots")
+    if len(unique) > 1:
+        identifiers = ", ".join(item.run_id for item in unique.values())
+        raise RunReferenceAmbiguousError(f"{label} hash {requested_hash!r} is ambiguous; matching IDs: {identifiers}")
+    return next(iter(unique.values()))

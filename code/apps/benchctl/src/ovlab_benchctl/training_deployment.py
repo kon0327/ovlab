@@ -31,6 +31,9 @@ class TrainingDeployment:
                 self.environment.get("OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data"),
             )
         ).expanduser().resolve()
+        self.runs_root = Path(
+            self.environment.get("OVLAB_RUNS_ROOT", self.model_data_root / "runs")
+        ).expanduser().resolve()
 
     def _profile(self, reference: str | Path) -> tuple[Path, TrainingProfile]:
         path = Path(reference).expanduser()
@@ -94,7 +97,7 @@ class TrainingDeployment:
     def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False) -> dict[str, object]:
         for directory in (
             self.model_data_root / "datasets",
-            self.model_data_root / "training-runs",
+            self.runs_root / "train",
             self.model_data_root / "checkpoints",
         ):
             directory.mkdir(parents=True, exist_ok=True)
@@ -129,7 +132,7 @@ class TrainingDeployment:
             available_vram_gib=vram_gib,
             image_identity=training_digest,
         )
-        store = TrainingRunStore(self.model_data_root)
+        store = TrainingRunStore(self.model_data_root, runs_root=self.runs_root)
         context = store.create(
             profile.document,
             profile.document,
@@ -198,23 +201,36 @@ class TrainingDeployment:
         finalized = self.runner(finalizer, check=False)
         if finalized.returncode != 0:
             raise TrainingRuntimeError(f"checkpoint finalizer failed; staged training evidence remains at {context.root}")
-        derived_root = Path(
-            self.environment.get("OVLAB_DERIVED_ROOT", self.model_data_root / "derived")
+        exports_root = Path(
+            self.environment.get("OVLAB_EXPORTS_ROOT", self.model_data_root / "exports")
         ).expanduser().resolve()
-        derived_root.mkdir(parents=True, exist_ok=True)
-        derived_root.chmod(0o2770)
+        exports_root.mkdir(parents=True, exist_ok=True)
+        exports_root.chmod(0o2770)
+        derived_root = exports_root / "derived"
+        interactive_root = exports_root / "interactive"
+        for output_root in (derived_root, interactive_root):
+            output_root.mkdir(parents=True, exist_ok=True)
+            output_root.chmod(0o2770)
         reporting = [
             "docker", "run", "--rm", "--network", "none", "--read-only",
             "--user", "10001:10001", "--group-add", str(os.getgid()),
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
             "--env", "OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data",
-            "--env", "OVLAB_DERIVED_ROOT=/var/lib/ovlab/derived",
             "--env", f"OVLAB_DERIVED_DISPLAY_ROOT={derived_root}",
-            "--mount", f"type=bind,source={self.model_data_root / 'training-runs'},target=/var/lib/ovlab/model-data/training-runs,readonly",
-            "--mount", f"type=bind,source={derived_root},target=/var/lib/ovlab/derived",
+            "--env", "OVLAB_RUNS_ROOT=/var/lib/ovlab/runs",
+            "--env", "OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports",
+            "--mount", f"type=bind,source={self.runs_root},target=/var/lib/ovlab/runs,readonly",
+            "--mount", f"type=bind,source={exports_root},target=/var/lib/ovlab/exports",
             reporting_image, "train", "report", "--run", context.run_id, "--json",
         ]
+        legacy_training_runs = self.model_data_root / "training-runs"
+        if legacy_training_runs.is_dir():
+            image_position = reporting.index(reporting_image)
+            reporting[image_position:image_position] = [
+                "--mount",
+                f"type=bind,source={legacy_training_runs},target=/var/lib/ovlab/model-data/training-runs,readonly",
+            ]
         published = self.runner(reporting, capture_output=True, text=True, check=False)
         if published.returncode != 0:
             raise TrainingRuntimeError(

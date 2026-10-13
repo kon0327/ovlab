@@ -25,6 +25,7 @@ from .artifacts.codec import TraceCodec
 from .artifacts.layout import run_key, safe_key
 from .errors import ArtifactError, ReportingRendererError, ReportingSourceUnavailableError
 from .inspection import verify_run
+from .interactive import publish_dashboard, verify_dashboard
 from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
@@ -32,7 +33,7 @@ REPORT_PROFILE_SCHEMA = "ovlab.report-profile/v1"
 REPORT_SCHEMA = "ovlab.report/v1"
 REPORT_MANIFEST_SCHEMA = "ovlab.report-manifest/v1"
 REPORT_RENDERER_ID = "ovlab-jinja-static-html"
-REPORT_RENDERER_VERSION = "1.4.0"
+REPORT_RENDERER_VERSION = "1.5.0"
 CHART_BUILDERS = {
     "action_timeseries": "1.2.0",
     "latency_distribution": "1.2.0",
@@ -1066,13 +1067,20 @@ class DerivedReportEngine:
     def _display_path(self, target: Path) -> str:
         return str(self.display_root / target.relative_to(self.derived_root))
 
+    def _interactive_display_path(self, target: Path) -> str:
+        return str((self.display_root.parent / "interactive") / target.relative_to(self.derived_root.parent / "interactive"))
+
     def resolve_run(self, run: str | Path) -> Path:
         candidate = Path(run)
         if candidate.is_absolute():
             return _inside(candidate, self.runs_root, "run")
         if len(candidate.parts) != 1 or candidate.name in {"", ".", ".."}:
             raise ArtifactError("run must be a run ID or a path within the configured runs root")
-        return _inside(self.runs_root / run_key(candidate.name), self.runs_root, "run")
+        locations = (self.runs_root / "evaluate" / run_key(candidate.name), self.runs_root / run_key(candidate.name))
+        matches = [_inside(path, self.runs_root, "run") for path in locations if path.is_dir()]
+        if len(matches) > 1:
+            raise ArtifactError(f"run ID exists in multiple run categories: {candidate.name}")
+        return matches[0] if matches else _inside(locations[0], self.runs_root, "run")
 
     def generate(self, run: str | Path, *, task_id: str | None = None) -> dict[str, object]:
         started_ns = time.perf_counter_ns()
@@ -1099,6 +1107,8 @@ class DerivedReportEngine:
         profile_root = _inside(self.derived_root / run_key(run_id) / self.profile.identifier, self.derived_root, "derived profile")
         target = profile_root / build_id
         if target.exists():
+            self.verify(run_id, build_id=build_id, _verify_interactive=False)
+            publish_dashboard(target, self.derived_root, source)
             result = self.verify(run_id, build_id=build_id)
             return {**result, "reused": True, "output": self._display_path(target)}
         stage = profile_root / f".{build_id}.{uuid.uuid4().hex}.partial"
@@ -1209,10 +1219,11 @@ class DerivedReportEngine:
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             raise
+        publish_dashboard(target, self.derived_root, source)
         result = self.verify(run_id, build_id=build_id)
         return {**result, "reused": False, "output": self._display_path(target)}
 
-    def verify(self, run: str | Path, *, build_id: str | None = None) -> dict[str, object]:
+    def verify(self, run: str | Path, *, build_id: str | None = None, _verify_interactive: bool = True) -> dict[str, object]:
         source = self.resolve_run(run)
         run_id = _json(source / "manifest.started.json").get("run_id")
         profile_root = _inside(self.derived_root / run_key(str(run_id)) / self.profile.identifier, self.derived_root, "derived profile")
@@ -1264,6 +1275,11 @@ class DerivedReportEngine:
                 linked = (html.parent / href.split("#", 1)[0]).resolve()
                 if not (linked.is_relative_to(target) or linked.is_relative_to(self.runs_root)) or not linked.exists():
                     raise ArtifactError(f"report contains an invalid internal link: {href}")
+        interactive = {}
+        if _verify_interactive and manifest["identity_inputs"].get("renderer", {}).get("version") == REPORT_RENDERER_VERSION:
+            dashboard = verify_dashboard(target, self.derived_root)
+            interactive = {"interactive_output": self._interactive_display_path(dashboard), "interactive_build_id": dashboard.name,
+                "interactive_integrity": "verified"}
         return {
             "schema_version": REPORT_MANIFEST_SCHEMA,
             "run_id": run_id,
@@ -1274,6 +1290,7 @@ class DerivedReportEngine:
             "integrity": "verified",
             "output": self._display_path(target),
             "canonical_run_modified": False,
+            **interactive,
         }
 
     def record_failure(self, run_id, scope: str, exc: BaseException) -> None:

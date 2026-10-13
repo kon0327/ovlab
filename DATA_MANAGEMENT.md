@@ -8,20 +8,24 @@ The default roots are:
 
 ```text
 OVLAB_DATA_ROOT/
-├── runs/       # canonical benchmark runs
-├── derived/    # benchmark and training reports
-├── exports/    # isolated and grouped publication exports
+├── runs/
+│   ├── train/    # canonical training runs
+│   └── evaluate/ # canonical evaluation runs
+├── exports/
+│   ├── isolated/   # per-run publication exports
+│   ├── grouped/    # comparison exports
+│   ├── derived/    # benchmark and training reports
+│   └── interactive/ # report dashboards
 └── archive/
     ├── runs/
-    ├── derived/
     ├── exports/
     └── manifests/
 ```
 
 `OVLAB_DATA_ROOT` defaults to the repository sibling `ovlab-data/`. Existing
-`OVLAB_RUNS_ROOT`, `OVLAB_DERIVED_ROOT`, and `OVLAB_EXPORTS_ROOT` overrides
-remain authoritative. `OVLAB_ARCHIVE_ROOT` may override only the archive
-destination.
+`OVLAB_RUNS_ROOT` and `OVLAB_EXPORTS_ROOT` may override the canonical roots.
+Reports, dashboards and publication exports use the same `OVLAB_EXPORTS_ROOT`.
+`OVLAB_ARCHIVE_ROOT` may override only the archive destination.
 
 ## List data
 
@@ -116,20 +120,24 @@ Archive paths mirror the active layout:
 
 ```text
 archive/
-├── runs/<run-id>/
-├── derived/<run-id>/
-├── derived/training/<training-run-id>/
+├── runs/train/<training-run-id>/
+├── runs/evaluate/<evaluation-run-id>/
+├── exports/derived/<run-id>/
+├── exports/derived/training/<training-run-id>/
+├── exports/interactive/<run-id>/
+├── exports/interactive/training/<training-run-id>/
 ├── exports/isolated/<run-id>/
 ├── exports/grouped/<group-id>/
 └── manifests/
-    ├── run/<run-id>.json
+    ├── run/train/<training-run-id>.json
+    ├── run/evaluate/<evaluation-run-id>.json
     ├── report/<report-id>.json
     └── export/<export-id>.json
 ```
 
-Because `runs/` and `derived/` remain siblings under `archive/`, relative links
-from an archived benchmark report to an archived canonical video remain valid
-when both are selected by `--all`. An existing archive destination is never
+Because report/dashboard files and canonical runs retain their relative layout
+under `archive/`, links from an archived report to its video remain valid when
+both are selected by `--all`. An existing archive destination is never
 overwritten. Same-filesystem moves are atomic; a cross-filesystem fallback
 copies into a staging directory, verifies the complete content inventory, then
 publishes and removes the source.
@@ -178,8 +186,7 @@ The manager:
 - rejects path traversal and symbolic links;
 - never overwrites an existing archive entry;
 - never follows a selected path outside its configured root;
-- never modifies `datasets/`, `checkpoints/`, `training-runs/`, or the source
-  repository;
+- never modifies unrelated datasets, checkpoints, or source files;
 - does not delete archived data. Archive retention and restore commands remain
   separate future operations.
 

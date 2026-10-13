@@ -99,7 +99,6 @@ export OVLAB_MANAGED_CHECKPOINTS_ROOT=/home/kony/dissertation/ovlab-data/checkpo
 # Optional override; otherwise derived as ovlab-data/datasets/libero.
 export OVLAB_DATASETS_PATH=/home/kony/dissertation/ovlab-data/datasets/libero
 export OVLAB_RUNS_ROOT=/home/kony/dissertation/ovlab-data/runs
-export OVLAB_DERIVED_ROOT=/home/kony/dissertation/ovlab-data/derived
 export OVLAB_EXPORTS_ROOT=/home/kony/dissertation/ovlab-data/exports
 export OVLAB_GPU_DEVICE=0
 export OVLAB_EGL_DEVICE_ID=0
@@ -120,10 +119,14 @@ outside the source checkout:
 │   └── local/         # unpublished QuIC and experimental checkpoints
 ├── datasets/
 │   └── <provider>/... # immutable raw and prepared training datasets
-├── training-runs/     # canonical training evidence and staged output
-├── runs/              # immutable traces, per-episode videos, metrics, config and provenance
-├── derived/           # regenerated reports, plots and tables
-└── exports/           # curated outputs prepared for papers and sharing
+├── runs/
+│   ├── train/         # canonical training evidence and staged output
+│   └── evaluate/      # traces, videos, metrics, configuration and provenance
+└── exports/
+    ├── grouped/       # comparison tables and figures
+    ├── isolated/      # per-run publication exports
+    ├── derived/       # regenerated reports, plots and tables
+    └── interactive/   # offline interactive dashboards
 ```
 
 ## Checkpoint resolution
@@ -173,13 +176,15 @@ states remain supplied by the pinned benchmark source; demonstration datasets
 belong only in this host data tree.
 
 The container runtime uses UID/GID `10001:10001`. The host CLI creates missing
-`runs/`, `derived/`, and `exports/` roots with mode `2770`, creates the default `datasets/libero/` root when
+`runs/` and `exports/` roots with mode `2770`, creates the default `datasets/libero/` root when
 absent, and passes the invoking user's primary GID as a
 supplementary container group, so canonical artifacts remain writable by the
-host user without world-writable permissions. `runs/` is writable only in benchmark services.
-After benchmark/policy teardown, the reporting container mounts `runs/`
-read-only and writes below `derived/` and `exports/`. Benchmark services never
-mount either output root. Grouped exports remain an explicit operator workflow. Policy containers mount
+host user without world-writable permissions. Evaluation services write
+`runs/evaluate/`; the isolated trainer writes `runs/train/`. After runtime
+teardown, the reporting container mounts `runs/`
+read-only and writes below `exports/`. Benchmark
+services do not mount these output roots. Grouped exports remain an explicit
+operator workflow. Policy containers mount
 none of these artifact roots. Host paths and Docker tags are deployment
 provenance and never enter the scientific configuration hash.
 
@@ -268,7 +273,7 @@ docker compose --file deploy/compose/compose.yaml --profile reporting run --rm r
 ```
 
 The source is mounted at `/var/lib/ovlab/runs:ro`; the report is written below
-`/var/lib/ovlab/derived/<run>/<profile>/<derived-build-id>` and the isolated
+`/var/lib/ovlab/exports/derived/<run>/<profile>/<derived-build-id>` and the isolated
 export below `/var/lib/ovlab/exports/isolated/<run>`. Report generation performs
 neither policy inference nor LIBERO execution. Only `runs/` is writable during
 the benchmark; reporting/export failure is isolated from canonical finalization.

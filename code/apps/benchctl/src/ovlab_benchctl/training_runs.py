@@ -151,9 +151,13 @@ class OpenVlaTrainerAdapter(TrainerAdapter):
 
 
 class TrainingRunStore:
-    def __init__(self, model_data_root: str | Path):
+    def __init__(
+        self, model_data_root: str | Path, *, runs_root: str | Path | None = None,
+        training_runs_root: str | Path | None = None,
+    ):
         self.model_data_root = Path(model_data_root).expanduser().resolve()
-        self.root = self.model_data_root / "training-runs"
+        self.runs_root = Path(runs_root).expanduser().resolve() if runs_root is not None else self.model_data_root / "runs"
+        self.root = Path(training_runs_root).expanduser().resolve() if training_runs_root is not None else self.runs_root / "train"
 
     def create(
         self,
@@ -621,6 +625,9 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
     accumulation_started = None
     accumulation_tokens = 0
     accumulation_examples = 0
+    accumulation_correct = 0
+    accumulation_targets = 0
+    from .training_evidence import action_token_counts, capture_data_flow
     initial_memory = cuda_allocator_snapshot(torch, device)
     run_peak_allocated = int(initial_memory.get("peak_allocated_bytes", 0))
     run_peak_reserved = int(initial_memory.get("peak_reserved_bytes", 0))
@@ -645,6 +652,14 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
             loss = output.loss
         if not torch.isfinite(loss):
             raise TrainingRuntimeError(f"non-finite loss at microbatch {batch_index}")
+        if batch_index == 0:
+            atomic_json(context.root / "data-flow.json", capture_data_flow(
+                batch, output, processor.tokenizer, dataset_records=len(dataset),
+                pixel_dtype=dtype, optimizer=optimizer,
+            ), mode=0o644)
+        correct, target_count = action_token_counts(output, batch["labels"].to(device), action_tokenizer.action_token_begin_idx)
+        accumulation_correct += correct
+        accumulation_targets += target_count
         (loss / int(training["gradient_accumulation_steps"])).backward()
         if (batch_index + 1) % int(training["gradient_accumulation_steps"]) != 0:
             continue
@@ -669,6 +684,12 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
             "optimizer_step": steps,
             "timestamp_utc": _utc_now(),
             "training_loss": float(loss.detach().cpu()),
+            "examples_seen": accumulation_examples,
+            "non_padding_tokens": accumulation_tokens,
+            "microbatches": int(training["gradient_accumulation_steps"]),
+            "action_token_correct": accumulation_correct,
+            "action_token_count": accumulation_targets,
+            "action_token_accuracy": accumulation_correct / accumulation_targets if accumulation_targets else None,
             "learning_rate": float(training["learning_rate"]),
             "gradient_norm": float(grad_norm.detach().cpu()),
             "step_duration_ms": elapsed_ms,
@@ -691,6 +712,8 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
         accumulation_started = None
         accumulation_tokens = 0
         accumulation_examples = 0
+        accumulation_correct = 0
+        accumulation_targets = 0
         if steps >= int(training["max_steps"]):
             break
     if steps != int(training["max_steps"]):

@@ -23,7 +23,7 @@ def _context(root: Path) -> TrainingRunContext:
 
 def train(root: Path) -> int:
     context = _context(root)
-    store = TrainingRunStore(root.parent.parent)
+    store = TrainingRunStore(root.parent.parent.parent, training_runs_root=root.parent)
     adapter = OpenVlaTrainerAdapter()
     try:
         adapter.preflight(context.plan)
@@ -54,7 +54,7 @@ def finalize(root: Path, model_data_root: Path) -> int:
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
     except Exception as exc:
-        TrainingRunStore(model_data_root).fail(context, exc)
+        TrainingRunStore(model_data_root, training_runs_root=root.parent).fail(context, exc)
         print(f"ovlab checkpoint finalizer: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 

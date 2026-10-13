@@ -56,10 +56,9 @@ flowchart TB
     subgraph Data["External ovlab-data workspace"]
         Checkpoints[("checkpoints/")]
         Datasets[("datasets/")]
-        Runs[("runs/ canonical evidence")]
-        Derived[("derived/ HTML reports")]
-        Exports[("exports/ tables and figures")]
-        TrainingRuns[("training-runs/")]
+        Runs[("runs/evaluate/ canonical evaluation evidence")]
+        Exports[("exports/{derived,interactive,isolated,grouped}/")]
+        TrainingRuns[("runs/train/ canonical training evidence")]
     end
 
     User --> Launcher --> CLI
@@ -477,7 +476,7 @@ files through temporary siblings and atomic rename. Existing finalized files are
 never overwritten through the store API.
 
 ```text
-ovlab-data/runs/<experiment>_<YYYY-MM-DD_HH-MM-SS>_<hash>/
+ovlab-data/runs/evaluate/<experiment>_<YYYY-MM-DD_HH-MM-SS>_<hash>/
 ├── manifest.started.json
 ├── source_config.yaml
 ├── resolved_config.yaml
@@ -542,7 +541,7 @@ flowchart LR
     Report["DerivedReportEngine"]
     Isolated["isolated run/episode export"]
     Grouped["explicit grouped comparison"]
-    Derived["derived/<run>/<profile>/<build>"]
+    Derived["exports/derived/<run>/<profile>/<build>"]
     Exports["exports/isolated or grouped"]
 
     Run --> Verify
@@ -553,7 +552,7 @@ flowchart LR
 ```
 
 The reporting image mounts `runs/` read-only and has write access only to
-`derived/` and `exports/`. Derived HTML reports are self-contained and use
+`exports/`. Derived HTML reports are self-contained and use
 interactive SVG charts with labeled axes, cursor inspection, zoom/pan and
 descriptive statistics. Report build identity depends on canonical inputs,
 profile, templates and renderer implementation.
@@ -578,10 +577,14 @@ ovlab-data/
 │   └── checkpoint-*/      finalized training outputs
 ├── datasets/
 │   └── <provider>/<name>/<version>/
-├── training-runs/
 ├── runs/
-├── derived/
+│   ├── train/          training evidence and staged checkpoints
+│   └── evaluate/       benchmark traces, videos, metrics and provenance
 └── exports/
+    ├── isolated/
+    ├── grouped/
+    ├── derived/
+    └── interactive/
 ```
 
 An experiment names a logical checkpoint ID. The portable registry binds that
@@ -607,7 +610,8 @@ network access; list, inspect, prepare and verify run offline.
 
 ## 13. Training architecture
 
-Training is not a benchmark mode and does not write `runs/`.
+Training and evaluation share the `runs/` root, with separate `train/` and
+`evaluate/` subdirectories.
 
 ```mermaid
 flowchart LR
@@ -616,7 +620,7 @@ flowchart LR
     Dataset[("verified prepared dataset RO")]
     Base[("verified base checkpoint RO")]
     Trainer["offline training container<br/>GPU, one writable run"]
-    Staging[("training-runs/.../staging-checkpoints")]
+    Staging[("runs/train/.../staging-checkpoints")]
     Finalizer["networkless checkpoint finalizer<br/>no GPU"]
     Registry[("immutable checkpoint bundle")]
 

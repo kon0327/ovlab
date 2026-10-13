@@ -344,18 +344,19 @@ class ComposeDeployment:
             runs.chmod(0o2770)
         if not runs.is_dir():
             raise ComposeDeploymentError(f"OVLAB_RUNS_ROOT is not a directory: {runs}")
-        derived = self._bind_source(plan, "OVLAB_DERIVED_ROOT") or (runs.parent / "derived")
-        if not derived.exists():
-            derived.mkdir(mode=0o2770, parents=True)
-            derived.chmod(0o2770)
-        if not derived.is_dir():
-            raise ComposeDeploymentError(f"OVLAB_DERIVED_ROOT is not a directory: {derived}")
         exports = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (runs.parent / "exports")
         if not exports.exists():
             exports.mkdir(mode=0o2770, parents=True)
             exports.chmod(0o2770)
         if not exports.is_dir():
             raise ComposeDeploymentError(f"OVLAB_EXPORTS_ROOT is not a directory: {exports}")
+        for name in ("derived", "interactive", "isolated", "grouped"):
+            output = exports / name
+            if not output.exists():
+                output.mkdir(mode=0o2770, parents=True)
+                output.chmod(0o2770)
+            if not output.is_dir():
+                raise ComposeDeploymentError(f"OVLAB_EXPORTS_ROOT/{name} is not a directory: {output}")
 
     def _current_source_sha256(self) -> str:
         source_manifest = runpy.run_path(
@@ -471,7 +472,9 @@ class ComposeDeployment:
     def _run_directories(root: Path | None) -> set[Path]:
         if root is None or not root.is_dir():
             return set()
-        return {path.resolve() for path in root.iterdir() if path.is_dir()}
+        paths = {path.resolve() for path in (root / "evaluate").iterdir() if path.is_dir()} if (root / "evaluate").is_dir() else set()
+        paths.update(path.resolve() for path in root.iterdir() if path.is_dir() and path.name not in {"train", "evaluate"})
+        return paths
 
     def run(self, plan: ComposeDeploymentPlan, *, dry_run: bool = False) -> dict[str, object]:
         bundle_builder = ConfigBundleBuilder(self.repository_root)
@@ -559,8 +562,8 @@ class ComposeDeployment:
                     f"observed {len(new_runs)} new run directories"
                 )
             run_path = Path(new_runs[0])
-            derived_root = self._bind_source(plan, "OVLAB_DERIVED_ROOT") or (run_path.parent.parent / "derived")
             exports_root = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (run_path.parent.parent / "exports")
+            derived_root = exports_root / "derived"
             postprocess_environment = {
                 **environment,
                 "OVLAB_REPORT_RUN_ID": run_path.name,

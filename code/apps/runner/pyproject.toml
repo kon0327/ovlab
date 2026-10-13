@@ -15,4 +15,4 @@ dependencies = ["ovlab-core>=0.2.0", "ovlab-benchmarks>=0.2.0", "ovlab-policy-sd
 where = ["src"]
 
 [tool.setuptools.package-data]
-ovlab_runner = ["report_assets/profiles/*.yaml", "report_assets/templates/**/*.html", "report_assets/static/*.css"]
+ovlab_runner = ["report_assets/profiles/*.yaml", "report_assets/templates/**/*.html", "report_assets/static/*.css", "report_assets/static/*.js"]

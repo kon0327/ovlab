@@ -20,7 +20,7 @@ from .models import MockPolicySettings, ResolvedExperimentConfig
 from .resolver import ConfigResolver
 from .strict_yaml import dumps, load
 from .versioning import CLI_VERSION, repository_revision
-from .run_references import resolve_run_reference
+from .run_references import resolve_run_reference_across
 
 
 CLI_SCHEMA_VERSION = "ovlab-cli/1.0.0"
@@ -161,12 +161,10 @@ class OvlabApplication:
         runs = Path(
             runs_root or self.environment.get("OVLAB_RUNS_ROOT", data_root / "runs")
         ).expanduser().resolve()
-        derived = Path(
-            self.environment.get("OVLAB_DERIVED_ROOT", runs.parent / "derived")
-        ).expanduser().resolve()
         exports = Path(
             self.environment.get("OVLAB_EXPORTS_ROOT", runs.parent / "exports")
         ).expanduser().resolve()
+        derived = exports / "derived"
         return runs, derived, exports
 
     def _data_root(self) -> Path:
@@ -176,17 +174,19 @@ class OvlabApplication:
 
     def _data_manager(self):
         from .data_management import DataManager
-        runs, derived, exports = self._data_roots()
+        runs, _, exports = self._data_roots()
         archive = self.environment.get("OVLAB_ARCHIVE_ROOT")
         return DataManager(
-            self._data_root(), runs, derived,
+            self._data_root(), runs,
             exports_root=exports,
             archive_root=None if archive is None else Path(archive),
         )
 
     def _benchmark_run(self, reference):
         runs, _, _ = self._data_roots()
-        return resolve_run_reference(runs, str(reference), label="benchmark run")
+        return resolve_run_reference_across(
+            (runs / "evaluate", runs), str(reference), label="evaluation run",
+        )
 
     def _benchmark_run_id(self, reference) -> str:
         return self._benchmark_run(reference).run_id
@@ -198,8 +198,14 @@ class OvlabApplication:
         return self._benchmark_run(str(reference)).path
 
     def _training_run_id(self, reference) -> str:
-        root = self._model_data_root() / "training-runs"
-        return resolve_run_reference(root, str(reference), label="training run").run_id
+        return self._training_run(reference).run_id
+
+    def _training_run(self, reference):
+        runs, _, _ = self._data_roots()
+        legacy = self._model_data_root() / "training-runs"
+        return resolve_run_reference_across(
+            (runs / "train", legacy), str(reference), label="training run",
+        )
 
     def _model_data_root(self) -> Path:
         """Host-visible model data; never part of a scientific identity."""
@@ -542,7 +548,9 @@ class OvlabApplication:
 
     def execution_plan(self, config: str | Path, *, output_root: str | Path | None = None) -> dict[str, object]:
         resolved = self._resolved_experiment(config)
-        output = resolved.artifact_settings.root if output_root is None else str(Path(output_root).expanduser().resolve())
+        output_path = resolved.artifact_settings.root if output_root is None else str(Path(output_root).expanduser().resolve())
+        if output_root is None and Path(output_path).name == "runs":
+            output_path = str(Path(output_path) / "evaluate")
         scientific = resolved.scientific_config
         return {
             "experiment_id": resolved.experiment_id,
@@ -553,7 +561,7 @@ class OvlabApplication:
             "execution_config_hash": resolved.execution_config_hash,
             "service_mode": "external-af-unix",
             "socket": str(self.default_socket(config)),
-            "output_root": output,
+            "output_root": output_path,
             "side_effects_performed": False,
         }
 
@@ -618,17 +626,20 @@ class OvlabApplication:
             raise ConfigCompatibilityError(
                 "OVLAB_POSTPROCESSING_MODE must be 'external' or 'internal'"
             )
+        if output_root is None and root.name == "runs":
+            root = root / "evaluate"
         if postprocessing_mode == "internal":
-            _, derived_root, exports_root = self._data_roots(runs_root=root)
+            common_root = root.parent if root.name == "evaluate" else root
+            _, derived_root, exports_root = self._data_roots(runs_root=common_root)
             report_engine = None
             if reporting.enabled:
                 profile = self._report_profile(reporting.profile)
-                report_engine = DerivedReportEngine(root, derived_root, profile)
+                report_engine = DerivedReportEngine(common_root, derived_root, profile)
             postprocessor = AutomaticDerivedReporter(
                 report_engine,
                 on_task_finalize=reporting.on_task_finalize,
                 on_run_finalize=reporting.on_run_finalize,
-                isolated_export_engine=ExportEngine(root, exports_root),
+                isolated_export_engine=ExportEngine(common_root, exports_root),
             )
         socket = self.default_socket(config)
         policy = RemotePolicyAdapter(UnixPolicyClient(socket))
@@ -865,8 +876,8 @@ class OvlabApplication:
 
     def train_inspect(self, run_id):
         from .training_runs import TrainingRunStore
-        run_id = self._training_run_id(run_id)
-        return TrainingRunStore(self._model_data_root()).inspect(run_id)
+        resolved = self._training_run(run_id)
+        return TrainingRunStore(self._model_data_root(), training_runs_root=resolved.path.parent).inspect(resolved.run_id)
 
     def train_status(self, run_id):
         inspected = self.train_inspect(run_id)
@@ -874,19 +885,19 @@ class OvlabApplication:
 
     def train_verify(self, run_id):
         from .training_runs import TrainingRunStore
-        run_id = self._training_run_id(run_id)
-        return TrainingRunStore(self._model_data_root()).verify(run_id)
+        resolved = self._training_run(run_id)
+        return TrainingRunStore(self._model_data_root(), training_runs_root=resolved.path.parent).verify(resolved.run_id)
 
     def train_report(self, run_id, *, verify=False, build_id=None):
         from ovlab_runner import TrainingDerivedReportEngine
         _, derived, _ = self._data_roots()
-        run_id = self._training_run_id(run_id)
+        training_run = self._training_run(run_id)
         engine = TrainingDerivedReportEngine(
-            self._model_data_root() / "training-runs", derived,
+            training_run.path.parent, derived,
         )
         if verify:
-            return engine.verify(run_id, build_id=build_id)
-        return engine.generate(run_id)
+            return engine.verify(training_run.run_id, build_id=build_id)
+        return engine.generate(training_run.run_id)
 
     def checkpoint_list(self):
         from .training_runs import CheckpointBundleStore

@@ -21,14 +21,14 @@ The experiment runner and benchmark adapter execute together in a runner process
 - `configs/`: benchmark, policy, metric, protocol, and experiment configuration.
 - `deploy/`: reserved for Docker, Compose, and deployment scripts.
 - `external/`: destinations for pinned external repositories and the dedicated OpenVLA-QuIC fork.
-- `runs/`: optional repo-local development output; contents are not versioned.
+- `runs/evaluate/` and `runs/train/`: optional local evaluation and training
+  output; contents are not versioned.
 
 Container deployments use a host-backed artifact workspace outside the source
 checkout. The canonical convention is `ovlab-data/runs` for immutable evidence,
 `ovlab-data/checkpoints` for orchestrator-managed model artifacts,
-`ovlab-data/datasets` for benchmark datasets,
-`ovlab-data/derived` for regenerated analyses, and `ovlab-data/exports` for
-curated publication outputs. Existing snapshots in the user's global Hugging
+`ovlab-data/datasets` for benchmark datasets, and `ovlab-data/exports` for
+regenerated reports, dashboards, and curated publication outputs. Existing snapshots in the user's global Hugging
 Face cache are reused through verified hard links rather than copied. Only
 benchmark containers write canonical runs; reporting mounts them read-only.
 See [`deploy/README.md`](deploy/README.md).
@@ -77,7 +77,7 @@ and an ambiguous hash is rejected.
 policy service and the LIBERO runner as separate Compose containers, waits for
 readiness, propagates the benchmark result, and cleans up the private deployment
 resources. It then starts the dedicated reporting image with canonical `runs/`
-mounted read-only and publishes `derived/` plus the isolated `exports/`. It needs
+mounted read-only and publishes all generated outputs below `exports/`. It needs
 Docker and system Python 3, not an activated Conda environment.
 
 Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile only for low-level

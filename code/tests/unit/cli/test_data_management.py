@@ -22,12 +22,18 @@ def _tree(data: Path):
     run.mkdir(parents=True)
     (run / "manifest.completed.json").write_text("{}", encoding="utf-8")
     (run / "trace.bin").write_bytes(b"canonical")
-    report = data / "derived/run-1/libero-task-default/build-1"
+    report = data / "exports/derived/run-1/libero-task-default/build-1"
     report.mkdir(parents=True)
     (report / "manifest.json").write_text("{}", encoding="utf-8")
-    training = data / "derived/training/training-1/system-performance/build-1"
+    interactive = data / "exports/interactive/run-1/libero-task-default/build-1"
+    interactive.mkdir(parents=True)
+    (interactive / "index.html").write_text("dashboard", encoding="utf-8")
+    training = data / "exports/derived/training/training-1/system-performance/build-1"
     training.mkdir(parents=True)
     (training / "manifest.json").write_text("{}", encoding="utf-8")
+    training_interactive = data / "exports/interactive/training/training-1/system-performance/build-1"
+    training_interactive.mkdir(parents=True)
+    (training_interactive / "index.html").write_text("training dashboard", encoding="utf-8")
     isolated = data / "exports/isolated/run-1"
     isolated.mkdir(parents=True)
     (isolated / "metadata.json").write_text(
@@ -69,8 +75,8 @@ def test_data_list_compact_detail_and_training_report_identity(tmp_path):
     compact = _invoke(data, "data", "list")
     assert compact.returncode == 0 and compact.stderr == ""
     assert f"run run-1 ({run_hash('run-1')}) completed {data / 'runs/run-1'}" in compact.stdout
-    assert f"report run-1 generated {data / 'derived/run-1'}" in compact.stdout
-    assert f"report training:training-1 generated {data / 'derived/training/training-1'}" in compact.stdout
+    assert f"report run-1 generated {data / 'exports/derived/run-1'}" in compact.stdout
+    assert f"report training:training-1 generated {data / 'exports/derived/training/training-1'}" in compact.stdout
     assert f"export isolated:run-1 generated {data / 'exports/isolated/run-1'}" in compact.stdout
     assert f"export grouped:study-1 generated {data / 'exports/grouped/study-1'}" in compact.stdout
 
@@ -115,7 +121,7 @@ def test_delete_requires_confirmation_and_dry_run_never_mutates(tmp_path):
     deleted = _invoke(data, "data", "delete", "--run", "run-1", "--yes", "--json")
     assert deleted.returncode == 0 and not run.exists()
     assert json.loads(deleted.stdout)["result"]["target_count"] == 1
-    assert (data / "derived/run-1").is_dir()
+    assert (data / "exports/derived/run-1").is_dir()
 
 
 def test_export_selection_is_namespaced_and_does_not_remove_other_data(tmp_path):
@@ -148,12 +154,14 @@ def test_archive_all_preserves_relative_layout_and_unrelated_model_data(tmp_path
     assert result["target_count"] == 5
     assert not run.exists() and not report.exists() and not training_report.exists()
     assert not isolated.exists() and not grouped.exists()
-    assert (data / "archive/runs/run-1/trace.bin").read_bytes() == b"canonical"
-    assert (data / "archive/derived/run-1/libero-task-default/build-1/manifest.json").is_file()
-    assert (data / "archive/derived/training/training-1/system-performance/build-1/manifest.json").is_file()
+    assert (data / "archive/runs/evaluate/run-1/trace.bin").read_bytes() == b"canonical"
+    assert (data / "archive/exports/derived/run-1/libero-task-default/build-1/manifest.json").is_file()
+    assert (data / "archive/exports/derived/training/training-1/system-performance/build-1/manifest.json").is_file()
+    assert (data / "archive/exports/interactive/run-1/libero-task-default/build-1/index.html").is_file()
+    assert (data / "archive/exports/interactive/training/training-1/system-performance/build-1/index.html").is_file()
     assert (data / "archive/exports/isolated/run-1/metadata.json").is_file()
     assert (data / "archive/exports/grouped/study-1/metadata.json").is_file()
-    assert (data / "archive/manifests/run/run-1.json").is_file()
+    assert (data / "archive/manifests/run/evaluate/run-1.json").is_file()
     assert (data / "archive/manifests/report/training--training-1.json").is_file()
     assert (data / "archive/manifests/export/isolated--run-1.json").is_file()
     assert (data / "archive/manifests/export/grouped--study-1.json").is_file()
@@ -175,13 +183,13 @@ def test_incomplete_artifacts_and_archive_collisions_are_rejected_before_mutatio
     active = data / "runs/active-run"
     active.mkdir(parents=True)
     (active / "manifest.started.json").write_text("{}", encoding="utf-8")
-    manager = DataManager(data, data / "runs", data / "derived")
+    manager = DataManager(data, data / "runs")
     with pytest.raises(DataSafetyError, match="active-or-incomplete"):
         manager.archive(run_id="active-run")
     assert active.is_dir()
 
     _tree(data)
-    collision = data / "archive/runs/run-1"
+    collision = data / "archive/runs/evaluate/run-1"
     collision.mkdir(parents=True)
     with pytest.raises(DataSafetyError, match="already exists"):
         manager.archive(run_id="run-1")
@@ -193,7 +201,7 @@ def test_force_delete_removes_incomplete_run_but_archive_remains_protected(tmp_p
     active = data / "runs/active-run"
     active.mkdir(parents=True)
     (active / "manifest.started.json").write_text("{}", encoding="utf-8")
-    manager = DataManager(data, data / "runs", data / "derived")
+    manager = DataManager(data, data / "runs")
 
     preview = manager.preview("delete", run_id="active-run", force=True)
     assert preview["force"] is True
@@ -233,7 +241,7 @@ def test_aborted_manifest_has_distinct_list_state(tmp_path):
     (run / "manifest.failed.json").write_text(
         '{"status":"aborted","failure_type":"KeyboardInterrupt"}', encoding="utf-8",
     )
-    manager = DataManager(data, data / "runs", data / "derived")
+    manager = DataManager(data, data / "runs")
 
     listing = manager.list(kind="runs")
     assert listing["items"][0]["state"] == "aborted"
@@ -246,7 +254,7 @@ def test_delete_permission_preflight_fails_before_any_selected_target_is_removed
     blocked = run / "blocked"
     blocked.mkdir()
     blocked.chmod(0o555)
-    manager = DataManager(data, data / "runs", data / "derived")
+    manager = DataManager(data, data / "runs")
     try:
         with pytest.raises(DataSafetyError, match="before any data was removed"):
             manager.delete(all_data=True)
@@ -259,7 +267,7 @@ def test_partial_report_file_blocks_the_complete_all_selection(tmp_path):
     data = tmp_path / "data"
     run, report, *_ = _tree(data)
     (report / "render.partial").write_text("in progress", encoding="utf-8")
-    manager = DataManager(data, data / "runs", data / "derived")
+    manager = DataManager(data, data / "runs")
     with pytest.raises(DataSafetyError, match="active-or-incomplete"):
         manager.delete(all_data=True)
     assert run.is_dir() and report.is_dir()
@@ -272,7 +280,7 @@ def test_invalid_export_metadata_blocks_the_complete_all_selection(tmp_path):
         '{"schema_version":"ovlab.export-metadata/v2","export_type":"grouped"}',
         encoding="utf-8",
     )
-    manager = DataManager(data, data / "runs", data / "derived")
+    manager = DataManager(data, data / "runs")
     with pytest.raises(DataSafetyError, match="incomplete"):
         manager.archive(all_data=True)
     assert run.is_dir() and isolated.is_dir()
@@ -298,7 +306,7 @@ def test_all_selection_rejects_symbolic_links(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     (data / "runs/linked-run").symlink_to(outside, target_is_directory=True)
-    manager = DataManager(data, data / "runs", data / "derived")
+    manager = DataManager(data, data / "runs")
     with pytest.raises(DataSafetyError, match="symbolic link"):
         manager.preview("delete", all_data=True, force=True)
 
@@ -309,13 +317,11 @@ def test_managed_roots_must_not_overlap(tmp_path):
         DataManager(
             data,
             data / "runs",
-            data / "derived",
             archive_root=data / "runs/archive",
         )
     with pytest.raises(DataSafetyError, match="roots overlap"):
         DataManager(
             data,
             data / "runs",
-            data / "derived",
-            exports_root=data / "derived/exports",
+            exports_root=data / "runs/exports",
         )

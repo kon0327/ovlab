@@ -12,7 +12,7 @@ explicit dataset acquisition -> verified preparation -> validated profile
 ```
 
 Training never runs as part of `deploy run`. Benchmark `runs/`, reporting
-`derived/` and publication `exports/` remain separate from model data. The host
+`exports/derived/` and other publication outputs remain separate from model data. The host
 model-data root defaults to `../ovlab-data` relative to the repository and may be
 set with `OVLAB_MODEL_DATA_ROOT`.
 
@@ -25,13 +25,14 @@ ovlab-data/
 │   ├── prepared/
 │   ├── dataset.json
 │   └── manifest.json
-├── training-runs/<training-run-id>/
+├── runs/train/<training-run-id>/
 │   ├── original-profile.yaml
 │   ├── resolved-profile.yaml
 │   ├── training-plan.json
 │   ├── provenance.json
 │   ├── events.jsonl
 │   ├── metrics.jsonl
+│   ├── data-flow.json              # bounded first-batch input/output evidence
 │   ├── logs/
 │   ├── staging-checkpoints/
 │   ├── result.json
@@ -45,9 +46,20 @@ ovlab-data/
 ```
 
 Ready datasets and finalized checkpoints are read-only and content-addressed.
+Evaluation evidence is stored alongside it under `runs/evaluate/<run-id>/`.
+Existing training artifacts under `training-runs/` remain readable.
 Host paths and timestamps are provenance only; they do not affect scientific
 identities. Failed or interrupted work remains evidence under staging or the
 training run and is never advertised as ready.
+
+New OpenVLA runs capture the first actual microbatch and its model output in
+`data-flow.json`. It records full tensor shapes/dtypes and bounded previews of
+the first sample, including prompt/action tokens, transformed pixels, predicted
+supervised tokens, loss and optimizer defaults. `metrics.jsonl` records actual
+examples, microbatches, non-padding tokens and action-token accuracy per
+optimizer step. These artifacts enter the finalized training inventory.
+`train report` publishes the existing HTML and its interactive companion under
+`exports/interactive/training/`, alongside `exports/derived/`; see [`REPORTING.md`](REPORTING.md).
 
 ## Dataset commands
 
@@ -153,11 +165,11 @@ a measured hardware counter. This keeps LoRA backward cost separate from the
 frozen base-model forward path.
 
 `train report` runs in the locked reporting image. It mounts
-`training-runs/` read-only and writes a checksummed, self-contained HTML/JSON
+`runs/train/` read-only and writes a checksummed, self-contained HTML/JSON
 bundle to:
 
 ```text
-derived/training/<training-run-id>/system-performance/<build-id>/
+exports/derived/training/<training-run-id>/system-performance/<build-id>/
 ```
 
 The report includes interactive VRAM and estimated-compute time series,

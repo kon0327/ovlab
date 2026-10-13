@@ -354,7 +354,7 @@ Inside the benchmark container, execute through the existing
 Use a machine-local output placement when needed:
 
 ```bash
-./ovlab run CONFIG --output-root /var/lib/ovlab/runs
+./ovlab run CONFIG --output-root /var/lib/ovlab/runs/evaluate
 ```
 
 Changing output placement does not change scientific identity. Existing run
@@ -367,8 +367,9 @@ fallback to Vanilla, LoRA, OFT, mock policies, or dummy actions.
 `run <run-id> (<run-hash>) <state> <path>`. The eight-character hash is a
 lookup alias, distinct from the scientific and integrity hashes. Every
 benchmark-run selector below accepts either the complete ID or this hash;
-exact IDs take precedence and ambiguous hashes fail closed. Training commands
-apply the same rule only within `training-runs/`.
+exact IDs take precedence and ambiguous hashes fail closed. Training runs use
+`runs/train/`; evaluation runs use `runs/evaluate/`. Prefix selectors with
+`train:` or `evaluate:` if the same ID exists in both categories.
 
 Read a run summary without changing artifacts:
 
@@ -416,21 +417,22 @@ complete recorded and recomputed `MetricResult` objects.
 ```
 
 Reports read canonical evidence from `OVLAB_RUNS_ROOT` and publish staged,
-checksummed offline HTML/JSON builds under `OVLAB_DERIVED_ROOT`. Exports read
+checksummed offline HTML/JSON builds under
+`OVLAB_EXPORTS_ROOT/derived`. Exports read
 canonical runs directly and publish readable CSV tables plus PNG/PDF figures
 under `OVLAB_EXPORTS_ROOT`; they never scrape report HTML. `--json` returns the
 final host-visible path. These commands do not start
 LIBERO, a policy service, inference, or a network request.
 
 The source-tree launcher runs report and export commands in the locked,
-purpose-built `ovlab-reporting` image. It mounts canonical runs read-only,
-derived/exports read-write, and still reports real host output paths. No Conda
+purpose-built `ovlab-reporting` image. It mounts canonical runs read-only and
+the unified exports root read-write, while reporting real host output paths. No Conda
 activation or host package installation is required. Set
 `OVLAB_REPORTING_RUNTIME=host` only for an intentionally prepared native Python.
 
 `train report` uses that same image, but mounts canonical
-`OVLAB_MODEL_DATA_ROOT/training-runs` read-only and writes only beneath
-`OVLAB_DERIVED_ROOT/training`. It reports exact parameter classes, PyTorch CUDA
+`OVLAB_RUNS_ROOT` read-only and writes under
+`OVLAB_EXPORTS_ROOT/derived/training`. It reports exact parameter classes, PyTorch CUDA
 allocator VRAM/peaks and explicitly estimated—not measured—GFLOPs.
 
 During deployment, benchmark and policy containers are torn down after the
@@ -456,12 +458,12 @@ failure cannot change canonical benchmark status or timing. The legacy `report g
 ```
 
 `data archive` moves selected finalized runs, completed reports, or completed
-exports beneath `OVLAB_DATA_ROOT/archive` while preserving the `runs/`,
-`derived/`, and `exports/` sibling layout. `data delete` is irreversible. Both
+exports beneath `OVLAB_DATA_ROOT/archive` while preserving the `runs/` and
+`exports/` layout. `data delete` is irreversible. Both
 operations require an interactive confirmation; automation must supply
 `--yes`, and should normally perform a `--dry-run` first. `--all` means all
 benchmark runs, derived reports, and exports only—it never includes datasets,
-checkpoints, training-runs, or source files. If any selected item is active or
+checkpoints, `runs/train`, or source files. If any selected item is active or
 incomplete, the complete operation is refused rather than silently skipping it.
 `data delete --force` explicitly permits deletion of active, aborted legacy, or
 incomplete artifacts. It bypasses only the state guard: confirmation, managed-root
