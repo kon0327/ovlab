@@ -507,6 +507,7 @@ def test_config_bundle_is_minimal_deterministic_and_read_only(tmp_path):
     assert "benchmarks/libero/libero10-smoke.yaml" in paths
     assert "benchmarks/libero/libero10.yaml" in paths
     assert "policies/openvla-lora/merged-libero10.yaml" in paths
+    assert "interfaces/actions/libero-osc-pose-v1.yaml" in paths
     assert "resources/registry.yaml" in paths
     assert "profiles/libero-bench-egl.yaml" in paths
     assert "experiments/libero10-openvla-oft-rpc-smoke.yaml" not in paths

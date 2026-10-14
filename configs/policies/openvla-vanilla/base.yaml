@@ -22,7 +22,7 @@ settings:
 
   action:
     codec: openvla-to-libero-v1
-    interface_ref: interfaces/actions/libero-osc-pose-v1.yaml
+    action_interface: interfaces/actions/libero-osc-pose-v1.yaml
 
   raw_output:
     enabled: false

@@ -141,13 +141,15 @@ class ConfigResolver:
 
         kinds = {
             "benchmark": "benchmark", "policy": "policy", "metrics": "metric_set", "protocol": "protocol",
-            "action_interface": "action_interface", "artifacts": "artifact_store",
+            "artifacts": "artifact_store",
         }
-        components, component_paths = {}, {}
+        components = {}
         for name, kind in kinds.items():
             path = self._root_reference(experiment_doc["components"][name], f"components.{name}")
-            component_paths[name] = path
             components[name] = self._load_composed(path, kind)
+        action_reference = components["policy"]["settings"]["action"]["action_interface"]
+        action_path = self._root_reference(action_reference, "policy.settings.action.action_interface")
+        action_doc = self._load_composed(action_path, "action_interface")
         registry_path = self._root_reference(experiment_doc["resources"]["registry"], "resources.registry")
         registry = self._load_composed(registry_path, "resource_registry")
         profile_path = Path(local_profile)
@@ -224,8 +226,8 @@ class ConfigResolver:
                 renderer_doc["backend"], device_id, os.environ if environment is None else environment
             )
 
-        action_spec = self._action_spec(components["action_interface"])
-        self._cross_validate_refs(experiment_doc, components, component_paths, action_spec)
+        action_spec = self._action_spec(action_doc)
+        self._cross_validate_refs(experiment_doc, components, action_path, action_spec)
         protocol = self._protocol(components["protocol"])
         benchmark = self._benchmark(components["benchmark"], protocol, renderer)
         policy = self._policy(components["policy"], components["benchmark"], action_spec, resolved_checkpoints, devices)
@@ -239,9 +241,11 @@ class ConfigResolver:
         if components["benchmark"]["type"] == "libero" and not components["benchmark"]["settings"]["privileged_signals"]["enabled"]:
             raise ConfigCompatibilityError("LiberoBenchmarkAdapter always exposes its declared privileged signal registry")
 
+        scientific_components = deepcopy(components)
+        scientific_components["policy"]["settings"]["action"]["resolved_action_interface"] = action_doc
         scientific = {
             "schema_version": SCHEMA_VERSION, "kind": "scientific_experiment",
-            "experiment": experiment_doc["experiment"], "components": components,
+            "experiment": experiment_doc["experiment"], "components": scientific_components,
             "resource_registry": registry,
         }
         execution = {"scientific_config": scientific, "resolved_resources": resources}
@@ -267,7 +271,7 @@ class ConfigResolver:
             scientific, execution, _hash(scientific), _hash(execution),
         )
 
-    def _cross_validate_refs(self, experiment, components, paths, action_spec):
+    def _cross_validate_refs(self, experiment, components, action_path, action_spec):
         deployment = experiment.get("deployment")
         if deployment is not None:
             expected_profile = {
@@ -284,12 +288,10 @@ class ConfigResolver:
                     f"deployment profile {deployment['profile']!r} is incompatible with policy "
                     f"type {components['policy']['type']!r}; expected {expected_profile!r}"
                 )
-        expected = paths["action_interface"]
-        for owner in ("benchmark", "policy"):
-            reference = components[owner]["settings"]["action"]["interface_ref"]
-            actual = self._root_reference(reference, f"{owner}.settings.action.interface_ref")
-            if actual != expected:
-                raise ConfigCompatibilityError(f"{owner} action interface differs from the experiment interface")
+        reference = components["benchmark"]["settings"]["action"]["interface_ref"]
+        benchmark_action_path = self._root_reference(reference, "benchmark.settings.action.interface_ref")
+        if benchmark_action_path != action_path:
+            raise ConfigCompatibilityError("benchmark action interface differs from the policy interface")
         if components["benchmark"]["type"] == "libero" and not action_specs_match(action_spec, libero_action_spec()):
             raise ConfigCompatibilityError("action interface differs from LiberoBenchmarkAdapter's verified ActionSpec")
         policy_input = components["policy"]["settings"]["input"]

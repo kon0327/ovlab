@@ -11,7 +11,7 @@ settings:
     proprioception: robot_state
 
   action:
-    interface_ref: interfaces/actions/mock-delta-gripper-v1.yaml
+    action_interface: interfaces/actions/mock-delta-gripper-v1.yaml
 
   raw_output:
     enabled: true

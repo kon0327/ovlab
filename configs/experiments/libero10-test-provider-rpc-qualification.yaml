@@ -11,7 +11,6 @@ components:
   policy: policies/mock/libero-noop.yaml
   metrics: metrics/qualification-v1.yaml
   protocol: protocols/libero-qualification-v1.yaml
-  action_interface: interfaces/actions/libero-osc-pose-v1.yaml
   artifacts: artifacts/filesystem.yaml
 
 resources:

@@ -268,6 +268,10 @@ def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
     assert resolved.policy_settings.canonical_camera_name == "camera.primary.rgb"
     assert resolved.action_spec.gripper_convention is GripperConvention.CLOSED_POSITIVE
     assert resolved.action_spec.units == ("normalized_command",) * 7
+    assert "action_interface" not in resolved.scientific_config["components"]
+    assert resolved.scientific_config["components"]["policy"]["settings"]["action"]["action_interface"] == (
+        "interfaces/actions/libero-osc-pose-v1.yaml"
+    )
     assert resolved.metric_settings.required_metric_ids == (
         "task.success_rate", "action.smoothness_1", "action.smoothness_2")
     assert isinstance(resolved.metric_settings.configurations["failure.action_modification_rate"], ActionModificationMetricConfig)
@@ -588,6 +592,22 @@ def test_cross_component_action_convention_mismatch_is_rejected(tmp_path):
     with pytest.raises(ConfigCompatibilityError, match="ActionSpec"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
             root / "experiments/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path))
+
+
+def test_policy_action_interface_must_match_benchmark(tmp_path):
+    root = copied_configs(tmp_path)
+    policy = root / "policies/openvla-vanilla/base.yaml"
+    policy.write_text(
+        policy.read_text().replace(
+            "interfaces/actions/libero-osc-pose-v1.yaml",
+            "interfaces/actions/mock-delta-gripper-v1.yaml",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigCompatibilityError, match="benchmark action interface differs"):
+        ConfigResolver(root, repository_root=tmp_path).resolve(
+            root / "experiments/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path)
+        )
 
 
 def test_reporting_configuration_changes_only_derived_identity(tmp_path):

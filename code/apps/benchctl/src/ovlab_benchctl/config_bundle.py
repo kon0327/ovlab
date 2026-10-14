@@ -21,7 +21,6 @@ _COMPONENT_KINDS = {
     "policy": "policy",
     "metrics": "metric_set",
     "protocol": "protocol",
-    "action_interface": "action_interface",
     "artifacts": "artifact_store",
 }
 
@@ -136,7 +135,12 @@ class ConfigBundleBuilder:
         )
         for name, kind in _COMPONENT_KINDS.items():
             reference = experiment_document["components"][name]
-            self._extends_closure(reference, kind, selected)
+            component = self._extends_closure(reference, kind, selected)
+            if name == "policy":
+                self._extends_closure(
+                    component["settings"]["action"]["action_interface"],
+                    "action_interface", selected,
+                )
         registry = experiment_document["resources"]["registry"]
         self._extends_closure(registry, "resource_registry", selected)
         self._extends_closure(

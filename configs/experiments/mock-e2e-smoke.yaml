@@ -18,7 +18,6 @@ components:
   policy: policies/mock/base.yaml
   metrics: metrics/action-safe-v1.yaml
   protocol: protocols/smoke-v1.yaml
-  action_interface: interfaces/actions/mock-delta-gripper-v1.yaml
   artifacts: artifacts/filesystem.yaml
 
 resources:

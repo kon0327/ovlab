@@ -73,7 +73,7 @@ def validate_experiment(doc, path):
     if not experiment["tags"] or any(not isinstance(item, str) or not item for item in experiment["tags"]):
         raise ConfigSchemaError(f"{path}.experiment.tags must contain non-empty strings")
     components = mapping(doc["components"], f"{path}.components", required=(
-        "benchmark", "policy", "metrics", "protocol", "action_interface", "artifacts"))
+        "benchmark", "policy", "metrics", "protocol", "artifacts"))
     resources = mapping(doc["resources"], f"{path}.resources", required=("registry",))
     for key, value in components.items(): exact_type(value, str, f"{path}.components.{key}")
     exact_type(resources["registry"], str, f"{path}.resources.registry")
@@ -172,8 +172,8 @@ def validate_policy(doc, path):
         non_empty_string(input_["camera"], f"{path}.settings.input.camera")
         if input_["proprioception"] is not None:
             non_empty_string(input_["proprioception"], f"{path}.settings.input.proprioception")
-        action = mapping(settings["action"], f"{path}.settings.action", required=("interface_ref",))
-        non_empty_string(action["interface_ref"], f"{path}.settings.action.interface_ref")
+        action = mapping(settings["action"], f"{path}.settings.action", required=("action_interface",))
+        non_empty_string(action["action_interface"], f"{path}.settings.action.action_interface")
         raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
         exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
         return
@@ -207,9 +207,9 @@ def validate_policy(doc, path):
     if runtime["attention_implementation"] is not None: exact_type(runtime["attention_implementation"], str, f"{path}.settings.runtime.attention_implementation")
     for key in ("local_files_only", "trust_remote_code", "deterministic", "synchronize_inference"):
         exact_type(runtime[key], bool, f"{path}.settings.runtime.{key}")
-    action = mapping(settings["action"], f"{path}.settings.action", required=("codec", "interface_ref"))
+    action = mapping(settings["action"], f"{path}.settings.action", required=("codec", "action_interface"))
     enum(action["codec"], ("openvla-to-libero-v1",), f"{path}.settings.action.codec")
-    exact_type(action["interface_ref"], str, f"{path}.settings.action.interface_ref")
+    non_empty_string(action["action_interface"], f"{path}.settings.action.action_interface")
     raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
     exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
 

@@ -10,10 +10,11 @@ Inheritance is opt-in through a relative `extends` path. Mappings deep-merge,
 while scalar and sequence values replace the parent. Every composed document is
 validated against an exact schema, so misspelled or unknown keys fail early.
 
-The shared LIBERO action interface records the already verified
-`closed_positive` gripper convention. Both benchmark and policy references must
-resolve to that same interface, and the resolver compares it with the concrete
-LIBERO adapter contract. Canonical camera names are checked in the same way.
+The policy's `settings.action.action_interface` selects the action contract.
+The shared LIBERO interface records the verified `closed_positive` gripper
+convention. The benchmark's `settings.action.interface_ref` must resolve to the
+same interface, and the resolver compares it with the concrete LIBERO adapter
+contract. Canonical camera names are checked in the same way.
 
 ## LIBERO renderer execution profiles
 
