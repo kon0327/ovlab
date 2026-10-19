@@ -70,7 +70,7 @@ deep-merge and sequences replace their parent, just like experiment components.
 
 Planning resolves verified local assets without loading model weights or using
 network access. Materialization writes resolved profiles and commands. Use
-`train run --profile ...` for one variant, or `train ablate run --suite ...
+`train run TARGET` for one variant, or `train ablate run --suite ...
 --output NEW_DIRECTORY` to execute sequentially through the existing isolated
 trainer, independent finalizer and reporting owner.
 
@@ -111,7 +111,7 @@ statistics; use the new train-only fitting option for a vanilla host. Importing
 an arbitrary historical normalization sidecar remains unsupported.
 
 ```bash
-./ovlab train run --profile configs/training/openvla-libero10-quic-smoke.yaml \
+./ovlab train run configs/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
 ./ovlab train ablate run \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \

@@ -117,19 +117,14 @@ def _parser() -> argparse.ArgumentParser:
     deploy = commands.add_parser("deploy", help="orchestrate isolated OVLAB containers")
     deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
     deploy_run = deploy_commands.add_parser("run", help="run one experiment through Docker Compose")
-    deploy_run.add_argument("experiment")
-    deploy_run.add_argument(
-        "--profile", choices=("openvla", "oft", "quic"),
-        help="override deployment.profile from the experiment",
-    )
+    deploy_run.add_argument("target", help="experiment YAML in configs/experiments")
     deploy_run.add_argument(
         "--renderer", choices=("egl", "glfw"),
         help="override deployment.renderer from the experiment",
     )
-    deploy_run.add_argument("--env-file", default="deploy/compose/.env")
     deploy_run.add_argument(
-        "--local-profile",
-        help="gitignored host profile containing optional checkpoint local_path overrides",
+        "--quantization", choices=("none", "8bit", "4bit"),
+        help="override inference quantization from the experiment policy",
     )
     deploy_run.add_argument(
         "--offline",
@@ -141,11 +136,10 @@ def _parser() -> argparse.ArgumentParser:
     _output_options(deploy_run)
 
     run = commands.add_parser("run", help="execute, inspect, or verify a run")
-    run.add_argument("target", nargs="?", help="CONFIG, or 'inspect'/'verify'")
+    run.add_argument("target", nargs="?", help="experiment YAML in configs/experiments, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH, RUN_ID, or RUN_HASH for inspect or verify")
     run.add_argument(
-        "--profile", dest="experiment_profile",
-        help="evaluation YAML name in configs/experiments (or an explicit path)",
+        "--profile", help="local machine YAML (overrides OVLAB_LOCAL_PROFILE and configs/local/profile.yaml)",
     )
     run.add_argument("--output-root")
     run.add_argument("--dry-run", action="store_true")
@@ -311,7 +305,7 @@ def _parser() -> argparse.ArgumentParser:
     train_plan.add_argument("--profile", required=True)
     _output_options(train_plan)
     train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
-    train_run.add_argument("--profile", required=True)
+    train_run.add_argument("target", help="training YAML in configs/training")
     train_run.add_argument("--allow-dataset-download", action="store_true")
     for command in (train_validate, train_plan, train_run):
         command.add_argument("--fit-action-normalization", action="store_true", help="fit frozen action q01/q99 from training episodes only (requires dataset.partition)")
@@ -511,7 +505,8 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     "deploy run": (
         ("status", ("status",)), ("deployment", ("deployment",)),
         ("experiment", ("experiment",)), ("profile", ("profile",)),
-        ("renderer", ("renderer",)), ("run", ("run_path",)),
+        ("renderer", ("renderer",)), ("quantization", ("quantization",)),
+        ("run", ("run_path",)),
         ("cleanup", ("cleanup",)), ("side effects", ("side_effects_performed",)),
     ),
     "run": (
@@ -883,11 +878,9 @@ def _dispatch(args):
         from .deployment import ComposeDeployment
         deployment = ComposeDeployment(_repository_root())
         plan = deployment.plan(
-            args.experiment,
-            profile=args.profile,
+            args.target,
             renderer=args.renderer,
-            env_file=args.env_file,
-            local_profile=args.local_profile,
+            quantization=args.quantization,
             offline=args.offline,
             project_name=args.project_name,
         )
@@ -900,30 +893,25 @@ def _dispatch(args):
     if args.command == "run":
         app = _application()
         if args.target in {"inspect", "verify"}:
-            if args.experiment_profile:
+            if args.profile is not None:
                 raise CliUsageError("run inspect/verify cannot be combined with --profile")
             if args.path is None:
                 raise CliUsageError(f"run {args.target} requires RUN_PATH, RUN_ID, or RUN_HASH")
             result = app.inspect(args.path) if args.target == "inspect" else app.verify(args.path)
         else:
-            if args.target is not None and args.experiment_profile is not None:
-                raise CliUsageError("run accepts either CONFIG or --profile, not both")
             if args.path is not None:
-                raise CliUsageError("run CONFIG/--profile accepts no second positional argument")
-            config = args.experiment_profile or args.target
-            if config is None:
-                raise CliUsageError("run requires CONFIG or --profile YAML")
-            if args.experiment_profile:
-                from .config_paths import resolve_config_path
-                config = resolve_config_path(
-                    args.experiment_profile, _repository_root(), "experiments",
-                )
+                raise CliUsageError("run TARGET accepts no second positional argument")
+            if args.target is None:
+                raise CliUsageError("run requires an experiment YAML TARGET")
+            from .config_paths import resolve_config_path
+            config = resolve_config_path(args.target, _repository_root(), "experiments")
+            profile_options = {"local_profile": args.profile} if args.profile is not None else {}
             if args.dry_run:
-                result = app.execution_plan(config, output_root=args.output_root)
+                result = app.execution_plan(config, output_root=args.output_root, **profile_options)
             else:
                 previous = _install_interrupt_handlers()
                 try:
-                    result = app.run(config, output_root=args.output_root)
+                    result = app.run(config, output_root=args.output_root, **profile_options)
                 finally:
                     _restore_handlers(previous)
         return result, args.json, None
@@ -1033,7 +1021,7 @@ def _dispatch(args):
         if args.train_command == "run":
             from .training_deployment import TrainingDeployment
             return TrainingDeployment(_repository_root()).run(
-                args.profile, allow_dataset_download=args.allow_dataset_download,
+                args.target, allow_dataset_download=args.allow_dataset_download,
                 fit_action_normalization=args.fit_action_normalization,
                 interactive_progress=sys.stderr.isatty(),
             ), args.json, None

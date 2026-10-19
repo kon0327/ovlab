@@ -109,7 +109,7 @@ and unresolved aliases are rejected.
 ```bash
 ./ovlab train profiles
 ./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
-./ovlab train run --profile openvla-libero10-quic-smoke.yaml
+./ovlab train run openvla-libero10-quic-smoke.yaml
 ./ovlab train plan --profile openvla-libero10-quic-hard.yaml
 ./ovlab train plan --profile configs/training/openvla-libero10-lora-smoke.yaml
 ```
@@ -153,7 +153,7 @@ partition, and adapter-only output:
 ```bash
 ./ovlab train validate --profile configs/training/openvla-libero10-quic-smoke.yaml
 ./ovlab train plan --profile configs/training/openvla-libero10-quic-smoke.yaml
-./ovlab train run --profile configs/training/openvla-libero10-quic-smoke.yaml
+./ovlab train run configs/training/openvla-libero10-quic-smoke.yaml
 ./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
 ./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-run
@@ -179,7 +179,7 @@ adapter through reload and inference.
 Teacher-forced validation remains separate from benchmark rollout evaluation.
 
 ```bash
-./ovlab train run --profile configs/training/openvla-libero10-quic-smoke.yaml \
+./ovlab train run configs/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
 ./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --fit-action-normalization --output /tmp/quic-placement-fitted-run
@@ -207,7 +207,7 @@ Then start a bounded run:
 
 ```bash
 ./ovlab train run \
-  --profile configs/training/openvla-libero10-lora-smoke.yaml
+  configs/training/openvla-libero10-lora-smoke.yaml
 ```
 
 The trainer has one requested GPU, no network, a read-only prepared dataset, a

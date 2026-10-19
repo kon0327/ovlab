@@ -25,13 +25,8 @@ run` starts the policy service and LIBERO runner in separate containers. It
 gets local paths and output locations from `deploy/compose/.env` and the
 container definitions.
 
-For `deploy run`, `--profile` has a different meaning: it selects the Docker
-Compose profile (`openvla`, `oft`, or `quic`), not the experiment YAML. The
-profile is usually selected from the experiment, so this option is not needed:
-
-```bash
-./ovlab deploy run configs/experiments/EXPERIMENT.yaml --profile openvla
-```
+The Docker Compose profile (`openvla`, `oft`, or `quic`) is selected from the
+experiment YAML.
 
 ## Direct Host Execution
 
@@ -40,14 +35,14 @@ evaluation YAML by its short name; the CLI looks for it in
 `configs/experiments/`:
 
 ```bash
-./ovlab run --profile libero10-lora-4bit-three-per-task.yaml --dry-run
-./ovlab run --profile libero10-lora-4bit-three-per-task.yaml
+./ovlab run libero10-lora-4bit-three-per-task --dry-run
+./ovlab run libero10-lora-4bit-three-per-task
 ```
 
 This path requires a local profile so the resolver can access machine-specific
-absolute paths and device settings. If `OVLAB_LOCAL_PROFILE` is unset, the CLI
-looks for `configs/local/profile.yaml`. The error
-`runtime resolution requires OVLAB_LOCAL_PROFILE or configs/local/profile.yaml`
+absolute paths and device settings. Pass it with `--profile`; otherwise the CLI
+uses `OVLAB_LOCAL_PROFILE`, then `configs/local/profile.yaml`. The error
+`runtime resolution requires --profile, OVLAB_LOCAL_PROFILE, or configs/local/profile.yaml`
 means that the experiment YAML was found, but the machine-specific settings
 are missing.
 
@@ -68,6 +63,12 @@ with this variable:
 export OVLAB_LOCAL_PROFILE=/absolute/path/to/profile.yaml
 ```
 
+To select a profile for one run, use:
+
+```bash
+./ovlab run libero10-lora-4bit-three-per-task --profile configs/local/profile.yaml
+```
+
 Do not add absolute paths or GPU settings to portable experiment files. Direct
 execution also requires a compatible native Python environment and runtime
 dependencies; the Docker workflow is usually simpler for operator runs.
@@ -78,12 +79,8 @@ dependencies; the Docker workflow is usually simpler for operator runs.
 
 ```bash
 ./ovlab run configs/experiments/libero10-lora-4bit-three-per-task.yaml
-./ovlab run --profile libero10-lora-4bit-three-per-task.yaml
+./ovlab run libero10-lora-4bit-three-per-task
 ```
-
-The short-name `--profile` option applies only to the top-level `run` command.
-For `deploy run`, pass the experiment positionally because its `--profile`
-option is reserved for selecting a Docker Compose service.
 
 After a run, list and inspect the results with:
 

@@ -50,12 +50,15 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab --help
 ./ovlab doctor
 ./ovlab doctor --experiment configs/experiments/libero10-lora-merged-rpc-smoke.yaml
-./ovlab deploy run EXPERIMENT --profile openvla --renderer egl
+./ovlab deploy run libero10-lora-merged-rpc-smoke
+./ovlab deploy run libero10-lora-merged-rpc-smoke --quantization 4bit
+./ovlab train run openvla-libero10-lora-smoke
 ./ovlab config validate CONFIG --mode descriptor
 ./ovlab policy list
 ./ovlab connect CONFIG
 ./ovlab run CONFIG --dry-run
-./ovlab run --profile EXPERIMENT.yaml --dry-run
+./ovlab run EXPERIMENT --dry-run
+./ovlab run EXPERIMENT --profile configs/local/profile.yaml --dry-run
 ./ovlab run inspect RUN_PATH_OR_ID_OR_HASH
 ./ovlab run verify RUN_PATH_OR_ID_OR_HASH
 ./ovlab metrics recompute RUN_PATH_OR_ID_OR_HASH
@@ -85,8 +88,8 @@ resources. It then starts the dedicated reporting image with canonical `runs/`
 mounted read-only and publishes all generated outputs below `exports/`. It needs
 Docker and system Python 3, not an activated Conda environment.
 
-Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile only for low-level
-native development. Installing `ovlab-benchctl` exposes the same command as the
+Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile when resolving a
+machine-local checkpoint path. Installing `ovlab-benchctl` exposes the same command as the
 `ovlab` console entrypoint. Complete command, output, exit-code, foreground
 service, cleanup, and QuIC-skeleton behavior is documented in the
 [`OVLAB CLI guide`](code/apps/benchctl/CLI_README.md).

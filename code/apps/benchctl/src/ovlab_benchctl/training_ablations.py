@@ -159,7 +159,7 @@ class TrainingAblation:
             target.chmod(0o444)
         document = dict(plan or self.plan())
         atomic_json(output / "plan.json", document)
-        atomic_json(output / "commands.json", {"schema_version": "ovlab.training-ablation-commands/v1", "commands": {variant: ["ovlab", "train", "run", "--profile", str(profiles / f"{variant}.yaml")] for variant in self.variants}})
+        atomic_json(output / "commands.json", {"schema_version": "ovlab.training-ablation-commands/v1", "commands": {variant: ["ovlab", "train", "run", str(profiles / f"{variant}.yaml")] for variant in self.variants}})
         return dict(document, output=str(output), profiles={variant: str(profiles / f"{variant}.yaml") for variant in self.variants})
 
     def run(self, output: Path, deployment, *, plan: Mapping) -> dict:

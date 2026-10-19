@@ -115,7 +115,7 @@ Training can opt into the same explicit built-in acquisition step with:
 
 ```bash
 ./ovlab train run \
-  --profile configs/training/openvla-libero10-lora-smoke.yaml \
+  configs/training/openvla-libero10-lora-smoke.yaml \
   --allow-dataset-download
 ```
 

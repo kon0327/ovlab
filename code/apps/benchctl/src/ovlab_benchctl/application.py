@@ -145,14 +145,14 @@ class OvlabApplication:
     def _relative(self, path: Path) -> str:
         return str(path.relative_to(self.config_root))
 
-    def _local_profile(self) -> Path:
-        configured = self.environment.get("OVLAB_LOCAL_PROFILE")
+    def _local_profile(self, override: str | Path | None = None) -> Path:
+        configured = override if override is not None else self.environment.get("OVLAB_LOCAL_PROFILE")
         path = Path(configured).expanduser() if configured else self.config_root / "local/profile.yaml"
         if not path.is_absolute():
             path = self.repository_root / path
         if not path.is_file():
             raise ConfigReferenceError(
-                "runtime resolution requires OVLAB_LOCAL_PROFILE or configs/local/profile.yaml"
+                "runtime resolution requires --profile, OVLAB_LOCAL_PROFILE, or configs/local/profile.yaml"
             )
         return path.resolve()
 
@@ -249,7 +249,10 @@ class OvlabApplication:
             descriptor.require_runtime_ready()
         return document, descriptor
 
-    def resolve(self, config: str | Path, *, mode: str = "descriptor"):
+    def resolve(
+        self, config: str | Path, *, mode: str = "descriptor",
+        local_profile: str | Path | None = None,
+    ):
         if mode not in {"descriptor", "runtime"}:
             raise ValueError("mode must be descriptor or runtime")
         path = self._config_path(config)
@@ -272,7 +275,7 @@ class OvlabApplication:
         execution = self.environment.get("OVLAB_EXECUTION_PROFILE")
         return self.resolver.resolve(
             path,
-            local_profile=self._local_profile(),
+            local_profile=self._local_profile(local_profile),
             execution_profile=execution,
             environment=self.environment,
         )
@@ -360,8 +363,10 @@ class OvlabApplication:
         slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", identity).strip(".-") or "policy"
         return Path("/tmp") / f"ovlab-{os.getuid()}" / f"{slug}.sock"
 
-    def _resolved_experiment(self, config: str | Path) -> ResolvedExperimentConfig:
-        resolved = self.resolve(config, mode="runtime")
+    def _resolved_experiment(
+        self, config: str | Path, *, local_profile: str | Path | None = None,
+    ) -> ResolvedExperimentConfig:
+        resolved = self.resolve(config, mode="runtime", local_profile=local_profile)
         if not isinstance(resolved, ResolvedExperimentConfig):
             raise ConfigCompatibilityError("operation requires a complete experiment configuration")
         return resolved
@@ -552,8 +557,11 @@ class OvlabApplication:
         finally:
             policy.close()
 
-    def execution_plan(self, config: str | Path, *, output_root: str | Path | None = None) -> dict[str, object]:
-        resolved = self._resolved_experiment(config)
+    def execution_plan(
+        self, config: str | Path, *, output_root: str | Path | None = None,
+        local_profile: str | Path | None = None,
+    ) -> dict[str, object]:
+        resolved = self._resolved_experiment(config, local_profile=local_profile)
         output_path = resolved.artifact_settings.root if output_root is None else str(Path(output_root).expanduser().resolve())
         if output_root is None and Path(output_path).name == "runs":
             output_path = str(Path(output_path) / "evaluate")
@@ -584,7 +592,10 @@ class OvlabApplication:
         indices = settings.task_indices if settings.task_indices is not None else tuple(range(10))
         return tuple(TaskId(f"libero/{slug[suite]}/{index}") for suite in settings.suite_names for index in indices)
 
-    def run(self, config: str | Path, *, output_root: str | Path | None = None) -> dict[str, object]:
+    def run(
+        self, config: str | Path, *, output_root: str | Path | None = None,
+        local_profile: str | Path | None = None,
+    ) -> dict[str, object]:
         from ovlab_benchmarks.libero import LiberoBenchmarkAdapter
         from ovlab_core.contracts import RunContext, RunId
         from ovlab_remote_policy import RemotePolicyAdapter, UnixPolicyClient
@@ -593,7 +604,7 @@ class OvlabApplication:
             FilesystemRunArtifactStore,
         )
 
-        resolved = self._resolved_experiment(config)
+        resolved = self._resolved_experiment(config, local_profile=local_profile)
         created_wall_time_utc_ns = time.time_ns()
         run_id = RunId(_readable_run_id(
             resolved.experiment_id,

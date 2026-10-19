@@ -76,6 +76,9 @@ one command:
   configs/experiments/libero10-lora-merged-rpc-smoke.yaml
 ```
 
+`TARGET` accepts a path or a YAML filename/name under `configs/experiments`.
+`train run TARGET` uses the same form under `configs/training`.
+
 The CLI validates the Compose model, passes the same experiment to both
 containers, waits for policy readiness, runs the benchmark, propagates failure,
 and removes its containers and private RPC volume. Canonical artifacts remain in
@@ -119,15 +122,21 @@ they share the same policy image and Compose service. LoRA remains a distinct
 scientific method through its policy component; creating a duplicate Compose
 profile would not add isolation. OpenVLA-OFT uses `profile: oft`.
 
-`--profile` and `--renderer` are optional overrides with precedence over the
-experiment values. A profile override must remain compatible with the selected
-policy type. Use GLFW only with an interactive display server. Preview the
+`--renderer` is an optional override with precedence over the
+experiment value. The Compose profile comes from the experiment and must remain
+compatible with its policy type. Use GLFW only with an interactive display server. Preview the
 resolved selection and exact commands without touching Docker:
 
 ```bash
 ./ovlab deploy run CONFIG --dry-run
 ./ovlab deploy run CONFIG --renderer glfw --dry-run
 ```
+
+Inference quantization comes from the experiment's policy component at
+`settings.runtime.quantization` (`none`, `8bit`, or `4bit`). Override it for one
+deployment with `--quantization 4bit` (or `8bit`/`none`). The selected value is
+recorded in the plan and the configuration bundle; the source policy YAML stays
+unchanged. QuIC policies require `none`.
 
 Run the five-task cross-suite Vanilla NF4 experiment with:
 
@@ -136,9 +145,9 @@ Run the five-task cross-suite Vanilla NF4 experiment with:
   configs/experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml
 ```
 
-The selected policy component owns `runtime.quantization: none | 8bit | 4bit`; there is
-no host-side quantization switch. This keeps the inference representation in the
-portable scientific configuration and its hash.
+Without `--quantization`, the selected policy component determines inference
+representation. With the switch, the temporary bundled policy carries the override,
+so the resolved scientific configuration and its hash reflect the selected value.
 
 Before Docker starts, the CLI resolves the policy's portable `checkpoint_id`.
 It checks `~/.cache/huggingface`, an optional local-profile `local_path`, and
@@ -154,11 +163,11 @@ prohibit the download path:
 ```
 
 Custom unpublished checkpoints remain outside the repository and are selected
-through a gitignored local profile:
+through a gitignored local profile. Compose uses `deploy/compose/.env` by default;
+`OVLAB_COMPOSE_ENV_FILE` selects another repository-local environment file:
 
 ```bash
-./ovlab deploy run CONFIG \
-  --local-profile configs/local/profile.yaml
+OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab deploy run CONFIG
 ```
 
 ## Machine-local native configuration
@@ -198,10 +207,9 @@ ovlab
 │   └── health --socket PATH [--detail | --json]
 ├── connect CONFIG [--detail | --json]
 ├── deploy
-│   └── run EXPERIMENT [--profile openvla|oft] [--renderer egl|glfw]
-│       [--env-file PATH] [--local-profile PATH] [--offline]
+│   └── run TARGET [--renderer egl|glfw] [--quantization none|8bit|4bit] [--offline]
 │       [--project-name NAME] [--dry-run] [--detail | --json]
-├── run CONFIG [--output-root PATH] [--dry-run] [--detail | --json]
+├── run TARGET [--profile LOCAL_PROFILE] [--output-root PATH] [--dry-run] [--detail | --json]
 ├── run inspect RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── run verify RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── metrics recompute RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
@@ -231,7 +239,7 @@ ovlab
 │   ├── profiles [--detail | --json]
 │   ├── validate --profile PROFILE [--detail | --json]
 │   ├── plan --profile PROFILE [--detail | --json]
-│   ├── run --profile PROFILE [--allow-dataset-download] [--detail | --json]
+│   ├── run TARGET [--allow-dataset-download] [--detail | --json]
 │   ├── status --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
 │   ├── inspect --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
 │   ├── verify --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
@@ -347,6 +355,10 @@ It does not reset an episode, request a prediction, start LIBERO, or create an
 inference trace. Privileged benchmark signals are not part of the RPC schema.
 
 ## 5. Low-level native runner
+
+`TARGET` accepts a path or a YAML filename/name under `configs/experiments`.
+`--profile` selects the local machine profile for this run. If omitted, the CLI
+uses `OVLAB_LOCAL_PROFILE` or `configs/local/profile.yaml`.
 
 Inspect the execution plan without runtime side effects:
 

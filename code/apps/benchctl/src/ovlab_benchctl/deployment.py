@@ -17,6 +17,7 @@ from ovlab_core.progress import draw_progress_line, fit_progress_line
 from .schema import validate
 from .strict_yaml import load
 from .config_bundle import ConfigBundleBuilder
+from .errors import ConfigSchemaError
 from .image_metadata import IMAGE_CONTRACT_LABEL
 
 
@@ -64,6 +65,8 @@ class ComposeDeploymentPlan:
     renderer: str
     profile_source: str
     renderer_source: str
+    quantization: str
+    quantization_source: str
     project_name: str
     env_file: str
     local_profile: str | None
@@ -86,6 +89,8 @@ class ComposeDeploymentPlan:
             "renderer": self.renderer,
             "profile_source": self.profile_source,
             "renderer_source": self.renderer_source,
+            "quantization": self.quantization,
+            "quantization_source": self.quantization_source,
             "project_name": self.project_name,
             "env_file": self.env_file,
             "local_profile": self.local_profile,
@@ -187,12 +192,18 @@ class ComposeDeployment:
         *,
         profile: str | None = None,
         renderer: str | None = None,
+        quantization: str | None = None,
         env_file: str | Path | None = None,
         local_profile: str | Path | None = None,
         offline: bool = False,
         project_name: str | None = None,
     ) -> ComposeDeploymentPlan:
-        experiment_path = self._inside_repository(experiment, kind="experiment configuration")
+        from .config_paths import resolve_config_path
+
+        experiment_path = self._inside_repository(
+            resolve_config_path(experiment, self.repository_root, "experiments"),
+            kind="experiment configuration",
+        )
         config_root = self.repository_root / "configs"
         if not experiment_path.is_relative_to(config_root / "experiments"):
             raise ValueError("Docker deployment requires an experiment below configs/experiments/")
@@ -222,7 +233,8 @@ class ComposeDeployment:
         policy_path = (config_root / policy_reference).resolve()
         if not policy_path.is_relative_to(config_root / "policies") or not policy_path.is_file():
             raise ValueError(f"experiment policy must resolve below configs/policies/: {policy_reference}")
-        policy_type = resolver.load_component(policy_reference, "policy").get("type")
+        policy_doc = resolver.load_component(policy_reference, "policy")
+        policy_type = policy_doc.get("type")
         required_profile = self._POLICY_PROFILES.get(policy_type)
         if required_profile is None:
             raise ValueError(f"policy type {policy_type!r} has no Docker deployment profile")
@@ -232,12 +244,23 @@ class ComposeDeployment:
                 f"{policy_type!r}; expected {required_profile!r}"
             )
 
+        if quantization is not None and quantization not in {"none", "8bit", "4bit"}:
+            raise ConfigSchemaError("quantization must be one of: none, 8bit, 4bit")
+        selected_quantization = quantization or policy_doc["settings"]["runtime"]["quantization"]
+        if policy_type == "openvla_quic" and selected_quantization != "none":
+            raise ConfigSchemaError("QuIC supports dense hosts only; quantization must be none")
+        quantization_source = "cli" if quantization is not None else "policy"
+
         profile_source = "cli" if profile is not None else "experiment"
         renderer_source = "cli" if renderer is not None else "experiment"
         profile = selected_profile
         renderer = selected_renderer
 
-        selected_env = env_file or self.repository_root / "deploy/compose/.env"
+        selected_env = (
+            env_file
+            or self.environment.get("OVLAB_COMPOSE_ENV_FILE")
+            or self.repository_root / "deploy/compose/.env"
+        )
         env_path = self._inside_repository(selected_env, kind="Compose environment file")
         local_profile_path = None
         selected_local_profile = local_profile or self.environment.get("OVLAB_LOCAL_PROFILE")
@@ -270,6 +293,8 @@ class ComposeDeployment:
             renderer=renderer,
             profile_source=profile_source,
             renderer_source=renderer_source,
+            quantization=selected_quantization,
+            quantization_source=quantization_source,
             project_name=project,
             env_file=str(env_path),
             local_profile=local_profile_path,
@@ -564,6 +589,7 @@ class ComposeDeployment:
         bundle = bundle_builder.build(
             plan.experiment,
             self._RENDERER_EXECUTION_PROFILES[plan.renderer],
+            quantization=plan.quantization if plan.quantization_source == "cli" else None,
         )
         if dry_run:
             return {
@@ -670,6 +696,8 @@ class ComposeDeployment:
             "experiment": plan.experiment,
             "profile": plan.profile,
             "renderer": plan.renderer,
+            "quantization": plan.quantization,
+            "quantization_source": plan.quantization_source,
             "project_name": plan.project_name,
             "status": "completed",
             "cleanup": "completed",

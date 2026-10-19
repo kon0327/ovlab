@@ -286,6 +286,32 @@ def test_deployment_defaults_are_read_from_experiment_yaml():
     assert oft.profile_source == oft.renderer_source == "experiment"
 
 
+def test_deploy_target_resolves_bare_experiment_name():
+    deployment = ComposeDeployment(REPOSITORY)
+    plan = deployment.plan(
+        "libero10-lora-merged-rpc-smoke",
+        env_file=ENV_FILE,
+        project_name="ovlab-test-bare-target",
+    )
+    assert plan.experiment == LORA
+
+
+def test_quantization_override_is_validated_and_recorded_in_plan():
+    deployment = ComposeDeployment(REPOSITORY)
+    plan = deployment.plan(
+        LORA, quantization="4bit", env_file=ENV_FILE,
+        project_name="ovlab-test-quantized",
+    )
+    assert (plan.quantization, plan.quantization_source) == ("4bit", "cli")
+    with pytest.raises(ValueError, match="QuIC supports dense hosts only"):
+        deployment.plan(
+            "configs/experiments/libero10-quic-adapter-rpc-smoke.yaml",
+            quantization="4bit", env_file=ENV_FILE,
+        )
+    with pytest.raises(ValueError, match="quantization must be one of"):
+        deployment.plan(LORA, quantization="invalid", env_file=ENV_FILE)
+
+
 def test_cli_renderer_override_takes_precedence_over_experiment():
     deployment = ComposeDeployment(REPOSITORY)
     plan = deployment.plan(
@@ -556,6 +582,33 @@ def test_config_bundle_is_minimal_deterministic_and_read_only(tmp_path):
     assert not materialized.exists()
 
 
+def test_quantization_override_changes_materialized_policy_and_bundle_identity(tmp_path):
+    import hashlib
+
+    builder = ConfigBundleBuilder(REPOSITORY)
+    original = builder.build(LORA, "profiles/libero-bench-egl.yaml")
+    quantized = builder.build(LORA, "profiles/libero-bench-egl.yaml", quantization="4bit")
+    assert quantized.sha256 != original.sha256
+    assert quantized.summary()["quantization_override"] == "4bit"
+    assert quantized.document()["quantization_override"] == "4bit"
+
+    with builder.materialize(quantized) as root:
+        for item in quantized.files:
+            content = (root / item["path"]).read_bytes()
+            assert len(content) == item["size"]
+            assert hashlib.sha256(content).hexdigest() == item["sha256"]
+        copied = tmp_path / "overridden"
+        shutil.copytree(root, copied / "configs")
+        policy = ConfigBundleBuilder(copied).load_component(
+            "policies/openvla-lora/merged-libero10.yaml", "policy",
+        )
+        assert policy["settings"]["runtime"]["quantization"] == "4bit"
+
+    assert (REPOSITORY / "configs/policies/openvla-lora/merged-libero10.yaml").read_text().find(
+        "quantization: none"
+    ) >= 0
+
+
 def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
     copied = tmp_path / "repository"
     copied.mkdir()
@@ -590,11 +643,11 @@ def test_public_cli_exposes_compose_dry_run_without_invoking_docker():
     completed = subprocess.run(
         [
             str(OVLAB), "deploy", "run", LORA,
-            "--profile", "openvla", "--renderer", "egl",
-            "--env-file", ENV_FILE, "--project-name", "ovlab-cli-test",
+            "--renderer", "egl", "--project-name", "ovlab-cli-test",
             "--offline", "--dry-run", "--json",
         ],
         cwd=REPOSITORY,
+        env={**os.environ, "OVLAB_COMPOSE_ENV_FILE": ENV_FILE},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -609,14 +662,35 @@ def test_public_cli_exposes_compose_dry_run_without_invoking_docker():
     assert payload["result"]["side_effects_performed"] is False
 
 
+def test_public_cli_quantization_override_changes_dry_run_bundle():
+    common = [str(OVLAB), "deploy", "run", "libero10-lora-merged-rpc-smoke", "--dry-run", "--json"]
+    environment = {**os.environ, "OVLAB_COMPOSE_ENV_FILE": ENV_FILE}
+    normal = subprocess.run(
+        common, cwd=REPOSITORY, env=environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    forced = subprocess.run(
+        [*common, "--quantization", "4bit"], cwd=REPOSITORY, env=environment,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    assert normal.returncode == forced.returncode == 0
+    baseline = json.loads(normal.stdout)["result"]
+    override = json.loads(forced.stdout)["result"]
+    assert (baseline["quantization"], baseline["quantization_source"]) == ("none", "policy")
+    assert (override["quantization"], override["quantization_source"]) == ("4bit", "cli")
+    assert override["config_bundle"]["quantization_override"] == "4bit"
+    assert override["config_bundle"]["bundle_sha256"] != baseline["config_bundle"]["bundle_sha256"]
+
+
 def test_public_cli_reads_profile_and_renderer_from_experiment():
     completed = subprocess.run(
         [
             str(OVLAB), "deploy", "run", OFT,
-            "--env-file", ENV_FILE, "--project-name", "ovlab-cli-yaml-defaults",
+            "--project-name", "ovlab-cli-yaml-defaults",
             "--offline", "--dry-run", "--json",
         ],
         cwd=REPOSITORY,
+        env={**os.environ, "OVLAB_COMPOSE_ENV_FILE": ENV_FILE},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -635,8 +709,9 @@ def test_deploy_dry_run_needs_only_system_python_and_standard_library():
     completed = subprocess.run(
         [
             "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=/tmp",
-            f"OVLAB_ROOT={REPOSITORY}", str(OVLAB), "deploy", "run", LORA,
-            "--env-file", ENV_FILE, "--project-name", "ovlab-stdlib-test",
+            f"OVLAB_ROOT={REPOSITORY}", f"OVLAB_COMPOSE_ENV_FILE={ENV_FILE}",
+            str(OVLAB), "deploy", "run", LORA,
+            "--project-name", "ovlab-stdlib-test",
             "--dry-run", "--json",
         ],
         cwd=REPOSITORY,

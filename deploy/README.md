@@ -27,6 +27,10 @@ BF16 compute, FP16 storage and double quantization. Applying either mode to a
 published fine-tuned artifact is inference-time quantization; it is not
 evidence that the model or adapter was trained with QLoRA.
 
+`ovlab deploy run TARGET --quantization 4bit` selects inference quantization
+for one deployment. The CLI writes the override into its temporary, hashed
+configuration bundle; repository policy files stay unchanged.
+
 QuIC remains descriptor-only. There is no QuIC image, Compose profile, provider
 selection, or claim of runtime readiness in Gate H.
 
@@ -178,11 +182,10 @@ Use strict offline resolution when downloads are forbidden:
 ./ovlab deploy run EXPERIMENT --offline
 ```
 
-For a custom checkpoint, pass a local profile explicitly:
+For a custom checkpoint, set the local profile environment variable:
 
 ```bash
-./ovlab deploy run EXPERIMENT \
-  --local-profile configs/local/profile.yaml
+OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab deploy run EXPERIMENT
 ```
 
 The policy always receives `/checkpoints/resolved/<checkpoint-id>`. The host

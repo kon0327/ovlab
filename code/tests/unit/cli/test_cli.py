@@ -106,6 +106,22 @@ def test_dataset_version_does_not_trigger_global_cli_version():
     assert imported.show_version is False and imported.version == "1"
 
 
+@pytest.mark.parametrize("command", ("deploy", "train"))
+def test_run_requires_yaml_target_and_rejects_old_profile_option(command):
+    parser = _parser()
+    with pytest.raises(SystemExit, match="2"):
+        parser.parse_args([command, "run"])
+    with pytest.raises(SystemExit, match="2"):
+        parser.parse_args([command, "run", "example", "--profile", "other.yaml"])
+    assert parser.parse_args([command, "run", "example"]).target == "example"
+
+
+@pytest.mark.parametrize("option", ("--env-file", "--local-profile"))
+def test_deploy_run_rejects_removed_host_path_options(option):
+    with pytest.raises(SystemExit, match="2"):
+        _parser().parse_args(["deploy", "run", "example", option, "host.yaml"])
+
+
 def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
     events = []
 
@@ -132,9 +148,30 @@ def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
     assert json_mode is False and render is None
     assert events == [
         ("install",),
-        ("run", "configs/experiments/mock-e2e-smoke.yaml", None),
+        ("run", REPOSITORY / "configs/experiments/mock-e2e-smoke.yaml", None),
         ("restore", {"previous": "handlers"}),
     ]
+
+
+def test_plain_run_resolves_bare_target_and_forwards_local_profile(monkeypatch):
+    class Application:
+        def execution_plan(self, config, *, output_root=None, local_profile=None):
+            return {"config": str(config), "output_root": output_root, "local_profile": local_profile}
+
+    monkeypatch.setattr(cli_module, "_application", lambda: Application())
+    args = _parser().parse_args(["run", "mock-e2e-smoke", "--profile", "local.yaml", "--dry-run"])
+    result, _, _ = _dispatch(args)
+    assert result["config"] == str(REPOSITORY / "configs/experiments/mock-e2e-smoke.yaml")
+    assert result["local_profile"] == "local.yaml"
+
+
+def test_plain_run_requires_target_but_keeps_inspect_and_verify():
+    with pytest.raises(cli_module.CliUsageError, match="requires an experiment YAML TARGET"):
+        _dispatch(_parser().parse_args(["run"]))
+    assert _parser().parse_args(["run", "inspect", "run-1"]).target == "inspect"
+    assert _parser().parse_args(["run", "verify", "run-1"]).target == "verify"
+    with pytest.raises(cli_module.CliUsageError, match="cannot be combined with --profile"):
+        _dispatch(_parser().parse_args(["run", "inspect", "run-1", "--profile", "local.yaml"]))
 
 
 @pytest.mark.parametrize("arguments", [
@@ -170,7 +207,7 @@ def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
     ("train", "profiles"),
     ("train", "validate", "--profile", "training.yaml"),
     ("train", "plan", "--profile", "training.yaml"),
-    ("train", "run", "--profile", "training.yaml"),
+    ("train", "run", "training.yaml"),
     ("train", "status", "--run", "training-1"),
     ("train", "inspect", "--run", "training-1"),
     ("train", "verify", "--run", "training-1"),
@@ -640,6 +677,32 @@ def test_dry_run_is_deterministic_and_has_no_filesystem_side_effects(tmp_path):
     assert not runs.exists()
 
 
+def test_run_profile_option_overrides_local_profile_environment(tmp_path):
+    def local_profile(name):
+        path = tmp_path / f"{name}.yaml"
+        path.write_text(
+            'schema_version: "0.1.0"\nkind: local_profile\n'
+            f'id: {name}\n\npaths:\n'
+            f'  checkpoint_root: {tmp_path}/{name}/checkpoints\n'
+            f'  dataset_root: {tmp_path}/{name}/datasets\n'
+            f'  runs_root: {tmp_path}/{name}/runs\n\n'
+            'devices:\n  primary_gpu: cuda:0\n',
+            encoding="utf-8",
+        )
+        return path
+
+    configured = local_profile("configured")
+    selected = local_profile("selected")
+    result = _run(
+        "run", "mock-e2e-smoke", "--profile", str(selected), "--dry-run", "--json",
+        environment={"OVLAB_LOCAL_PROFILE": str(configured)},
+    )
+    assert result.returncode == 0, result.stderr
+    plan = json.loads(result.stdout)["result"]
+    assert plan["output_root"] == str(tmp_path / "selected/runs/evaluate")
+    assert not (tmp_path / "selected/runs").exists()
+
+
 def test_resolved_json_is_deterministic_and_not_wrapped_as_python_repr():
     environment = {"OVLAB_LOCAL_PROFILE": str(REPOSITORY / "configs/local/gate-b-showrack.yaml")}
     arguments = (
@@ -757,7 +820,7 @@ def test_application_delegates_to_runner_without_duplicating_episode_loop():
 @pytest.mark.parametrize("arguments", [
     ["train", "validate", "--profile", "profile.yaml"],
     ["train", "plan", "--profile", "profile.yaml"],
-    ["train", "run", "--profile", "profile.yaml"],
+    ["train", "run", "profile.yaml"],
     ["train", "ablate", "validate", "--suite", "suite.yaml"],
     ["train", "ablate", "plan", "--suite", "suite.yaml"],
     ["train", "ablate", "materialize", "--suite", "suite.yaml", "--output", "/tmp/fit-plan"],
