@@ -10,3 +10,6 @@
 [submodule "external/openvla-quic"]
 	path = external/openvla-quic
 	url = https://github.com/kon0327/openvla-quic.git
+[submodule "external/quic-peft-vla"]
+	path = external/quic-peft-vla
+	url = https://github.com/kon0327/quic-peft-vla.git
