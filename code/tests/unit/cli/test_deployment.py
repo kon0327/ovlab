@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ovlab_benchctl.deployment import ComposeDeployment, ComposeDeploymentError
+from ovlab_benchctl.deployment import ComposeDeployment, ComposeDeploymentError, _ComposeProgressOutput
 from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 
 
@@ -22,6 +23,33 @@ ENV_FILE = "deploy/compose/.env.example"
 LORA = "configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
 OFT = "configs/experiments/libero10-openvla-oft-rpc-smoke.yaml"
 _PREFLIGHT_IMAGES = ComposeDeployment._preflight_images
+
+
+def test_compose_evaluation_progress_redraws_on_host_terminal():
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+
+    terminal = Terminal()
+    output = _ComposeProgressOutput(terminal, "benchmark-openvla")
+    output.write("benchmark-openvla-1  | [Evaluation] [.....] 0/30 episode running\n")
+    output.write("\x1b[32mbenchmark-openvla-1\x1b[0m  | [Evaluation] [=....] 1/30 episode running\n")
+    output.write("benchmark-openvla-1  | [Evaluation] [=====] 30/30 episode completed\n")
+    output.close()
+    assert terminal.getvalue().count("\r[Evaluation]") == 3
+    assert terminal.getvalue().count("\n") == 1
+    assert "benchmark-openvla-1" not in terminal.getvalue()
+
+
+def test_compose_progress_keeps_plain_logs_and_other_messages():
+    stream = StringIO()
+    output = _ComposeProgressOutput(stream, "benchmark-quic")
+    first = "benchmark-quic-1  | [Evaluation] 1/3 episode running\n"
+    second = "policy-openvla-quic-1  | loaded checkpoint\n"
+    output.write(first)
+    output.write(second)
+    output.close()
+    assert stream.getvalue() == first + second
 
 
 def test_quic_adapter_override_requires_both_files_and_resolves_from_environment_file(tmp_path):
@@ -312,10 +340,12 @@ def test_stale_policy_and_benchmark_images_fail_before_checkpoint_or_compose(
         project_name="ovlab-test-stale-image",
     )
 
-    with pytest.raises(ComposeDeploymentError, match="stale or incompatible") as failure:
+    with pytest.raises(ComposeDeploymentError, match="images need rebuilding") as failure:
         _PREFLIGHT_IMAGES(deployment, plan)
 
     assert "bash deploy/scripts/build-images.sh benchmark policy-openvla-oft reporting" in str(failure.value)
+    assert "deployment format mismatch" in str(failure.value)
+    assert "built from a different source snapshot" in str(failure.value)
     assert len(observed) == 3
     assert all(call[0][:3] == ["docker", "image", "inspect"] for call in observed)
 
@@ -381,7 +411,8 @@ def test_preflight_rejects_image_that_does_not_contain_current_source(monkeypatc
         _PREFLIGHT_IMAGES(deployment, plan)
 
     assert "build-images.sh benchmark policy-openvla reporting" in str(failure.value)
-    assert f"expected {deployment._SOURCE_MANIFEST_LABEL}={'a' * 64!r}" in str(failure.value)
+    assert "built from a different source snapshot" in str(failure.value)
+    assert "image bbbbbbbbbbbb, current aaaaaaaaaaaa" in str(failure.value)
 
 
 def test_failed_benchmark_is_cleaned_and_reported(deployment_environment):

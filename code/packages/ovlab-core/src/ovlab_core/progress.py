@@ -3,10 +3,34 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import time
 from typing import TextIO
+
+
+def fit_progress_line(line: str, columns: int) -> str:
+    """Keep a progress snapshot on one physical terminal row."""
+    limit = max(1, columns - 1)
+    if len(line) <= limit:
+        return line
+    compact = re.sub(r" elapsed=\d+s", "", line, count=1)
+
+    def resize_bar(match: re.Match[str], width: int) -> str:
+        filled = int(match.group().count("=") / 20 * width)
+        return "[" + "=" * filled + "." * (width - filled) + "]"
+    for width in (20, 12, 8):
+        candidate = re.sub(r"\[[=.]{20}\]", lambda match: resize_bar(match, width), compact, count=1)
+        if len(candidate) <= limit:
+            return candidate
+    return candidate[:limit - 1].rstrip() + "…" if limit > 1 else "…"
+
+
+def draw_progress_line(stream: TextIO, line: str, *, final: bool = False) -> None:
+    """Render an in-place update in the same style for host and container CLIs."""
+    stream.write("\r" + line + "\x1b[K" + ("\n" if final else ""))
+    stream.flush()
 
 
 class ConsoleProgress:
@@ -128,28 +152,14 @@ class ConsoleProgress:
         if detail:
             line += f" {detail}"
         if self.interactive:
-            limit = self._terminal_columns() - 1
-            if len(line) > limit:
-                # A Docker PTY can report 0 columns. Keep the bar on one
-                # physical row so carriage return really replaces it.
-                state = " " + status if final else ""
-                for width in (20, 12, 8):
-                    candidate = f"[{self.description}] {bar(width)} {count} {self.unit}{eta}{state}"
-                    if detail:
-                        candidate += f" {detail}"
-                    line = candidate
-                    if len(line) <= limit:
-                        break
-                if len(line) > limit:
-                    line = line[:limit - 1].rstrip() + "…"
+            line = fit_progress_line(line, self._terminal_columns())
         try:
             if self.interactive:
                 if draw:
                     if self._external_unterminated:
                         self.console.write("\n")
                         self._external_unterminated = False
-                    self.console.write("\r" + line + "\x1b[K" + ("\n" if final else ""))
-                    self.console.flush()
+                    draw_progress_line(self.console, line, final=final)
                     self._last_render = now
                     self._displayed = not final
                 if self.log is not None and snapshot:

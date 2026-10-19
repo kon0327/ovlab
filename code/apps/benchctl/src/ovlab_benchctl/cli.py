@@ -1017,7 +1017,7 @@ def _dispatch(args):
             return TrainingDeployment(_repository_root()).run(
                 args.profile, allow_dataset_download=args.allow_dataset_download,
                 fit_action_normalization=args.fit_action_normalization,
-                interactive_progress=not args.json and sys.stderr.isatty(),
+                interactive_progress=sys.stderr.isatty(),
             ), args.json, None
         if args.train_command == "status":
             return app.train_status(args.run_id), args.json, None

@@ -4,7 +4,15 @@ from io import StringIO
 
 import pytest
 
-from ovlab_core.progress import ConsoleProgress
+from ovlab_core.progress import ConsoleProgress, fit_progress_line
+
+
+def test_terminal_layout_keeps_progress_fraction_and_status_when_narrow():
+    line = "[Evaluation] [==========..........] 15/30 episode elapsed=100s eta=100s running task=libero/10/0"
+    fitted = fit_progress_line(line, 65)
+    assert len(fitted) <= 64
+    assert "15/30 episode" in fitted
+    assert "[======......]" in fitted or "[====....]" in fitted
 
 
 def test_captured_progress_is_throttled_and_always_records_final_count(monkeypatch):

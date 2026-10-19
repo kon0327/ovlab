@@ -9,8 +9,11 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import subprocess
 import sys
+
+from ovlab_core.progress import draw_progress_line, fit_progress_line
 
 from .schema import validate
 from .strict_yaml import load
@@ -20,6 +23,39 @@ from .image_metadata import IMAGE_CONTRACT_LABEL, SOURCE_MANIFEST_LABEL
 
 class ComposeDeploymentError(RuntimeError):
     """A Docker Compose deployment failed or could not be cleaned up."""
+
+
+class _ComposeProgressOutput:
+    """Redraw benchmark progress after Compose has converted container output to lines."""
+
+    def __init__(self, stream, benchmark_service: str) -> None:
+        self.stream = stream
+        self.benchmark_service = benchmark_service
+        self.interactive = bool(getattr(stream, "isatty", lambda: False)())
+        self.active = False
+
+    def write(self, line: str) -> None:
+        if self.interactive and " | " in line:
+            service, message = line.split(" | ", 1)
+            service = re.sub(r"\x1b\[[0-9;]*m", "", service).strip()
+            if service.startswith(self.benchmark_service + "-") and message.startswith("[Evaluation]"):
+                value = message.rstrip("\r\n")
+                final = any(f" {status}" in value for status in ("completed", "failed", "aborted"))
+                value = fit_progress_line(value, shutil.get_terminal_size((80, 24)).columns)
+                draw_progress_line(self.stream, value, final=final)
+                self.active = not final
+                return
+        if self.active:
+            self.stream.write("\r\x1b[2K\n")
+            self.active = False
+        self.stream.write(line)
+        self.stream.flush()
+
+    def close(self) -> None:
+        if self.active:
+            self.stream.write("\n")
+            self.stream.flush()
+            self.active = False
 
 
 @dataclass(frozen=True)
@@ -267,6 +303,25 @@ class ComposeDeployment:
             check=False,
         )
 
+    def _execute_up(self, plan: ComposeDeploymentPlan, environment: Mapping[str, str]):
+        # Compose attaches to containers through a line-oriented log stream.
+        # Container carriage returns therefore cannot update the host terminal.
+        # Stream its lines and redraw benchmark snapshots on the host instead.
+        if self.runner is not subprocess.run:
+            return self._execute(plan.up_command, environment)
+        output = _ComposeProgressOutput(sys.stderr, plan.benchmark_service)
+        try:
+            with subprocess.Popen(
+                list(plan.up_command), cwd=self.repository_root, env=dict(environment),
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
+            ) as process:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    output.write(line)
+                return subprocess.CompletedProcess(plan.up_command, process.wait())
+        finally:
+            output.close()
+
     def _service_statuses(
         self,
         plan: ComposeDeploymentPlan,
@@ -410,20 +465,32 @@ class ComposeDeployment:
                 rebuild_roles.append((
                     image,
                     role,
+                    expected_contract,
                     contract or "missing",
+                    expected_source_sha256,
                     source_sha256 or "missing",
                 ))
         if rebuild_roles:
-            details = ", ".join(
-                f"{image} ({self._IMAGE_CONTRACT_LABEL}={contract!r}, "
-                f"{self._SOURCE_MANIFEST_LABEL}={source!r})"
-                for image, _role, contract, source in rebuild_roles
-            )
-            roles = " ".join(role for _image, role, _contract, _source in rebuild_roles)
+            details = []
+            for image, _role, expected_contract, contract, expected_source, source in rebuild_roles:
+                reasons = []
+                if contract != expected_contract:
+                    reasons.append(
+                        "deployment format mismatch "
+                        f"(expected {expected_contract!r}, found {contract!r})"
+                    )
+                if source != expected_source:
+                    reasons.append(
+                        "built from a different source snapshot "
+                        f"(image {source[:12]}, current {expected_source[:12]})"
+                    )
+                details.append(f"  - {image}: {'; '.join(reasons)}")
+            roles = " ".join(role for _image, role, *_labels in rebuild_roles)
             raise ComposeDeploymentError(
-                f"local deployment images are stale or incompatible: {details}; rebuild with "
-                f"bash deploy/scripts/build-images.sh {roles} "
-                f"(expected {self._SOURCE_MANIFEST_LABEL}={expected_source_sha256!r})"
+                "local deployment images need rebuilding:\n"
+                + "\n".join(details)
+                + "\nRebuild them with:\n"
+                + f"  bash deploy/scripts/build-images.sh {roles}"
             )
 
     def _dataset_root(self, plan: ComposeDeploymentPlan) -> Path:
@@ -567,7 +634,7 @@ class ComposeDeployment:
             run_error: ComposeDeploymentError | None = None
             service_statuses: tuple[dict[str, object], ...] = ()
             try:
-                completed = self._execute(plan.up_command, environment)
+                completed = self._execute_up(plan, environment)
                 if completed.returncode != 0:
                     run_error = ComposeDeploymentError(
                         f"Docker Compose benchmark failed with exit code {completed.returncode}"
