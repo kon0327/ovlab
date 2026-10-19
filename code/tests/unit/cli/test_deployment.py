@@ -381,6 +381,7 @@ def test_preflight_rejects_image_that_does_not_contain_current_source(monkeypatc
         _PREFLIGHT_IMAGES(deployment, plan)
 
     assert "build-images.sh benchmark policy-openvla reporting" in str(failure.value)
+    assert f"expected {deployment._SOURCE_MANIFEST_LABEL}={'a' * 64!r}" in str(failure.value)
 
 
 def test_failed_benchmark_is_cleaned_and_reported(deployment_environment):

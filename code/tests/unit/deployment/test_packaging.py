@@ -364,6 +364,7 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
     assert source_manifest["_included"]("code/apps/benchctl/pyproject.toml") is True
     assert source_manifest["_included"]("configs/experiments/new.yaml") is False
     assert source_manifest["_included"]("RUN.md") is False
+    assert source_manifest["_included"]("code/tests/unit/example.py") is False
     assert source_manifest["_included"]("code/packages/ovlab-core/README.md") is True
 
 
@@ -400,11 +401,18 @@ def test_portable_config_change_does_not_invalidate_image_source_hash(tmp_path):
     guide.write_text("Updated guide\n", encoding="utf-8")
     guide_only = build_manifest(repository)["source_content_sha256"]
     source.write_text("VALUE = 2\n", encoding="utf-8")
-    code_changed = build_manifest(repository)["source_content_sha256"]
+    dirty_source = build_manifest(repository)
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "source change"], cwd=repository, check=True)
+    committed_source = build_manifest(repository)
 
     assert config_only == initial
     assert guide_only == initial
-    assert code_changed != initial
+    assert dirty_source["source_content_sha256"] != initial
+    assert committed_source["source_content_sha256"] == dirty_source["source_content_sha256"]
+    assert committed_source["repository_revision"] != dirty_source["repository_revision"]
+    assert dirty_source["dirty"] is True
+    assert committed_source["dirty"] is False
 
 
 def test_dirty_submodule_manifest_distinguishes_local_source_bytes_and_deletions(tmp_path):

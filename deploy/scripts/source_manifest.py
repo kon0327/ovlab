@@ -11,7 +11,8 @@ import subprocess
 
 
 EXCLUDED_PREFIXES = (
-    ".git/", "configs/", "runs/", "checkpoints/", "datasets/", "lab/reports/",
+    ".git/", "configs/", "runs/", "checkpoints/", "datasets/", "lab/",
+    "docs/", "notebooks/", "code/tests/",
 )
 
 
@@ -107,7 +108,18 @@ def build_manifest(root: Path) -> dict[str, object]:
         "submodules": sorted(submodule_rows, key=lambda row: row["path"]),
         "files": files,
     }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    # A commit changes provenance but not the bytes copied into an image.
+    # Keep the source hash stable when the same working tree is committed.
+    content = {
+        "schema_version": "ovlab-source-content/1.0.0",
+        "files": files,
+        "submodules": [
+            {"path": row["path"], "revision": row["revision"],
+             "dirty_files": row["dirty_files"]}
+            for row in payload["submodules"]
+        ],
+    }
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
     payload["source_content_sha256"] = hashlib.sha256(canonical).hexdigest()
     return payload
 

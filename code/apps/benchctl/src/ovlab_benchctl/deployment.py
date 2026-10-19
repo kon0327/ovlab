@@ -422,7 +422,8 @@ class ComposeDeployment:
             roles = " ".join(role for _image, role, _contract, _source in rebuild_roles)
             raise ComposeDeploymentError(
                 f"local deployment images are stale or incompatible: {details}; rebuild with "
-                f"bash deploy/scripts/build-images.sh {roles}"
+                f"bash deploy/scripts/build-images.sh {roles} "
+                f"(expected {self._SOURCE_MANIFEST_LABEL}={expected_source_sha256!r})"
             )
 
     def _dataset_root(self, plan: ComposeDeploymentPlan) -> Path:
