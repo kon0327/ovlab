@@ -60,16 +60,16 @@ LABEL org.opencontainers.image.title="OVLAB dense OpenVLA QuIC policy service" \
       org.opencontainers.image.version="$OVLAB_VERSION" \
       org.opencontainers.image.licenses="NOASSERTION" \
       org.opencontainers.image.description="Dense token OpenVLA with adapter-only QuIC; benchmark-independent" \
-      io.github.kon0327.ovlab.role="policy-openvla-quic" \
-      io.github.kon0327.ovlab.build-target="production" \
-      io.github.kon0327.ovlab.deployment.contract="resolved-checkpoint-quantization-config-bundle-v2" \
-      io.github.kon0327.ovlab.python.version="3.10.13" \
-      io.github.kon0327.ovlab.cuda.version="12.1" \
-      io.github.kon0327.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1;quic-petf-vla=0.1.0;flash-attn=2.5.5;tensorflow=2.15.0;tensorflow-metadata=1.17.2;protobuf=4.21.12" \
-      io.github.kon0327.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
-      io.github.kon0327.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
-      io.github.kon0327.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
-      io.github.kon0327.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
+      io.github.ovlab.role="policy-openvla-quic" \
+      io.github.ovlab.build-target="production" \
+      io.github.ovlab.deployment.contract="resolved-checkpoint-quantization-config-bundle-v2" \
+      io.github.ovlab.python.version="3.10.13" \
+      io.github.ovlab.cuda.version="12.1" \
+      io.github.ovlab.runtime.components="torch=2.2.0;transformers=4.40.1;quic-petf-vla=0.1.0;flash-attn=2.5.5;tensorflow=2.15.0;tensorflow-metadata=1.17.2;protobuf=4.21.12" \
+      io.github.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
+      io.github.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
+      io.github.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
+      io.github.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
 
 ENV OVLAB_IMAGE_ROLE=policy-openvla-quic \
     OVLAB_IMAGE_REFERENCE=$OVLAB_IMAGE_REFERENCE OVLAB_VERSION=$OVLAB_VERSION \

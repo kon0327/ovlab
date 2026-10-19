@@ -76,6 +76,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug", action="store_true", help="include a traceback for unexpected failures")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    doctor = commands.add_parser("doctor", help="diagnose host deployment readiness without changing files")
+    doctor.add_argument("--experiment", help="also check one deployable experiment and its images")
+    doctor.add_argument("--env-file", default="deploy/compose/.env", help="Compose environment file")
+    _output_options(doctor)
+
     config = commands.add_parser("config", help="validate or resolve configuration")
     config_commands = config.add_subparsers(dest="config_command", required=True)
     validate = config_commands.add_parser("validate", help="validate a configuration")
@@ -679,6 +684,16 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
 
 
 def _compact(command: str, result) -> str:
+    if command == "doctor":
+        counts = result["counts"]
+        lines = [
+            "OVLAB doctor: " + ", ".join(f"{counts[key]} {key}" for key in ("ok", "warning", "error", "skipped"))
+        ]
+        for check in result["checks"]:
+            lines.append(f"[{check['status'].upper()}] {check['name']}: {check['message']}")
+            if check["remedy"]:
+                lines.append(f"  Fix: {check['remedy']}")
+        return "\n".join(lines)
     if command == "policy list":
         return _columns(
             result, (("id",), ("family",), ("config_type",), ("quic_profile",)),
@@ -834,6 +849,9 @@ def _confirm_data_operation(args, preview: dict[str, object]) -> bool:
 
 
 def _dispatch(args):
+    if args.command == "doctor":
+        from .doctor import Doctor
+        return Doctor(_repository_root()).run(experiment=args.experiment, env_file=args.env_file), args.json, None
     if args.command == "config":
         app = _application()
         if args.config_command == "validate":
@@ -1055,13 +1073,22 @@ def main(argv=None) -> int:
     try:
         with _configured_artifact_umask():
             result, json_mode, render = _dispatch(args)
+        diagnosis_failed = command == "doctor" and result["status"] == "error"
         if json_mode:
-            _json_output(command, "success", result, ())
+            diagnosis_errors = (
+                tuple({
+                    "code": "diagnostic_failure", "type": "DiagnosticCheck",
+                    "message": check["message"],
+                    "context": {"check": check["name"], "remedy": check["remedy"]},
+                } for check in result["checks"] if check["status"] == "error")
+                if diagnosis_failed else ()
+            )
+            _json_output(command, "error" if diagnosis_failed else "success", result, diagnosis_errors)
         elif render == "raw" or bool(getattr(args, "detail", False)):
             _human(result)
         else:
             _human(_compact(command, result))
-        return ExitCode.SUCCESS
+        return ExitCode.RUNTIME if diagnosis_failed else ExitCode.SUCCESS
     except KeyboardInterrupt as exc:
         code, category = _classify(exc)
         error = {"code": category, "type": type(exc).__name__, "message": "operation interrupted", "context": {}}

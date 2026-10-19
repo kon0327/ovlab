@@ -45,10 +45,10 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
         assert "ENTRYPOINT [\"/bin/sh\"" not in text
         assert "--mount=type=secret,id=ovlab_source_manifest" in text
         assert "OVLAB_SOURCE_MANIFEST_B64" not in text
-        assert "io.github.kon0327.ovlab.dependency-lock.sha256" in text
+        assert "io.github.ovlab.dependency-lock.sha256" in text
         assert 'org.opencontainers.image.authors="Jiří Konečný, VSB - Technical University of Ostrava"' in text
         assert 'org.opencontainers.image.licenses="NOASSERTION"' in text
-        assert 'io.github.kon0327.ovlab.build-target="production"' in text
+        assert 'io.github.ovlab.build-target="production"' in text
         expected_contract = (
             "resolved-checkpoint-quantization-config-bundle-v2"
             if name in {"Dockerfile.openvla", "Dockerfile.openvla-oft"}
@@ -56,7 +56,7 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
             if name == "Dockerfile.reporting"
             else "resolved-checkpoint-config-bundle-v2"
         )
-        assert f'io.github.kon0327.ovlab.deployment.contract="{expected_contract}"' in text
+        assert f'io.github.ovlab.deployment.contract="{expected_contract}"' in text
 
 
 def test_role_closures_do_not_cross_heavy_runtime_boundaries():
@@ -229,8 +229,8 @@ def test_gate_i_images_keep_dataset_and_training_dependency_closures_separate():
     assert "COPY external/libero " not in training
     assert "COPY external/openvla-oft " not in training
     assert "COPY external/openvla-quic " not in training
-    assert "io.github.kon0327.ovlab.dependency-lock.sha256" in dataset
-    assert "io.github.kon0327.ovlab.dependency-lock.sha256" in training
+    assert "io.github.ovlab.dependency-lock.sha256" in dataset
+    assert "io.github.ovlab.dependency-lock.sha256" in training
 
 
 def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
@@ -282,8 +282,8 @@ def test_dataset_pyyaml_lock_uses_the_verified_platform_wheel_hash():
 
 def test_training_image_python_label_matches_the_pinned_pytorch_base_runtime():
     training = _dockerfile("Dockerfile.training-openvla")
-    assert 'io.github.kon0327.ovlab.python.version="3.10.13"' in training
-    assert 'io.github.kon0327.ovlab.python.version="3.10.20"' not in training
+    assert 'io.github.ovlab.python.version="3.10.13"' in training
+    assert 'io.github.ovlab.python.version="3.10.20"' not in training
 
 
 def test_builds_disable_unlocked_pep517_isolation():
@@ -487,7 +487,7 @@ def test_test_provider_is_excluded_from_every_production_dockerfile():
         assert "deploy/smoke" not in _dockerfile(name)
     smoke = _dockerfile("Dockerfile.smoke")
     assert "deploy/smoke/sitecustomize.py" in smoke
-    assert 'io.github.kon0327.ovlab.production="false"' in smoke
+    assert 'io.github.ovlab.production="false"' in smoke
 
 
 def test_image_metadata_has_no_stale_institutional_namespace():

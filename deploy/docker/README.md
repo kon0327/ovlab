@@ -161,8 +161,8 @@ effect:
 bash deploy/scripts/build-images.sh benchmark reporting policy-openvla-oft
 ```
 
-OVLAB-specific OCI labels use the user-owned
-`io.github.kon0327.ovlab.*` namespace. Image authorship is recorded separately
+OVLAB-specific OCI labels use the project
+`io.github.ovlab.*` namespace. Image authorship is recorded separately
 with the standard `org.opencontainers.image.authors` label as Jiří Konečný,
 VSB – Technical University of Ostrava. These labels describe image provenance
 and compatibility; they do not affect scientific configuration hashes.

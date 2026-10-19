@@ -44,6 +44,24 @@ resolved configuration and `--format yaml|json` selects its serialization.
 
 ## Recommended Docker workflow
 
+Check the host before deploying:
+
+```bash
+./ovlab doctor
+./ovlab doctor --experiment configs/experiments/libero10-lora-merged-rpc-smoke.yaml
+./ovlab doctor --experiment configs/experiments/libero10-lora-merged-rpc-smoke.yaml --json
+```
+
+`doctor` reads the checkout and Compose environment, probes Docker Compose and
+the Docker daemon, and reports a fix for each failed check. With `--experiment`
+it also validates the configuration bundle, checks host artifact paths, and
+inspects the selected images for the current deployment contract label. It
+does not create directories, start containers, download checkpoints, or load a
+model. Warnings return exit code 0; failed checks return exit code 6. JSON
+output retains every check in `result.checks`, including on failure. Use
+`--env-file PATH` to inspect a different Compose environment file inside the
+checkout.
+
 Copy the deployment environment template once and set the host paths:
 
 ```bash
@@ -168,6 +186,7 @@ export OVLAB_EXECUTION_PROFILE=configs/profiles/libero-bench-egl.yaml
 ovlab
 ├── --help
 ├── --version
+├── doctor [--experiment EXPERIMENT] [--env-file PATH] [--detail | --json]
 ├── config
 │   ├── validate CONFIG [--mode descriptor|runtime] [--detail | --json]
 │   └── resolve CONFIG [--mode descriptor|runtime] [--format yaml|json]

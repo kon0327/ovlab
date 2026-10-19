@@ -48,6 +48,8 @@ Use the unified CLI directly from a checkout without installing packages:
 
 ```bash
 ./ovlab --help
+./ovlab doctor
+./ovlab doctor --experiment configs/experiments/libero10-lora-merged-rpc-smoke.yaml
 ./ovlab deploy run EXPERIMENT --profile openvla --renderer egl
 ./ovlab config validate CONFIG --mode descriptor
 ./ovlab policy list

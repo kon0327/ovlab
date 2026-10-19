@@ -19,7 +19,7 @@ def test_training_image_accepts_custom_role_with_training_contract(tmp_path):
     def inspect(command, **kwargs):
         del command, kwargs
         labels = {IMAGE_CONTRACT_LABEL: "offline-dataset-ro-base-ro-training-run-rw-v1",
-                  "io.github.kon0327.ovlab.role": "my-vla-trainer"}
+                  "io.github.ovlab.role": "my-vla-trainer"}
         return SimpleNamespace(returncode=0, stdout=json.dumps(labels) + "|sha256:custom")
 
     deployment = TrainingDeployment(tmp_path, environment={"OVLAB_TRAINING_IMAGE": "custom:local"}, runner=inspect)

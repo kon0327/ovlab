@@ -5,8 +5,8 @@ ARG OVLAB_VERSION=0.2.0
 
 LABEL org.opencontainers.image.version="$OVLAB_VERSION" \
       org.opencontainers.image.authors="Jiří Konečný, VSB - Technical University of Ostrava" \
-      io.github.kon0327.ovlab.role="test-only-transport-smoke" \
-      io.github.kon0327.ovlab.production="false"
+      io.github.ovlab.role="test-only-transport-smoke" \
+      io.github.ovlab.production="false"
 ENV OVLAB_ROOT=/opt/ovlab \
     OVLAB_VERSION=$OVLAB_VERSION \
     OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added the read-only `ovlab doctor` CLI command for host deployment checks.
+  With `--experiment`, it validates the configuration closure, host paths and
+  selected image contract labels, with actionable human and JSON results.
 - Added publication-oriented action-metric exports for canonical action
   variance and first/second-order smoothness. Isolated exports now include
   episode tables/figures and run/task summaries; grouped exports include
@@ -54,7 +57,7 @@
   preflight before removing any selected target and reports ownership problems
   as a typed safety error.
 - Corrected OCI image provenance metadata: OVLAB-specific labels now use the
-  user-owned `io.github.kon0327.ovlab` namespace instead of the erroneous CVUT
+  project `io.github.ovlab` namespace instead of the erroneous CVUT
   placeholder, and standard OCI author metadata identifies Jiří Konečný of
   VSB – Technical University of Ostrava.
 
