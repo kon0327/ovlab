@@ -4,7 +4,6 @@ Build the dedicated serving and training roles from the repository root:
 
 ```bash
 git submodule update --init external/openvla-quic external/quic-peft-vla
-python deploy/scripts/prepare_openvla_quic.py --apply
 bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic
 ```
 
@@ -54,11 +53,11 @@ uses the existing verified, read-only checkpoint resolver. Simulator and
 benchmark processes receive no adapter mount.
 
 Override images through `OVLAB_QUIC_IMAGE` and `OVLAB_TRAINING_QUIC_IMAGE`.
-The existing source, dependency-lock, Dockerfile, checkpoint, configuration,
-and deployment provenance contracts apply. Source manifests additionally
-hash local changes inside external submodules, so distinct dirty adapter
-implementations cannot share an identity merely because they have the same
-submodule commit.
+Builds use the current working tree of both external projects. Source and
+dependency hashes are recorded for provenance, but deployment checks only the
+versioned runtime contract. A changed local source tree does not invalidate
+an otherwise compatible image; rebuild it when you want that source in the
+container.
 
 # Console progress
 
@@ -66,8 +65,9 @@ submodule commit.
 optimizer steps, validation batches, and evaluation episodes. Interactive
 `train run` attaches a Docker terminal so the worker redraws each bar in
 place; its evidence log records plain start, periodic (at most every 30
-seconds), and final snapshots. Redirected and JSON-mode runs print plain
-progress snapshots to stderr. Failure or interruption preserves the partial
+seconds), and final snapshots. Redirected runs print plain progress snapshots
+to stderr. Interactive JSON-mode runs redraw the bar on stderr while JSON
+remains on stdout. Failure or interruption preserves the partial
 count. `OVLAB_PROGRESS=on` records every update in captured logs;
 `OVLAB_PROGRESS=off` silences tracking. JSON command results remain on stdout.
 Console progress supplements persisted scientific metrics without changing

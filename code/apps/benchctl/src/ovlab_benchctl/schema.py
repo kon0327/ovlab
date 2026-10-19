@@ -324,12 +324,23 @@ def validate_registry(doc, path):
         mapping(
             entry,
             entry_path,
-            required=("repo_id", "revision", "expected_sha256"),
-            optional=("files", "artifact", "method"),
+            required=("repo_id",),
+            optional=("revision", "expected_sha256", "files", "artifact", "method"),
         )
         non_empty_string(entry["repo_id"], f"{entry_path}.repo_id")
         for key in ("revision", "expected_sha256"):
-            if entry[key] is not None: exact_type(entry[key], str, f"{entry_path}.{key}")
+            if key in entry: exact_type(entry[key], str, f"{entry_path}.{key}")
+        revision = entry.get("revision", "local/main")
+        if revision in {"local/main", "remote/main"}:
+            if any(key in entry for key in ("expected_sha256", "files", "artifact", "method")):
+                raise ConfigSchemaError(f"{entry_path} moving revision cannot declare pinned hashes or artifact metadata")
+            continue
+        if not isinstance(revision, str) or len(revision) != 40 or any(
+            character not in "0123456789abcdef" for character in revision
+        ):
+            raise ConfigSchemaError(f"{entry_path}.revision must be local/main, remote/main, or a full commit digest")
+        if "expected_sha256" not in entry:
+            raise ConfigSchemaError(f"{entry_path}.expected_sha256 is required for a pinned revision")
         if ("artifact" in entry) != ("method" in entry):
             raise ConfigSchemaError(f"{entry_path}.artifact and method must be declared together")
         if "files" in entry:

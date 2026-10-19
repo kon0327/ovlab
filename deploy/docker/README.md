@@ -148,13 +148,14 @@ Preview the resolved orchestration without starting containers:
 ```
 
 The real command performs its own `docker compose config --quiet` preflight. It
-also verifies the versioned deployment contract and exact source-manifest label
-on all selected runtime and reporting images. The CLI validates the selected experiment and its
+checks the versioned deployment contract on selected images, without requiring
+their source hash or Git revision to match the current checkout. The CLI validates the selected experiment and its
 transitive `extends`, component, registry and renderer-profile closure, hashes
 that closure and mounts it into both services at `/opt/ovlab/configs:ro`. The
 temporary host bundle is removed after Compose teardown. New or changed YAML
-therefore needs no image rebuild; packaged Python source, dependency locks,
-Dockerfiles and bundled external source still do. Rebuild those changes with:
+therefore needs no image rebuild. Rebuild images when you want changes to
+packaged Python source, dependencies, Dockerfiles or external source to take
+effect:
 
 ```bash
 bash deploy/scripts/build-images.sh benchmark reporting policy-openvla-oft

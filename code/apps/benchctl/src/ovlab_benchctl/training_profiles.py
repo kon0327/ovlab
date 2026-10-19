@@ -82,15 +82,19 @@ class TrainingProfile:
             raise TrainingProfileError("trainer must select openvla-reference or openvla-quic")
 
         model = _mapping(document["model"], "model")
-        _keys(model, {"base_checkpoint", "revision", "processor", "adaptation_state"}, {"base_checkpoint", "revision", "processor"}, "model")
+        _keys(model, {"base_checkpoint", "revision", "processor", "adaptation_state"}, {"base_checkpoint", "processor"}, "model")
         if model.get("adaptation_state", "none") not in {"none", "merged"}:
             raise TrainingProfileError("model.adaptation_state must be none or merged; active adapters are unsupported")
         if not isinstance(model["base_checkpoint"], str) or not model["base_checkpoint"]:
             raise TrainingProfileError("model.base_checkpoint must be a logical resource ID")
         if Path(model["base_checkpoint"]).is_absolute():
             raise TrainingProfileError("model.base_checkpoint must not be an absolute path")
-        if not isinstance(model["revision"], str) or len(model["revision"]) != 40:
-            raise TrainingProfileError("model.revision must be an immutable 40-character revision")
+        revision = model.get("revision", "local/main")
+        if not isinstance(revision, str) or (
+            revision not in {"local/main", "remote/main"}
+            and (len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision))
+        ):
+            raise TrainingProfileError("model.revision must be local/main, remote/main, or a full 40-character commit digest")
         if model["processor"] != "inherited":
             raise TrainingProfileError("Gate I OpenVLA profiles require processor: inherited")
 
@@ -208,7 +212,8 @@ class TrainingProfile:
 
 
 def _checkpoint_candidates(model_data_root: Path, repo_id: str, resource_id: str, revision: str) -> tuple[tuple[str, Path], ...]:
-    global_root = Path(os.environ.get("OVLAB_GLOBAL_HF_CACHE", "~/.cache/huggingface")).expanduser().resolve()
+    from .checkpointing import default_global_cache
+    global_root = Path(os.environ.get("OVLAB_GLOBAL_HF_CACHE", default_global_cache(os.environ))).expanduser().resolve()
     hub = global_root / "hub" if (global_root / "hub").is_dir() else global_root
     global_snapshot = hub / ("models--" + repo_id.replace("/", "--")) / "snapshots" / revision
     managed = model_data_root / "checkpoints" / "huggingface" / resource_id / revision
@@ -236,11 +241,37 @@ class TrainingPlanner:
         self.model_data_root = model_data_root.expanduser().resolve()
         self.datasets = DatasetStore(self.model_data_root)
 
-    def _model(self, profile: TrainingProfile) -> dict[str, object]:
+    def _model(self, profile: TrainingProfile, *, allow_checkpoint_download: bool = False) -> dict[str, object]:
         model = profile.document["model"]
         assert isinstance(model, dict)
         resource_id = str(model["base_checkpoint"])
         spec = checkpoint_spec_by_id(self.repository_root, resource_id)
+        selector = model.get("revision", "local/main")
+        if selector in {"local/main", "remote/main"}:
+            from .checkpointing import CheckpointResolver, default_global_cache
+            global_cache = Path(os.environ.get("OVLAB_GLOBAL_HF_CACHE", default_global_cache(os.environ))).expanduser().resolve()
+            resolved = CheckpointResolver(
+                global_cache=global_cache,
+                managed_cache=self.model_data_root / "checkpoints" / "huggingface",
+            ).resolve_latest(resource_id, spec.repo_id, mode=selector, allow_download=allow_checkpoint_download)
+            return {
+                "resource_id": resource_id,
+                "repository": spec.repo_id,
+                "revision": resolved.spec.revision,
+                "aggregate_sha256": resolved.spec.expected_sha256,
+                "verified_file_count": resolved.verified_file_count,
+                "source_kind": resolved.source_kind,
+                "host_path": str(resolved.host_path),
+                "revision_selection": selector,
+            }
+        from .checkpointing import LatestCheckpointSelection, checkpoint_spec_from_snapshot
+        if isinstance(spec, LatestCheckpointSelection):
+            for source_kind, candidate in _checkpoint_candidates(self.model_data_root, spec.repo_id, resource_id, selector):
+                if candidate.is_dir():
+                    spec = checkpoint_spec_from_snapshot(resource_id, spec.repo_id, selector, candidate)
+                    break
+            else:
+                raise TrainingPlanError(f"base checkpoint {resource_id}@{selector} is unavailable locally")
         if model["revision"] != spec.revision:
             raise TrainingPlanError(
                 f"profile model revision {model['revision']} does not match registry revision {spec.revision}"
@@ -256,6 +287,7 @@ class TrainingPlanner:
                     "verified_file_count": count,
                     "source_kind": source_kind,
                     "host_path": str(candidate.resolve()),
+                    "revision_selection": "pinned",
                 }
         raise TrainingPlanError(
             f"base checkpoint {resource_id!r} is unavailable locally; training planning never downloads checkpoints"
@@ -296,12 +328,16 @@ class TrainingPlanner:
         profile: TrainingProfile,
         *,
         allow_dataset_download: bool = False,
+        allow_checkpoint_download: bool = False,
         available_gpu_count: int | None = None,
         available_vram_gib: float | None = None,
         image_identity: str = "unavailable",
     ) -> dict[str, object]:
         dataset = self._dataset(profile, allow_dataset_download=allow_dataset_download)
-        model = self._model(profile)
+        model = (
+            self._model(profile, allow_checkpoint_download=True)
+            if allow_checkpoint_download else self._model(profile)
+        )
         training = dict(profile.document["training"])
         resources = dict(profile.document["resources"])
         estimated_vram = self._estimated_vram(profile)
@@ -340,7 +376,10 @@ class TrainingPlanner:
                 "scheduler": "constant learning rate (no scheduler object)",
                 "image_augmentation": False,
             },
-            "base_checkpoint": {key: model[key] for key in ("resource_id", "repository", "revision", "aggregate_sha256")},
+            "base_checkpoint": {
+                **{key: model[key] for key in ("resource_id", "repository", "revision", "aggregate_sha256")},
+                **({"revision_selection": model["revision_selection"]} if model.get("revision_selection") in {"local/main", "remote/main"} else {}),
+            },
             "dataset": {
                 "dataset_id": dataset["dataset_id"],
                 "raw_content_digest": dataset["raw_content_digest"],

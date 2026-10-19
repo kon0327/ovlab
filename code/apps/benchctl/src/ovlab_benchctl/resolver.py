@@ -178,10 +178,39 @@ class ConfigResolver:
                 resolved_path, "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH"
             )
         resolved_checkpoints = {}
+        policy_settings = components["policy"]["settings"]
+        selected_checkpoint_ids = {
+            policy_settings[key] for key in ("checkpoint_id", "processor_id") if key in policy_settings
+        }
         for resource_id, entry in registry["checkpoints"].items():
+            selector = entry.get("revision", "local/main")
+            revision = entry.get("revision")
+            aggregate = entry.get("expected_sha256")
+            if resource_id in selected_checkpoint_ids and selector in {"local/main", "remote/main"}:
+                if resource_id == resolved_id:
+                    revision = values.get("OVLAB_CHECKPOINT_REVISION")
+                    aggregate = values.get("OVLAB_CHECKPOINT_SHA256")
+                    if not isinstance(revision, str) or not isinstance(aggregate, str):
+                        raise ConfigSchemaError("resolved checkpoint requires OVLAB_CHECKPOINT_REVISION and OVLAB_CHECKPOINT_SHA256")
+                else:
+                    from .checkpointing import (
+                        checkpoint_spec_from_snapshot, default_global_cache, latest_checkpoint_revision,
+                    )
+                    cache = Path(values.get("OVLAB_GLOBAL_HF_CACHE") or default_global_cache(values)).expanduser().resolve()
+                    revision = latest_checkpoint_revision(entry["repo_id"], cache, offline=selector == "local/main")
+                    hub = cache / "hub" if (cache / "hub").is_dir() else cache
+                    snapshot = hub / ("models--" + entry["repo_id"].replace("/", "--")) / "snapshots" / revision
+                    local = local_checkpoint_paths.get(resource_id)
+                    if not snapshot.is_dir() and local is not None and local.name == revision:
+                        snapshot = local
+                    if not snapshot.is_dir():
+                        raise ConfigSchemaError(f"checkpoint {resource_id}@{revision} selected by {selector} is not cached; use deploy run to resolve it")
+                    identity = checkpoint_spec_from_snapshot(resource_id, entry["repo_id"], revision, snapshot)
+                    aggregate = identity.expected_sha256
+                    local_checkpoint_paths[resource_id] = snapshot.resolve()
             resolved = {
                 "source": entry["repo_id"],
-                "revision": entry["revision"], "expected_sha256": entry["expected_sha256"],
+                "revision": revision, "expected_sha256": aggregate,
             }
             if "artifact" in entry:
                 resolved["artifact"] = deepcopy(entry["artifact"])
@@ -261,6 +290,18 @@ class ConfigResolver:
             "experiment": experiment_doc["experiment"], "components": scientific_components,
             "resource_registry": registry,
         }
+        moving_selected = sorted(
+            resource_id for resource_id in selected_checkpoint_ids
+            if registry["checkpoints"][resource_id].get("revision", "local/main") in {"local/main", "remote/main"}
+        )
+        if moving_selected:
+            scientific["resolved_checkpoint_identity"] = {
+                resource_id: {
+                    key: resolved_checkpoints[resource_id][key]
+                    for key in ("source", "revision", "expected_sha256")
+                }
+                for resource_id in moving_selected
+            }
         execution = {"scientific_config": scientific, "resolved_resources": resources}
         if "deployment" in experiment_doc:
             configured_deployment = deepcopy(experiment_doc["deployment"])

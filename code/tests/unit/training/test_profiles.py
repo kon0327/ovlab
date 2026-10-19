@@ -60,6 +60,18 @@ def test_profile_rejects_absolute_scientific_paths():
         TrainingProfile.from_document(value)
 
 
+def test_model_revision_is_optional_but_explicit_revision_must_be_full_commit():
+    value = _lora()
+    value["model"].pop("revision")
+    assert "revision" not in TrainingProfile.from_document(value).document["model"]
+    for selector in ("local/main", "remote/main"):
+        value["model"]["revision"] = selector
+        assert TrainingProfile.from_document(value).document["model"]["revision"] == selector
+    value["model"]["revision"] = "main"
+    with pytest.raises(TrainingProfileError, match="full 40-character commit"):
+        TrainingProfile.from_document(value)
+
+
 def test_resource_preflight_rejects_reference_lora_on_24_gib(monkeypatch, tmp_path):
     profile = TrainingProfile.from_document(_lora())
     planner = TrainingPlanner(ROOT, tmp_path)

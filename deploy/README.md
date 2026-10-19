@@ -132,19 +132,40 @@ outside the source checkout:
 ## Checkpoint resolution
 
 Experiments contain only a logical `settings.checkpoint_id`. The portable
-registry supplies its Hugging Face repository, pinned revision, aggregate hash,
-and exact file identities. Before Compose starts, `ovlab deploy run` resolves
-that identity in this order:
+registry supplies its Hugging Face repository. A pinned 40-character revision
+also supplies an aggregate hash and exact file identities. If `revision` is
+omitted, it defaults to `local/main`: the resolver reads the locally cached
+Hugging Face `refs/main` commit and requires its snapshot to be present. Set
+`revision: remote/main` to query the current remote `main` commit and allow a
+download during online deployment. Moving revisions must not declare pinned
+hashes or artifact metadata. In every mode the actual commit and file hashes
+are recorded after resolution.
+
+```yaml
+checkpoints:
+  openvla-local-main:
+    repo_id: openvla/openvla-7b  # revision omitted: local/main
+  openvla-remote-main:
+    repo_id: openvla/openvla-7b
+    revision: remote/main
+```
+
+Point the policy's `checkpoint_id` and `processor_id` at the chosen resource.
+The existing pinned registry entries continue to use their declared hashes.
+
+Before Compose starts, `ovlab deploy run` searches for the snapshot in this order:
 
 1. `${OVLAB_GLOBAL_HF_CACHE}`, defaulting to `~/.cache/huggingface`;
 2. `resources.checkpoints.<id>.local_path` in an explicitly selected gitignored
    local profile;
 3. `${OVLAB_MANAGED_CHECKPOINTS_ROOT}`, defaulting to
    `<OVLAB_RUNS_ROOT>/../checkpoints/huggingface`;
-4. a host-side download of the pinned revision into managed storage.
+4. for online deployments, a host-side download of a pinned or `remote/main`
+   revision into managed storage.
 
-Every selected artifact is checked against registry sizes and SHA-256 values
-before Docker starts. A global Hugging Face snapshot is materialized into the
+Pinned artifacts are checked against registry sizes and SHA-256 values before
+Docker starts. Moving revisions are hashed and verified against the observed
+snapshot bytes before Docker starts. A global Hugging Face snapshot is materialized into the
 managed tree with hard links, so its weight bytes are not copied and its cache
 symlinks remain valid after mounting only the selected snapshot. Cross-filesystem
 materialization fails clearly instead of silently copying large weights.
@@ -190,7 +211,7 @@ provenance and never enter the scientific configuration hash.
 
 Finalized training artifacts use content-derived `checkpoint-<32 hex>` IDs.
 Their deployment handoff resolves the verified read-only adapter plus its
-registry-pinned read-only base checkpoint. Mutable aliases, failed/interrupted
+resolved and verified read-only base checkpoint. Mutable aliases, failed/interrupted
 training output and staging checkpoints are not deployable. See
 [`../TRAINING.md`](../TRAINING.md) for commands and schema details.
 
@@ -208,11 +229,11 @@ The CLI passes the selected experiment to both runtime services, performs checkp
 resolution and Compose preflight, propagates the benchmark status and reaps the
 project-scoped containers and RPC volume. It then hands the single completed run
 ID to the isolated reporting service. It checks a versioned deployment
-contract on all selected images before hashing a large checkpoint, so stale
-images fail with an exact rebuild command instead of running old mount semantics.
+contract on all selected images before hashing a large checkpoint, so images
+with incompatible mount semantics fail with an exact rebuild command.
 New or changed YAML below `configs/` is resolved into a read-only per-run bundle
-and does not require a rebuild. After changing packaged Python source, dependency
-locks, Dockerfiles, or bundled external source, rebuild the selected topology:
+and does not require a rebuild. To use changed packaged Python source,
+dependencies, Dockerfiles, or external source, rebuild the selected topology:
 
 ```bash
 bash deploy/scripts/build-images.sh benchmark reporting policy-openvla-oft

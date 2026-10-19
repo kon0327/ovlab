@@ -12,7 +12,7 @@ import uuid
 
 from .application import OvlabApplication
 from .datasets import DatasetRequest, DatasetStore, LiberoDatasetBridge
-from .image_metadata import IMAGE_ROLE_LABEL
+from .image_metadata import IMAGE_CONTRACT_LABEL
 from .strict_yaml import load
 from .training_errors import DatasetUnavailableError, TrainingRuntimeError
 from .training_profiles import TrainingProfile, TrainingPlanner
@@ -57,7 +57,7 @@ class TrainingDeployment:
         values = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
         return len(values), max((float(value) / 1024.0 for value in values), default=0.0)
 
-    def _docker_image(self, variable: str, default: str, expected_role: str) -> tuple[str, str]:
+    def _docker_image(self, variable: str, default: str, expected_contract: str) -> tuple[str, str]:
         image = self.environment.get(variable, default)
         completed = self.runner(
             ["docker", "image", "inspect", image, "--format", "{{json .Config.Labels}}|{{.Id}}"],
@@ -67,10 +67,10 @@ class TrainingDeployment:
             raise TrainingRuntimeError(f"required image is unavailable: {image}")
         labels_payload, digest = completed.stdout.strip().split("|", 1)
         labels = json.loads(labels_payload)
-        if labels.get(IMAGE_ROLE_LABEL) != expected_role:
+        if labels.get(IMAGE_CONTRACT_LABEL) != expected_contract:
             raise TrainingRuntimeError(
-                f"image {image} has role {labels.get(IMAGE_ROLE_LABEL)!r}, "
-                f"expected {expected_role!r}"
+                f"image {image} has deployment contract {labels.get(IMAGE_CONTRACT_LABEL)!r}, "
+                f"expected {expected_contract!r}"
             )
         return image, digest
 
@@ -82,16 +82,37 @@ class TrainingDeployment:
 
     def _prepare_base_checkpoint(self, plan: dict[str, object]) -> dict[str, object]:
         """Materialize HF blob links for an isolated, offline snapshot mount."""
-        from .checkpointing import CheckpointResolver, checkpoint_spec_by_id, default_global_cache
+        from .checkpointing import (
+            CheckpointResolver, checkpoint_spec_by_id, checkpoint_spec_from_snapshot,
+            default_global_cache,
+        )
 
         execution = dict(plan["execution"])
-        spec = checkpoint_spec_by_id(self.repository_root, plan["scientific"]["base_checkpoint"]["resource_id"])
+        base_identity = plan["scientific"]["base_checkpoint"]
+        base_path = Path(execution["model_host_path"])
+        if base_identity.get("revision_selection") in {"local/main", "remote/main", "latest"}:
+            spec = checkpoint_spec_from_snapshot(
+                base_identity["resource_id"], base_identity["repository"],
+                base_identity["revision"], base_path,
+            )
+            if spec.expected_sha256 != base_identity["aggregate_sha256"]:
+                raise TrainingRuntimeError("selected latest checkpoint changed after planning")
+        else:
+            spec = checkpoint_spec_by_id(self.repository_root, base_identity["resource_id"])
+            from .checkpointing import LatestCheckpointSelection
+            if isinstance(spec, LatestCheckpointSelection):
+                spec = checkpoint_spec_from_snapshot(
+                    base_identity["resource_id"], base_identity["repository"],
+                    base_identity["revision"], base_path,
+                )
+                if spec.expected_sha256 != base_identity["aggregate_sha256"]:
+                    raise TrainingRuntimeError("selected checkpoint changed after planning")
         global_cache = Path(self.environment.get("OVLAB_GLOBAL_HF_CACHE", default_global_cache(self.environment)))
         resolved = CheckpointResolver(
             global_cache=global_cache,
             managed_cache=self.model_data_root / "checkpoints/huggingface",
             progress=lambda message: print(f"ovlab: checkpoint: {message}", file=sys.stderr, flush=True),
-        ).resolve(spec, local_path=Path(execution["model_host_path"]), offline=True)
+        ).resolve(spec, local_path=base_path, offline=True)
         execution.update(model_host_path=str(resolved.host_path), model_source_kind=resolved.source_kind)
         return {**plan, "execution": execution, "execution_plan_id": identity("training-execution", execution, 32)}
 
@@ -135,13 +156,13 @@ class TrainingDeployment:
         training_image, training_digest = self._docker_image(
             "OVLAB_TRAINING_QUIC_IMAGE" if is_quic else "OVLAB_TRAINING_IMAGE",
             "ovlab-training-openvla-quic:local" if is_quic else "ovlab-training-openvla:local",
-            "training-openvla-quic" if is_quic else "training-openvla",
+            "offline-dataset-ro-base-ro-training-run-rw-v1",
         )
         dataset_image, dataset_digest = self._docker_image(
-            "OVLAB_DATASET_IMAGE", "ovlab-dataset:local", "dataset"
+            "OVLAB_DATASET_IMAGE", "ovlab-dataset:local", "dataset-write-only-or-finalizer-v1"
         )
         reporting_image, reporting_digest = self._docker_image(
-            "OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"
+            "OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "canonical-readonly-reporting-v1"
         )
         datasets = DatasetStore(self.model_data_root)
         dataset_profile = profile.document["dataset"]
@@ -162,6 +183,7 @@ class TrainingDeployment:
             available_gpu_count=gpu_count,
             available_vram_gib=vram_gib,
             image_identity=training_digest,
+            allow_checkpoint_download=True,
         )
         plan = self._prepare_base_checkpoint(plan)
         store = TrainingRunStore(self.model_data_root, runs_root=self.runs_root)

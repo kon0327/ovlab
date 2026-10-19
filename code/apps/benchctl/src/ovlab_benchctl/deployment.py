@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import re
-import runpy
 import shutil
 import subprocess
 import sys
@@ -18,7 +17,7 @@ from ovlab_core.progress import draw_progress_line, fit_progress_line
 from .schema import validate
 from .strict_yaml import load
 from .config_bundle import ConfigBundleBuilder
-from .image_metadata import IMAGE_CONTRACT_LABEL, SOURCE_MANIFEST_LABEL
+from .image_metadata import IMAGE_CONTRACT_LABEL
 
 
 class ComposeDeploymentError(RuntimeError):
@@ -129,7 +128,6 @@ class ComposeDeployment:
         "glfw": "profiles/libero-playground-glfw.yaml",
     }
     _IMAGE_CONTRACT_LABEL = IMAGE_CONTRACT_LABEL
-    _SOURCE_MANIFEST_LABEL = SOURCE_MANIFEST_LABEL
     _IMAGE_CONTRACTS = {
         "benchmark": "resolved-checkpoint-config-bundle-v2",
         "reporting": "canonical-readonly-reporting-v1",
@@ -424,26 +422,15 @@ class ComposeDeployment:
             if not output.is_dir():
                 raise ComposeDeploymentError(f"OVLAB_EXPORTS_ROOT/{name} is not a directory: {output}")
 
-    def _current_source_sha256(self) -> str:
-        source_manifest = runpy.run_path(
-            str(self.repository_root / "deploy/scripts/source_manifest.py")
-        )
-        document = source_manifest["build_manifest"](self.repository_root)
-        return str(document["source_content_sha256"])
-
     def _preflight_images(self, plan: ComposeDeploymentPlan) -> None:
         rebuild_roles = []
-        expected_source_sha256 = self._current_source_sha256()
         for variable, default, role in self._PROFILE_IMAGES[plan.profile]:
             image = self._environment_value(plan, variable) or default
             expected_contract = self._IMAGE_CONTRACTS[role]
             completed = self.runner(
                 [
                     "docker", "image", "inspect", "--format",
-                    (
-                        f'{{{{ index .Config.Labels "{self._IMAGE_CONTRACT_LABEL}" }}}}'
-                        f'|{{{{ index .Config.Labels "{self._SOURCE_MANIFEST_LABEL}" }}}}'
-                    ),
+                    f'{{{{ index .Config.Labels "{self._IMAGE_CONTRACT_LABEL}" }}}}',
                     image,
                 ],
                 cwd=self.repository_root,
@@ -458,33 +445,16 @@ class ComposeDeployment:
                     f"required image is unavailable: {image}; build it with "
                     f"bash deploy/scripts/build-images.sh {role}"
                 )
-            labels = (completed.stdout or "").strip().split("|", 1)
-            contract = labels[0]
-            source_sha256 = labels[1] if len(labels) == 2 else ""
-            if contract != expected_contract or source_sha256 != expected_source_sha256:
-                rebuild_roles.append((
-                    image,
-                    role,
-                    expected_contract,
-                    contract or "missing",
-                    expected_source_sha256,
-                    source_sha256 or "missing",
-                ))
+            contract = (completed.stdout or "").strip()
+            if contract != expected_contract:
+                rebuild_roles.append((image, role, expected_contract, contract or "missing"))
         if rebuild_roles:
             details = []
-            for image, _role, expected_contract, contract, expected_source, source in rebuild_roles:
-                reasons = []
-                if contract != expected_contract:
-                    reasons.append(
-                        "deployment format mismatch "
-                        f"(expected {expected_contract!r}, found {contract!r})"
-                    )
-                if source != expected_source:
-                    reasons.append(
-                        "built from a different source snapshot "
-                        f"(image {source[:12]}, current {expected_source[:12]})"
-                    )
-                details.append(f"  - {image}: {'; '.join(reasons)}")
+            for image, _role, expected_contract, contract in rebuild_roles:
+                details.append(
+                    f"  - {image}: deployment format mismatch "
+                    f"(expected {expected_contract!r}, found {contract!r})"
+                )
             roles = " ".join(role for _image, role, *_labels in rebuild_roles)
             raise ComposeDeploymentError(
                 "local deployment images need rebuilding:\n"
@@ -527,6 +497,7 @@ class ComposeDeployment:
     def _resolve_checkpoint(self, plan: ComposeDeploymentPlan):
         from .checkpointing import (
             CheckpointResolver,
+            LatestCheckpointSelection,
             checkpoint_spec,
             default_global_cache,
             local_checkpoint_override,
@@ -545,6 +516,13 @@ class ComposeDeployment:
                 f"ovlab: checkpoint: {message}", file=sys.stderr, flush=True
             ),
         )
+        if isinstance(spec, LatestCheckpointSelection):
+            if spec.mode == "remote/main" and plan.offline:
+                raise ComposeDeploymentError("remote/main requires online deployment; use local/main for offline deployment")
+            return resolver.resolve_latest(
+                spec.resource_id, spec.repo_id, local_path=local_path,
+                mode=spec.mode, allow_download=not plan.offline,
+            )
         return resolver.resolve(spec, local_path=local_path, offline=plan.offline)
 
     def _quic_adapter_path(self, plan: ComposeDeploymentPlan) -> Path | None:

@@ -7,7 +7,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -18,8 +20,11 @@ from ovlab_benchctl.checkpointing import (
     CheckpointSpec,
     checkpoint_spec,
     local_checkpoint_override,
+    latest_checkpoint_revision,
     verify_checkpoint,
 )
+from ovlab_benchctl.schema import validate_registry
+from ovlab_benchctl.resolver import ConfigResolver
 
 
 REPOSITORY = Path(__file__).resolve().parents[4]
@@ -63,6 +68,80 @@ def test_vanilla_base_checkpoint_is_also_pinned_and_verifiable():
     assert spec.revision == "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
     assert spec.expected_sha256 == "f00cf60094c5df1b7656bec4fe0060830a8fe168d5fabd6626e3964842481f86"
     assert len(spec.files) == 16
+
+
+def test_latest_checkpoint_uses_cached_main_revision_and_records_actual_bytes(tmp_path):
+    revision = "b" * 40
+    repo = tmp_path / "global/hub/models--owner--test-model"
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs/main").write_text(revision)
+    _snapshot(repo / "snapshots" / revision, b"latest model")
+    resolver = CheckpointResolver(
+        global_cache=tmp_path / "global", managed_cache=tmp_path / "managed"
+    )
+
+    with patch.object(checkpointing, "urlopen", side_effect=AssertionError("local/main must not use network")):
+        resolved = resolver.resolve_latest("test-model", "owner/test-model", allow_download=True)
+
+    assert resolved.spec.revision == revision
+    assert resolved.spec.files == (("model.bin", 12, hashlib.sha256(b"latest model").hexdigest()),)
+    assert resolved.host_path.is_dir()
+
+
+def test_remote_main_queries_commit_even_with_cached_ref(tmp_path):
+    repo = tmp_path / "hub/models--owner--test-model/refs"
+    repo.mkdir(parents=True)
+    (repo / "main").write_text("a" * 40)
+    response = io.BytesIO(json.dumps({"sha": "b" * 40}).encode())
+    with patch.object(checkpointing, "urlopen", return_value=response) as remote:
+        assert latest_checkpoint_revision("owner/test-model", tmp_path, offline=False) == "b" * 40
+    remote.assert_called_once()
+
+
+def test_registry_accepts_unpinned_selector_without_hashes():
+    document = {
+        "schema_version": "0.1.0", "kind": "resource_registry",
+        "checkpoints": {"latest": {"repo_id": "owner/model"}},
+        "repositories": {"source": {"path": "external/openvla-quic"}},
+    }
+    validate_registry(document, "test")
+    document["checkpoints"]["latest"]["revision"] = "remote/main"
+    validate_registry(document, "test")
+    document["checkpoints"]["latest"]["expected_sha256"] = "a" * 64
+    with pytest.raises(Exception, match="moving revision"):
+        validate_registry(document, "test")
+
+
+def test_direct_eval_resolves_unpinned_model_from_local_main(tmp_path):
+    root = tmp_path / "project"
+    shutil.copytree(REPOSITORY / "configs", root / "configs")
+    registry = root / "configs/resources/registry.yaml"
+    document = registry.read_text()
+    start = document.index("  openvla-7b:\n")
+    end = document.index("  openvla-7b-finetuned-libero-10:\n")
+    registry.write_text(document[:start] + "  openvla-7b:\n    repo_id: openvla/openvla-7b\n" + document[end:])
+    profile = root / "configs/local/test.yaml"
+    profile.write_text(
+        'schema_version: "0.1.0"\nkind: local_profile\nid: test\n'
+        f'paths:\n  checkpoint_root: {root / "checkpoints"}\n'
+        f'  dataset_root: {root / "datasets"}\n  runs_root: {root / "runs"}\n'
+        'devices:\n  primary_gpu: cuda:0\n'
+    )
+    revision = "d" * 40
+    repo = tmp_path / "cache/hub/models--openvla--openvla-7b"
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs/main").write_text(revision)
+    snapshot = _snapshot(repo / "snapshots" / revision, b"tiny model")
+    with patch.object(checkpointing, "urlopen", side_effect=AssertionError("local/main used network")):
+        resolved = ConfigResolver(root / "configs", repository_root=root).resolve(
+            "configs/experiments/libero-vanilla-smoke.yaml", local_profile=profile,
+            environment={"OVLAB_GLOBAL_HF_CACHE": str(tmp_path / "cache")},
+        )
+    assert resolved.policy_settings.model.revision == revision
+    assert resolved.scientific_config["resolved_checkpoint_identity"]["openvla-7b"]["revision"] == revision
+    assert resolved.policy_settings.model.expected_checksum == checkpointing.checkpoint_spec_from_snapshot(
+        "openvla-7b", "openvla/openvla-7b", revision, snapshot,
+    ).expected_sha256
 
 
 def test_checkpoint_identity_resolution_needs_only_system_python():

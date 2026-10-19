@@ -345,19 +345,13 @@ def test_stale_policy_and_benchmark_images_fail_before_checkpoint_or_compose(
 
     assert "bash deploy/scripts/build-images.sh benchmark policy-openvla-oft reporting" in str(failure.value)
     assert "deployment format mismatch" in str(failure.value)
-    assert "built from a different source snapshot" in str(failure.value)
     assert len(observed) == 3
     assert all(call[0][:3] == ["docker", "image", "inspect"] for call in observed)
 
 
 def test_openvla_preflight_requires_quantization_capable_policy_image(
-    deployment_environment, monkeypatch,
+    deployment_environment,
 ):
-    current_source = "a" * 64
-    monkeypatch.setattr(
-        ComposeDeployment, "_current_source_sha256", lambda self: current_source
-    )
-
     def inspect(command, **kwargs):
         del kwargs
         image = command[-1]
@@ -368,7 +362,7 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
             if image == "ovlab-reporting:local"
             else "resolved-checkpoint-v1"
         )
-        return _Result(0, stdout=f"{contract}|{current_source}\n")
+        return _Result(0, stdout=f"{contract}\n")
 
     deployment = ComposeDeployment(
         REPOSITORY, environment=deployment_environment, runner=inspect
@@ -384,14 +378,11 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
     assert "build-images.sh policy-openvla" in str(failure.value)
 
 
-def test_preflight_rejects_image_that_does_not_contain_current_source(monkeypatch):
-    current_source = "a" * 64
-    monkeypatch.setattr(
-        ComposeDeployment, "_current_source_sha256", lambda self: current_source
-    )
-
+def test_preflight_accepts_compatible_images_without_source_tree_lock():
+    observed = []
     def inspect(command, **kwargs):
         del kwargs
+        observed.append(command)
         image = command[-1]
         contract = (
             "resolved-checkpoint-quantization-config-bundle-v2"
@@ -400,19 +391,16 @@ def test_preflight_rejects_image_that_does_not_contain_current_source(monkeypatc
             if image == "ovlab-reporting:local"
             else "resolved-checkpoint-config-bundle-v2"
         )
-        return _Result(0, stdout=f"{contract}|{'b' * 64}\n")
+        return _Result(0, stdout=f"{contract}\n")
 
     deployment = ComposeDeployment(REPOSITORY, runner=inspect)
     plan = deployment.plan(
         LORA, env_file=ENV_FILE, project_name="ovlab-test-stale-source"
     )
 
-    with pytest.raises(ComposeDeploymentError, match="source-manifest") as failure:
-        _PREFLIGHT_IMAGES(deployment, plan)
-
-    assert "build-images.sh benchmark policy-openvla reporting" in str(failure.value)
-    assert "built from a different source snapshot" in str(failure.value)
-    assert "image bbbbbbbbbbbb, current aaaaaaaaaaaa" in str(failure.value)
+    assert _PREFLIGHT_IMAGES(deployment, plan) is None
+    assert len(observed) == 3
+    assert all("source-manifest" not in " ".join(command) for command in observed)
 
 
 def test_failed_benchmark_is_cleaned_and_reported(deployment_environment):

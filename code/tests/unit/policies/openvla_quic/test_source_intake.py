@@ -251,7 +251,7 @@ def test_external_bridge_has_recorded_uncommitted_content_identity():
     provenance = json.loads((REPOSITORY_ROOT / "external/openvla-quic.migration.json").read_text())
     assert digest == provenance["petf_python_content_sha256"]
     assert provenance["base_revision"] == "533b1a76ea600f50738cb9369ed47192a216e2af"
-    assert provenance["state"] == "reviewable_patch_on_pinned_submodule"
+    assert provenance["state"] == "published_submodule_with_historical_patch"
     # Preserve the historical Gate F evidence rather than relabelling it as
     # validation of the portable method or current OpenVLA implementation.
     assert load(PROVENANCE_PATH)["ownership"]["backend_bridge_python_content_sha256"] == (

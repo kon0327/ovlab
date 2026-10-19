@@ -61,6 +61,13 @@ optimizer step. These artifacts enter the finalized training inventory.
 `train report` publishes the existing HTML and its interactive companion under
 `exports/interactive/training/`, alongside `exports/derived/`; see [`REPORTING.md`](REPORTING.md).
 
+The training CLI accepts custom images through `OVLAB_TRAINING_IMAGE` or
+`OVLAB_TRAINING_QUIC_IMAGE`. Image preflight checks the declared training
+deployment contract, not a fixed image role, Git revision or source hash.
+Dataset and reporting images are checked against their respective contracts.
+Rebuild an image when you want current source changes inside its container;
+build provenance remains recorded in the resulting image.
+
 ## Dataset commands
 
 Dataset commands use the dedicated non-root `ovlab-dataset` image. Read-only
@@ -106,6 +113,17 @@ and unresolved aliases are rejected.
 ./ovlab train plan --profile openvla-libero10-quic-hard.yaml
 ./ovlab train plan --profile configs/training/openvla-libero10-lora-smoke.yaml
 ```
+
+`model.revision` accepts a pinned 40-character commit, `local/main`, or
+`remote/main`. Omitting it means `local/main`: both `train plan` and `train run`
+read the cached Hugging Face `refs/main` and require that snapshot locally,
+without a network request. `remote/main` queries Hugging Face for the current
+commit; `train run` downloads its snapshot when needed, while `train plan`
+requires it to be cached already. The selected commit and observed file hashes
+are recorded in the training plan. If the registry also pins a commit, an
+explicit commit must match it and its registered hashes are enforced. With a
+moving registry entry, an explicit commit selects that cached snapshot and
+records its observed file hashes.
 
 `openvla-libero10-quic-hard.yaml` is the longer LIBERO-10 QuiC run: up to 20
 episodes per task, an 80/20 episode split, one frame in eight, 2,000 optimizer

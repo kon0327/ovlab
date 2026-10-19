@@ -129,7 +129,7 @@ def _parser() -> argparse.ArgumentParser:
     deploy_run.add_argument(
         "--offline",
         action="store_true",
-        help="reject a missing checkpoint instead of downloading its pinned revision",
+        help="reject a missing checkpoint instead of downloading a pinned or remote/main revision",
     )
     deploy_run.add_argument("--project-name")
     deploy_run.add_argument("--dry-run", action="store_true")

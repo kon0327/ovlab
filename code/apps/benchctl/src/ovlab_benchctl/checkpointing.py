@@ -63,8 +63,8 @@ class CheckpointSpec:
             path = Path(relative)
             if path.is_absolute() or ".." in path.parts or not relative:
                 raise CheckpointResolutionError(f"unsafe checkpoint manifest path: {relative}")
-            if type(size) is not int or size <= 0:
-                raise CheckpointResolutionError(f"checkpoint size must be positive: {relative}")
+            if type(size) is not int or size < 0:
+                raise CheckpointResolutionError(f"checkpoint size must be nonnegative: {relative}")
             if _SHA256.fullmatch(digest) is None:
                 raise CheckpointResolutionError(f"invalid checkpoint file SHA-256: {relative}")
             manifest_lines.append(f"{relative} {size} {digest}\n")
@@ -73,6 +73,29 @@ class CheckpointSpec:
             raise CheckpointResolutionError(
                 f"checkpoint {self.resource_id!r} registry aggregate SHA-256 is inconsistent"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class LatestCheckpointSelection:
+    resource_id: str
+    repo_id: str
+    mode: str
+
+
+def _selection_from_entry(resource_id: str, entry: Mapping[str, object]) -> CheckpointSpec | LatestCheckpointSelection:
+    repo_id = str(entry["repo_id"])
+    revision = entry.get("revision", "local/main")
+    if revision in {"local/main", "remote/main"}:
+        return LatestCheckpointSelection(resource_id, repo_id, str(revision))
+    artifact_files = entry.get("files") or entry["artifact"]["files"]  # type: ignore[index]
+    files = tuple(
+        (str(name), int(identity["size"]), str(identity["sha256"]))
+        for name, identity in artifact_files.items()  # type: ignore[union-attr]
+    )
+    return CheckpointSpec(
+        resource_id=resource_id, repo_id=repo_id, revision=str(entry["revision"]),
+        expected_sha256=str(entry["expected_sha256"]), files=files,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +183,7 @@ def _composed(path: Path, config_root: Path, expected_kind: str, stack=()) -> di
     return _merge(_composed(path.parent / parent, config_root, expected_kind, stack + (path,)), document)
 
 
-def checkpoint_spec(repository_root: Path, experiment: str | Path) -> CheckpointSpec:
+def checkpoint_spec(repository_root: Path, experiment: str | Path) -> CheckpointSpec | LatestCheckpointSelection:
     """Resolve the selected policy's logical checkpoint identity without heavy imports."""
     root = repository_root.resolve()
     config_root = root / "configs"
@@ -181,45 +204,23 @@ def checkpoint_spec(repository_root: Path, experiment: str | Path) -> Checkpoint
     registry = _composed(config_root / str(registry_ref), config_root, "resource_registry")
     try:
         entry = registry["checkpoints"][resource_id]  # type: ignore[index]
-        artifact_files = entry.get("files") or entry["artifact"]["files"]
-        files = tuple(
-            (str(name), int(identity["size"]), str(identity["sha256"]))
-            for name, identity in artifact_files.items()
-        )
-        return CheckpointSpec(
-            resource_id=resource_id,
-            repo_id=str(entry["repo_id"]),
-            revision=str(entry["revision"]),
-            expected_sha256=str(entry["expected_sha256"]),
-            files=files,
-        )
+        return _selection_from_entry(resource_id, entry)
     except (KeyError, TypeError, ValueError) as exc:
         raise CheckpointResolutionError(
-            f"registry entry {resource_id!r} lacks a complete immutable artifact identity"
+            f"registry entry {resource_id!r} has an invalid checkpoint selection"
         ) from exc
 
 
-def checkpoint_spec_by_id(repository_root: Path, resource_id: str) -> CheckpointSpec:
+def checkpoint_spec_by_id(repository_root: Path, resource_id: str) -> CheckpointSpec | LatestCheckpointSelection:
     """Resolve one portable registry checkpoint without an experiment wrapper."""
     root = repository_root.resolve()
     registry = _composed(root / "configs" / "resources" / "registry.yaml", root / "configs", "resource_registry")
     try:
         entry = registry["checkpoints"][resource_id]  # type: ignore[index]
-        artifact_files = entry.get("files") or entry["artifact"]["files"]
-        files = tuple(
-            (str(name), int(file_identity["size"]), str(file_identity["sha256"]))
-            for name, file_identity in artifact_files.items()
-        )
-        return CheckpointSpec(
-            resource_id=resource_id,
-            repo_id=str(entry["repo_id"]),
-            revision=str(entry["revision"]),
-            expected_sha256=str(entry["expected_sha256"]),
-            files=files,
-        )
+        return _selection_from_entry(resource_id, entry)
     except (KeyError, TypeError, ValueError) as exc:
         raise CheckpointResolutionError(
-            f"registry entry {resource_id!r} lacks a complete immutable artifact identity"
+            f"registry entry {resource_id!r} has an invalid checkpoint selection"
         ) from exc
 
 
@@ -249,6 +250,46 @@ def _hf_snapshot(cache_root: Path, spec: CheckpointSpec) -> Path:
     hub = cache_root / "hub" if (cache_root / "hub").is_dir() else cache_root
     repository = "models--" + spec.repo_id.replace("/", "--")
     return hub / repository / "snapshots" / spec.revision
+
+
+def latest_checkpoint_revision(repo_id: str, global_cache: Path, *, offline: bool = False) -> str:
+    """Resolve a moving model selector to one immutable commit before loading it."""
+    hub = global_cache / "hub" if (global_cache / "hub").is_dir() else global_cache
+    cached_ref = hub / ("models--" + repo_id.replace("/", "--")) / "refs" / "main"
+    if offline:
+        revision = cached_ref.read_text(encoding="utf-8").strip() if cached_ref.is_file() else ""
+        if _REVISION.fullmatch(revision) is None:
+            raise CheckpointResolutionError(
+                f"latest revision for {repo_id} is unknown offline; cache its main ref or provide a revision"
+            )
+        return revision
+    headers = {"User-Agent": "OpenVLABenchmark/0.1 checkpoint-resolver"}
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    api = f"https://huggingface.co/api/models/{quote(repo_id, safe='/')}/revision/main"
+    try:
+        with urlopen(Request(api, headers=headers), timeout=60) as response:
+            revision = json.load(response).get("sha")
+    except Exception as exc:
+        raise CheckpointResolutionError(f"failed to resolve latest revision for {repo_id}") from exc
+    if not isinstance(revision, str) or _REVISION.fullmatch(revision) is None:
+        raise CheckpointResolutionError(f"Hugging Face returned no immutable latest revision for {repo_id}")
+    return revision
+
+
+def checkpoint_spec_from_snapshot(resource_id: str, repo_id: str, revision: str, snapshot: Path) -> CheckpointSpec:
+    """Record actual bytes when a profile deliberately omits a pinned manifest."""
+    files = tuple(
+        (path.relative_to(snapshot).as_posix(), path.stat().st_size, _sha256(path))
+        for path in sorted(snapshot.rglob("*")) if path.is_file()
+    )
+    if not files:
+        raise CheckpointResolutionError(f"checkpoint snapshot is empty: {snapshot}")
+    aggregate = hashlib.sha256(
+        "".join(f"{name} {size} {digest}\n" for name, size, digest in files).encode("utf-8")
+    ).hexdigest()
+    return CheckpointSpec(resource_id, repo_id, revision, aggregate, files)
 
 
 def _sha256(path: Path) -> str:
@@ -486,6 +527,48 @@ class CheckpointResolver:
         self.downloader = downloader
         self.progress = progress
 
+    def resolve_latest(
+        self, resource_id: str, repo_id: str, *, local_path: Path | None = None,
+        mode: str = "local/main", allow_download: bool = False,
+    ) -> ResolvedCheckpoint:
+        if mode not in {"local/main", "remote/main"}:
+            raise CheckpointResolutionError(f"unknown checkpoint revision mode: {mode}")
+        revision = latest_checkpoint_revision(repo_id, self.global_cache, offline=mode == "local/main")
+        _notify(self.progress, f"Latest checkpoint revision for {repo_id}: {revision}.")
+        managed_snapshot = self.managed_cache / resource_id / revision
+        hub = self.global_cache / "hub" if (self.global_cache / "hub").is_dir() else self.global_cache
+        global_snapshot = hub / ("models--" + repo_id.replace("/", "--")) / "snapshots" / revision
+        matching_local = local_path if local_path is not None and local_path.name == revision else None
+        for candidate in (global_snapshot, matching_local, managed_snapshot):
+            if candidate is not None and candidate.is_dir():
+                spec = checkpoint_spec_from_snapshot(resource_id, repo_id, revision, candidate)
+                return self.resolve(spec, local_path=matching_local, offline=True)
+        if mode == "local/main" or not allow_download:
+            raise CheckpointResolutionError(
+                f"checkpoint {repo_id}@{revision} selected by {mode} is unavailable locally; "
+                "cache it first or use remote/main with download enabled"
+            )
+        self.managed_cache.mkdir(parents=True, exist_ok=True)
+        lock_path = self.managed_cache / ".download.lock"
+        with lock_path.open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            if not managed_snapshot.is_dir():
+                managed_snapshot.parent.mkdir(parents=True, exist_ok=True)
+                temporary = Path(tempfile.mkdtemp(prefix=f".{revision}.", dir=managed_snapshot.parent))
+                try:
+                    if self.downloader is None:
+                        _download_snapshot(repo_id, revision, temporary, progress=self.progress)
+                    else:
+                        self.downloader(repo_id, revision, temporary)
+                    spec = checkpoint_spec_from_snapshot(resource_id, repo_id, revision, temporary)
+                    verify_checkpoint(spec, temporary, progress=self.progress)
+                    os.rename(temporary, managed_snapshot)
+                except Exception:
+                    shutil.rmtree(temporary, ignore_errors=True)
+                    raise
+        spec = checkpoint_spec_from_snapshot(resource_id, repo_id, revision, managed_snapshot)
+        return self.resolve(spec, offline=True)
+
     def resolve(
         self,
         spec: CheckpointSpec,
@@ -664,16 +747,39 @@ def resolve_finalized_training_checkpoint(
         raise CheckpointResolutionError(
             f"trained checkpoint base dependency is incompatible with registry resource {resource_id!r}: {exc}"
         ) from exc
-    expected = {
-        "resource_id": spec.resource_id,
-        "repository": spec.repo_id,
-        "revision": spec.revision,
-        "aggregate_sha256": spec.expected_sha256,
-    }
-    if any(base_identity.get(key) != value for key, value in expected.items()):
-        raise CheckpointResolutionError(
-            f"trained checkpoint base dependency is incompatible with registry resource {resource_id!r}"
-        )
+    if base_identity.get("revision_selection") in {"local/main", "remote/main", "latest"} or isinstance(spec, LatestCheckpointSelection):
+        revision = base_identity.get("revision")
+        if base_identity.get("repository") != spec.repo_id or not isinstance(revision, str) or _REVISION.fullmatch(revision) is None:
+            raise CheckpointResolutionError("trained checkpoint has an invalid resolved base revision")
+        cache_root = (global_cache or default_global_cache(os.environ)).expanduser().resolve()
+        managed_snapshot = root / "checkpoints" / "huggingface" / resource_id / revision
+        hub = cache_root / "hub" if (cache_root / "hub").is_dir() else cache_root
+        global_snapshot = hub / ("models--" + spec.repo_id.replace("/", "--")) / "snapshots" / revision
+        candidates = (global_snapshot, local_base_path, managed_snapshot)
+        for candidate in candidates:
+            if candidate is None or not candidate.is_dir():
+                continue
+            if candidate == local_base_path and candidate.name != revision:
+                continue
+            candidate_spec = checkpoint_spec_from_snapshot(resource_id, spec.repo_id, revision, candidate)
+            if candidate_spec.expected_sha256 == base_identity.get("aggregate_sha256"):
+                spec = candidate_spec
+                break
+        else:
+            raise CheckpointResolutionError(
+                f"resolved base checkpoint {resource_id}@{revision} is unavailable or changed"
+            )
+    else:
+        expected = {
+            "resource_id": spec.resource_id,
+            "repository": spec.repo_id,
+            "revision": spec.revision,
+            "aggregate_sha256": spec.expected_sha256,
+        }
+        if any(base_identity.get(key) != value for key, value in expected.items()):
+            raise CheckpointResolutionError(
+                f"trained checkpoint base dependency is incompatible with registry resource {resource_id!r}"
+            )
     resolver = CheckpointResolver(
         global_cache=(global_cache or default_global_cache(os.environ)).expanduser().resolve(),
         managed_cache=root / "checkpoints" / "huggingface",

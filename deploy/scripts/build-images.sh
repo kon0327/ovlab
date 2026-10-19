@@ -11,17 +11,6 @@ for requested in "${roles[@]}"; do
     *) printf 'unknown image role: %s\n' "$requested" >&2; exit 2 ;;
   esac
 done
-if [[ "${#roles[@]}" -eq 0 ]]; then
-  python deploy/scripts/prepare_openvla_quic.py --check
-else
-  for requested in "${roles[@]}"; do
-    if [[ "$requested" == "policy-openvla-quic" || "$requested" == "training-openvla-quic" ]]; then
-      python deploy/scripts/prepare_openvla_quic.py --check
-      break
-    fi
-  done
-fi
-
 manifest="$(mktemp)"
 trap 'rm -f "$manifest"' EXIT
 python deploy/scripts/source_manifest.py --root "$repository_root" --output "$manifest"

@@ -12,6 +12,24 @@ from ovlab_benchctl.training_runs import TrainingRunStore
 from ovlab_benchctl.training_identity import identity
 
 
+def test_training_image_accepts_custom_role_with_training_contract(tmp_path):
+    from ovlab_benchctl.image_metadata import IMAGE_CONTRACT_LABEL
+    from ovlab_benchctl.training_errors import TrainingRuntimeError
+
+    def inspect(command, **kwargs):
+        del command, kwargs
+        labels = {IMAGE_CONTRACT_LABEL: "offline-dataset-ro-base-ro-training-run-rw-v1",
+                  "io.github.kon0327.ovlab.role": "my-vla-trainer"}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(labels) + "|sha256:custom")
+
+    deployment = TrainingDeployment(tmp_path, environment={"OVLAB_TRAINING_IMAGE": "custom:local"}, runner=inspect)
+    assert deployment._docker_image("OVLAB_TRAINING_IMAGE", "unused", "offline-dataset-ro-base-ro-training-run-rw-v1") == (
+        "custom:local", "sha256:custom"
+    )
+    with pytest.raises(TrainingRuntimeError, match="deployment contract"):
+        deployment._docker_image("OVLAB_TRAINING_IMAGE", "unused", "incompatible-v2")
+
+
 @pytest.mark.parametrize("mask", [0o022, 0o077])
 def test_training_run_keeps_worker_group_access_despite_host_umask(tmp_path, mask):
     store = TrainingRunStore(tmp_path)

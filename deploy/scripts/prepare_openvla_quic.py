@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify or reconstruct the reviewed QuIC additions on the pinned submodule."""
+"""Verify the published QuIC submodule or reconstruct its historical patch."""
 
 import argparse
 import hashlib
@@ -16,8 +16,13 @@ def prepare(root, *, apply=False):
     if hashlib.sha256(patch.read_bytes()).hexdigest() != snapshot["patch_sha256"]:
         raise RuntimeError("QuIC migration patch SHA256 differs from its provenance manifest")
     revision = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
-    if revision != snapshot["base_revision"]:
-        raise RuntimeError("QuIC submodule revision differs from migration base; run git submodule update --init external/openvla-quic")
+    base_revision = snapshot["base_revision"]
+    published_revision = snapshot["published_revision"]
+    if revision not in {base_revision, published_revision}:
+        raise RuntimeError(
+            "QuIC submodule revision is neither the historical migration base nor "
+            "the published revision; run git submodule update --init external/openvla-quic"
+        )
 
     def differences():
         changed = [name for name, digest in snapshot["patched_files"].items()
@@ -27,6 +32,18 @@ def prepare(root, *, apply=False):
         return changed
 
     changed = differences()
+    if revision == published_revision:
+        if changed:
+            raise RuntimeError("published QuIC submodule files are missing or changed: " + ", ".join(changed))
+        status = subprocess.check_output(
+            ["git", "-C", str(repository), "status", "--porcelain", "--untracked-files=normal"],
+            text=True,
+        ).strip()
+        if status:
+            raise RuntimeError("published QuIC submodule has local changes; inspect external/openvla-quic")
+        return {"status": "verified", "revision": revision, "source": "published-submodule",
+                "patch_sha256": snapshot["patch_sha256"]}
+
     if changed and apply:
         check = subprocess.run(["git", "-C", str(repository), "apply", "--check", str(patch)], capture_output=True, text=True)
         if check.returncode:
@@ -35,8 +52,10 @@ def prepare(root, *, apply=False):
         changed = differences()
     if changed:
         raise RuntimeError("QuIC migration files are missing or changed: " + ", ".join(changed)
-                           + ". Restore the pinned submodule, then run python deploy/scripts/prepare_openvla_quic.py --apply")
-    return {"status": "verified", "base_revision": revision, "patch_sha256": snapshot["patch_sha256"]}
+                           + ". On the historical base revision, run python "
+                           "deploy/scripts/prepare_openvla_quic.py --apply")
+    return {"status": "verified", "revision": revision, "source": "historical-patch",
+            "patch_sha256": snapshot["patch_sha256"]}
 
 
 def main():

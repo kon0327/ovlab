@@ -25,21 +25,21 @@ package named `peft` is never imported by the current runtime. The legacy
 runtime. QuIC-WC remains a distinct, fail-closed proposed extension; it does not
 reuse the dense adapter implementation and has no runnable policy.
 
-## Reconstruct the external additions
+## Verify the external additions
 
-The submodule remains pinned to `533b1a76ea600f50738cb9369ed47192a216e2af`.
-The root repository tracks the reviewable additions and their hashes in
+The submodule is pinned to the published QuIC commit. The root repository
+retains the historical migration patch and file hashes in
 `external/openvla-quic.migration.patch` and `.migration.json`.
 
 ```bash
 git submodule update --init external/openvla-quic external/quic-peft-vla
-python deploy/scripts/prepare_openvla_quic.py --apply
 python deploy/scripts/prepare_openvla_quic.py --check
 ```
 
-The helper refuses a different base revision and conflicting local changes.
-QuIC image builds check the snapshot before computing source provenance. They
-fail with the reconstruction command if the additions have not been applied.
+This optional helper verifies the published revision and rejects conflicting
+local changes when reproducing the migration. Image builds use the current
+working tree and do not invoke it. The `--apply` option remains available only
+for reconstructing the historical patch on its original base revision.
 
 ## Training and serving
 
