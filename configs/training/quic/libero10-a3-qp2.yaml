@@ -1,0 +1,2 @@
+extends: ../openvla-libero10-quic-smoke.yaml
+id: openvla-libero10-quic-a3-qp2

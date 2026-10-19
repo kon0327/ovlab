@@ -1,0 +1,697 @@
+diff --git a/openvla_quic/ovlab_provider.py b/openvla_quic/ovlab_provider.py
+index 096de1d..b651827 100644
+--- a/openvla_quic/ovlab_provider.py
++++ b/openvla_quic/ovlab_provider.py
+@@ -3,11 +3,11 @@
+ PROVIDER_API_VERSION = "1.0.0"
+ 
+ 
+-def create_provider(*, variant: str):
++def create_provider(*, variant: str, method_descriptor=None):
+     if variant == "quic-peft":
+         from .peft_provider import QuICPEFTProvider
+ 
+-        return QuICPEFTProvider()
++        return QuICPEFTProvider(method_descriptor=method_descriptor)
+     if variant == "quic-wc":
+         from .wc_provider import QuICWCProvider
+ 
+diff --git a/openvla_quic/peft_provider.py b/openvla_quic/peft_provider.py
+index 770893b..2a07ebf 100644
+--- a/openvla_quic/peft_provider.py
++++ b/openvla_quic/peft_provider.py
+@@ -1,56 +1,173 @@
+-"""QuIC-PEFT provider bone connected only to the metadata bridge in Gate F."""
++"""Benchmark-independent dense token OpenVLA adapter-only provider.
++
++Model, Torch and portable method imports are deferred to load(). The historical
++no-descriptor entry remains fail-closed for old callers.
++"""
++
++import hashlib
++import time
++from pathlib import Path
+ 
+-from .compound_peft_bridge import (
+-    CompoundPeftBackendBridge,
+-    CompoundPeftOpenVLAIntegrationIncompleteError,
+-)
+ from .ovlab_provider import PROVIDER_API_VERSION
+ 
+ 
++def _sha_file(path):
++    digest = hashlib.sha256()
++    with Path(path).open("rb") as handle:
++        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
++            digest.update(block)
++    return digest.hexdigest()
++
++
+ class QuICPEFTProvider:
+     variant_id = "quic-peft"
+ 
+-    def __init__(self) -> None:
+-        self.backend_bridge = CompoundPeftBackendBridge.from_repository_layout()
++    def __init__(self, *, method_descriptor=None):
++        self.descriptor = method_descriptor
++        self.model = self.processor = self.policy = None
++        self._counts = {"base_model": 0, "quic_artifact": 0, "processor": 0}
++        self._episode_id = None
++        if method_descriptor is None:
++            from .compound_peft_bridge import CompoundPeftBackendBridge
++            self.backend_bridge = CompoundPeftBackendBridge.from_repository_layout()
+ 
+-    def api_version(self) -> str:
++    def api_version(self):
+         return PROVIDER_API_VERSION
+ 
+-    def describe(self) -> dict[str, object]:
+-        return {
+-            "family": "openvla_quic",
+-            "variant_id": self.variant_id,
+-            "provider_api_version": PROVIDER_API_VERSION,
+-            "backend": self.backend_bridge.describe(),
+-            "runtime_validated": False,
+-            "training_validated": False,
+-            "libero_validated": False,
+-            "compression_verified": False,
+-        }
+-
+-    @staticmethod
+-    def _raise_incomplete():
+-        raise CompoundPeftOpenVLAIntegrationIncompleteError(
+-            "compound-peft legacy backend is available, but OpenVLA integration is incomplete"
+-        )
++    def _require_descriptor(self):
++        if self.descriptor is None:
++            from .compound_peft_bridge import CompoundPeftOpenVLAIntegrationIncompleteError
++            raise CompoundPeftOpenVLAIntegrationIncompleteError(
++                "QuIC adapter-only serving requires an explicit implemented method descriptor"
++            )
++        if self.descriptor.get("variant_id") != self.variant_id:
++            raise ValueError("provider only implements QuIC-PEFT")
++        if self.descriptor.get("implementation_status") != "implemented":
++            raise ValueError("provider requires an implemented method descriptor")
++
++    def describe(self):
++        if self.descriptor is None:
++            return {
++                "family": "openvla_quic", "variant_id": self.variant_id,
++                "provider_api_version": PROVIDER_API_VERSION,
++                "backend": self.backend_bridge.describe(), "runtime_validated": False,
++                "training_validated": False, "libero_validated": False, "compression_verified": False,
++            }
++        self._require_descriptor()
++        return {key: self.descriptor[key] for key in (
++            "family", "variant_id", "scientific_identity_hash", "base_model_identity",
++            "artifact_identity", "normalization_identity", "profile", "placement_manifest",
++        )}
+ 
+     def capability_description(self):
+-        self._raise_incomplete()
++        self._require_descriptor()
++        return self.descriptor["capability_identity"]["declaration"]
+ 
+     def load(self, request):
+-        del request
+-        self._raise_incomplete()
++        self._require_descriptor()
++        if self.model is not None:
++            raise RuntimeError("QuIC provider is already loaded")
++        expected = dict(self.descriptor)
++        scientific_hash = expected.pop("scientific_identity_hash")
++        if request.get("scientific_identity_hash") != scientific_hash or request.get("method_descriptor") != expected:
++            raise ValueError("provider load descriptor or scientific identity mismatch")
++        artifact = expected["artifact_identity"]
++        directory = Path(artifact["directory"])
++        if _sha_file(directory / "adapter.json") != artifact["manifest_sha256"]:
++            raise ValueError("adapter manifest changed after capability negotiation")
++        if _sha_file(directory / "adapter.safetensors") != artifact["tensor_sha256"]:
++            raise ValueError("adapter tensors changed after capability negotiation")
++        from .host import OpenVLAQuICPolicy, checkpoint_identity, load_host
++        from quic_petf_vla import load_adapter
++
++        host = expected["base_model_identity"]["host"]
++        identity = checkpoint_identity(host)
++        if identity != expected["base_model_identity"]["host_identity"]:
++            raise ValueError("host checkpoint, source, normalization or method identity mismatch")
++        model, processor, runtime = load_host(host)
++        try:
++            normalization = expected["normalization_identity"]["contract"]
++            if normalization.get("unnorm_key") != host["unnorm_key"]:
++                raise ValueError("normalization key differs from adapter contract")
++            actual_stats = model.norm_stats[host["unnorm_key"]]["action"]
++            if actual_stats != normalization.get("action_statistics"):
++                raise ValueError("host action normalization differs from adapter contract")
++            actual_manifest = load_adapter(model, directory, identity)
++            if actual_manifest != expected["parameterization"]["manifest"]:
++                raise ValueError("resolved QuIC targets differ from descriptor")
++            model.eval()
++            self.model, self.processor = model, processor
++            self.policy = OpenVLAQuICPolicy(model, processor, host)
++            self._counts = {"base_model": 1, "quic_artifact": 1, "processor": 1}
++            return {"host_identity": identity, "adapter_sha256": artifact["tensor_sha256"],
++                    "runtime": runtime, "artifact_form": "adapter_only", "quantization": "none"}
++        except Exception:
++            del model, processor
++            raise
+ 
+     def reset_episode(self, request):
+-        del request
+-        self._raise_incomplete()
++        if self.policy is None:
++            raise RuntimeError("QuIC provider is not loaded")
++        import torch
++        seed = request["seed"]
++        if type(seed) is not int or seed < 0:
++            raise ValueError("episode seed must be a nonnegative integer")
++        torch.manual_seed(seed)
++        self._episode_id = request["episode_id"]
+ 
+     def predict(self, request):
+-        del request
+-        self._raise_incomplete()
++        if self.policy is None or self._episode_id is None:
++            raise RuntimeError("load and reset_episode are required before predict")
++        if request.get("episode_id") != self._episode_id:
++            raise ValueError("prediction episode differs from active episode")
++        import numpy as np
++        import torch
++        capability = self.descriptor["capability_identity"]
++        declaration = capability["declaration"]
++        image_spec = declaration["images"][0]
++        images = request["images"]
++        if set(images) != {image_spec["name"]} or request["proprioception"]:
++            raise ValueError("token OpenVLA requires exactly its declared RGB channel")
++        image = np.asarray(images[image_spec["name"]]["data"])
++        if image.dtype != np.uint8 or list(image.shape) not in image_spec["shapes"]:
++            raise ValueError("RGB image dtype or shape differs from capabilities")
++        instruction = request["instruction"]
++        if not isinstance(instruction, str) or not instruction.strip():
++            raise ValueError("instruction must be nonempty")
++        sync = capability.get("synchronize_inference", True) and str(self.model.device).startswith("cuda")
++        if sync:
++            torch.cuda.synchronize(self.model.device)
++        start = time.perf_counter_ns()
++        action = np.asarray(self.policy.predict(image, instruction), dtype=np.float32).copy()
++        if sync:
++            torch.cuda.synchronize(self.model.device)
++        duration = time.perf_counter_ns() - start
++        spec = declaration["action_spec"]
++        if action.shape != (spec["dimension"],) or not np.isfinite(action).all():
++            raise ValueError("model returned an invalid decoded action")
++        transform = capability.get("action_transform", {"kind": "identity"})
++        if transform["kind"] == "threshold":
++            index = transform["index"]
++            value = float(action[index])
++            if not transform["minimum"] <= value <= transform["maximum"]:
++                raise ValueError("decoded action coordinate violates source range")
++            action[index] = (transform["below"] if value < transform["threshold"]
++                             else transform["above"] if value > transform["threshold"] else transform["equal"])
++        elif transform["kind"] != "identity":
++            raise ValueError("unsupported explicit action transformation")
++        if spec["minimum"] is not None and (np.any(action < spec["minimum"]) or np.any(action > spec["maximum"])):
++            raise ValueError("decoded action violates target interface bounds")
++        return {"actions": action[None, :], "inference_duration_ns": duration,
++                "metadata": {"artifact_form": "adapter_only", "greedy": True}}
+ 
+-    def load_counts(self) -> dict[str, int]:
+-        return {"base_model": 0, "quic_artifact": 0, "processor": 0}
++    def load_counts(self):
++        return dict(self._counts)
+ 
+-    def close(self) -> None:
+-        return None
++    def close(self):
++        had_model = self.model is not None
++        self.policy = self.model = self.processor = None
++        self._episode_id = None
++        if had_model:
++            import torch
++            if torch.cuda.is_available():
++                torch.cuda.empty_cache()
+diff --git a/pyproject.toml b/pyproject.toml
+index f72cae0..0b9e65e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -30,6 +30,7 @@ classifiers = [
+     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+ ]
+ dependencies = [
++    "quic-petf-vla==0.1.0",
+     "accelerate>=0.25.0",
+     "draccus==0.8.0",
+     "einops",
+diff --git a/openvla_quic/config.py b/openvla_quic/config.py
+new file mode 100644
+index 0000000..c11e0ec
+--- /dev/null
++++ b/openvla_quic/config.py
+@@ -0,0 +1,156 @@
++"""Resolve layer selectors and validate the dissertation's named ablations."""
++import copy
++import re
++from pathlib import Path
++
++import yaml
++
++PROFILES = {
++    "QP1": dict(orders=[1], block_count=8, share_across_blocks=False, base_size=None),
++    "QP2": dict(orders=[1, 2], block_count=8, share_across_blocks=False, base_size=None),
++    "QP3": dict(orders=[1, 2, 3], block_count=16, share_across_blocks=False, base_size=None),
++    # n=3 is an explicit stress candidate, not a demonstrated stability threshold.
++    "QP4": dict(orders=[1, 2, 3], block_count=32, share_across_blocks=True, base_size=3),
++}
++PLACEMENTS = {
++    "A1": {"vision": ["QP2", "QP3", "QP4"]},
++    "A2": {"projector": ["QP1", "QP2", "QP3"]},
++    "A3": {"language": ["QP2", "QP3", "QP4"]},
++    "A4": {"action": ["QP1"]},
++    "A5": {"projector": ["QP2", "QP3"], "language": ["QP2", "QP3"]},
++    "A6": {"projector": ["QP2", "QP3"], "language": ["QP2", "QP3"], "action": ["QP1"]},
++    "A7": {"vision": ["QP2", "QP3", "QP4"], "projector": ["QP2", "QP3"],
++           "language": ["QP2", "QP3", "QP4"], "action": ["QP1"]},
++    "A8": {"vision": ["QP2", "QP3"], "action": ["QP1"]},
++    "A9": {"vision": ["QP2", "QP3", "QP4"],
++           "language": ["QP2", "QP3", "QP4"]},
++}
++
++
++def load_config(path):
++    result = yaml.safe_load(Path(path).read_text())
++    if not isinstance(result, dict) or result.get("schema_version") != 1:
++        raise ValueError("Expected schema_version: 1 and a configuration object")
++    if not result.get("targets"):
++        raise ValueError("Declare nonempty targets; selectors must be explicit")
++    return result
++
++
++def region(name, num_layers, protected_last_n):
++    if name.startswith("vision_backbone."):
++        return "vision"
++    if name.startswith("projector."):
++        return "projector"
++    if name == "language_model.lm_head":
++        return "action"
++    m = re.match(r"language_model\.model\.layers\.(\d+)\.", name)
++    if m:
++        return "action" if int(m[1]) >= num_layers - protected_last_n else "language"
++    return "other"
++
++
++def adapter_config(spec):
++    from quic_petf_vla import AdapterConfig
++    profile = spec.get("profile", "custom")
++    if profile not in {*PROFILES, "custom"}:
++        raise ValueError(f"Unknown profile {profile}")
++    values = copy.deepcopy(PROFILES.get(profile, {}))
++    if spec.get("operation", "determinant") != "determinant":
++        raise ValueError("QuIC uses determinant compounds; other minor operations are not this method")
++    values.update({k: v for k, v in spec.items() if k not in {"profile", "block_size", "operation"}})
++    values.setdefault("orthogonal", True)
++    if values.get("base_size") == "largest_feasible":
++        values["base_size"] = None
++    if profile in PROFILES:
++        if list(values["orders"]) != PROFILES[profile]["orders"] or not values["orthogonal"]:
++            raise ValueError(f"{profile} fixes its compound set and orthogonality; use profile: custom for ablations")
++        if profile in {"QP1", "QP2"} and values["share_across_blocks"]:
++            raise ValueError(f"{profile} does not share blocks; use profile: custom")
++        if profile == "QP4" and not values["share_across_blocks"]:
++            raise ValueError("QP4 requires shared blocks")
++    return AdapterConfig(**values)
++
++
++def resolve_targets(inventory, config, num_layers):
++    """Select once by full path; reject missing matches, overlaps and invalid placements."""
++    place = config.get("placement", {})
++    placement_id = place.get("id", "custom")
++    if placement_id not in {*PLACEMENTS, "custom"}:
++        raise ValueError(f"Unknown placement {placement_id}")
++    last_n = place.get("action_proximal_last_n", 4)
++    if type(last_n) is not int or type(place.get("allow_action_proximal", False)) is not bool:
++        raise ValueError("action_proximal_last_n must be integer and allow_action_proximal must be boolean")
++    if not 0 <= last_n <= num_layers:
++        raise ValueError("action_proximal_last_n is outside host layer range")
++    lookup = {entry["name"]: entry for entry in inventory}
++    selected = {}
++    manifest = []
++    for selector in config["targets"]:
++        if not isinstance(selector, dict):
++            raise ValueError("Every target must be a selector object")
++        if ("names" in selector) == ("pattern" in selector):
++            raise ValueError("Specify exactly one of names or pattern per selector")
++        if "names" in selector:
++            matches = selector["names"]
++            if not isinstance(matches, list) or not matches:
++                raise ValueError("names must be a nonempty list")
++            missing = set(matches) - lookup.keys()
++            if missing:
++                raise ValueError(f"Unknown linear layer(s): {sorted(missing)}")
++        else:
++            rx = re.compile(selector["pattern"])
++            matches = [n for n in lookup if rx.fullmatch(n)]
++        if selector.get("region"):
++            matches = [n for n in matches if region(n, num_layers, last_n) == selector["region"]]
++        if "layers" in selector:
++            if not isinstance(selector["layers"], list) or any(type(i) is not int or i < 0 for i in selector["layers"]):
++                raise ValueError("layers must contain nonnegative integer indices")
++            layer_ids = set(selector["layers"])
++            matches = [n for n in matches if (m := re.search(r"(?:layers|blocks)\.(\d+)\.", n))
++                       and int(m[1]) in layer_ids]
++        if not matches:
++            raise ValueError(f"Selector matches no layers: {selector}")
++        spec = dict(config.get("adapter", {}))
++        profile_override = selector.get("profile", selector.get("adapter", {}).get("profile"))
++        if profile_override is not None and profile_override != spec.get("profile", "custom"):
++            # A named profile switch resets profile defaults; dtype/orientation
++            # remain global and explicit per-selector adapter values apply last.
++            for key in ("orders", "block_count", "block_size", "base_size", "share_across_blocks"):
++                spec.pop(key, None)
++            spec["profile"] = profile_override
++        spec.update(selector.get("adapter", {}))
++        for name in sorted(matches):
++            if name in selected:
++                raise ValueError(f"Overlapping selectors for {name}")
++            if not lookup[name].get("used_in_policy", True):
++                raise ValueError(f"Layer does not contribute to policy outputs: {name}")
++            reg = region(name, num_layers, last_n)
++            if reg == "action" and not place.get("allow_action_proximal", False):
++                raise ValueError(f"Protected action-proximal layer {name}; declare allow_action_proximal: true")
++            profile = spec.get("profile", "custom")
++            if placement_id in PLACEMENTS:
++                allowed = PLACEMENTS[placement_id]
++                if reg not in allowed or profile not in allowed[reg]:
++                    raise ValueError(f"{placement_id} does not allow {reg}/{profile} at {name}")
++            layer_spec = dict(spec)
++            if "block_size" in layer_spec:
++                size = layer_spec.pop("block_size")
++                if type(size) is not int:
++                    raise ValueError("block_size must be an integer")
++                dim = lookup[name]["out_features"]
++                if size <= 0 or dim % size:
++                    raise ValueError(f"block_size {size} does not divide output {dim}: {name}")
++                count = dim // size
++                if "block_count" in layer_spec and layer_spec["block_count"] != count:
++                    raise ValueError(f"Contradictory block_size/block_count at {name}")
++                layer_spec["block_count"] = count
++            cfg = adapter_config(layer_spec)
++            resolved = cfg.resolve(lookup[name]["out_features"])
++            selected[name] = cfg
++            manifest.append(dict(lookup[name], region=reg, profile=profile, resolved=resolved.to_dict()))
++    if placement_id in PLACEMENTS:
++        seen = {entry["region"] for entry in manifest}
++        required = set(PLACEMENTS[placement_id])
++        if seen != required:
++            raise ValueError(f"{placement_id} must select every declared region {sorted(required)}; got {sorted(seen)}")
++    return selected, manifest
+diff --git a/openvla_quic/host.py b/openvla_quic/host.py
+new file mode 100644
+index 0000000..878477a
+--- /dev/null
++++ b/openvla_quic/host.py
+@@ -0,0 +1,256 @@
++"""Local token OpenVLA loading with immutable, content-verified host identity."""
++import hashlib
++import json
++import re
++import time
++from pathlib import Path
++
++import torch
++from PIL import Image
++
++
++SOURCE_ROOT = Path(__file__).resolve().parents[1]
++
++
++def sha256_file(path):
++    digest = hashlib.sha256()
++    with Path(path).open("rb") as handle:
++        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
++            digest.update(block)
++    return digest.hexdigest()
++
++
++def _inline_action_normalization(host):
++    """Validate the fitted, content-bound normalization overlay if present."""
++    inline = host.get("action_normalization")
++    digest = host.get("normalization_contract_sha256")
++    if inline is None and digest is None:
++        return None
++    key = host.get("unnorm_key")
++    if not isinstance(inline, dict) or set(inline) != {key}:
++        raise ValueError("fitted action_normalization must contain exactly the selected unnorm_key")
++    record = inline[key]
++    if not isinstance(record, dict) or set(record) != {"action"} or not isinstance(record["action"], dict):
++        raise ValueError("fitted action_normalization requires an action statistics object")
++    stats = record["action"]
++    low, high = stats.get("q01"), stats.get("q99")
++    if (not isinstance(low, list) or not isinstance(high, list) or not low or len(low) != len(high)
++            or any(type(v) not in (int, float) for v in low + high)
++            or any(a > b for a, b in zip(low, high))):
++        raise ValueError("fitted action statistics require ordered equal-length numeric q01/q99 vectors")
++    mask = stats.get("mask")
++    if mask is not None and (not isinstance(mask, list) or len(mask) != len(low)
++                             or any(type(value) is not bool for value in mask)):
++        raise ValueError("fitted action statistics mask must be a boolean vector matching q01/q99")
++    contract = {"unnorm_key": key, "action_statistics": stats, "mode": "train-q99"}
++    calculated = hashlib.sha256(json.dumps(contract, sort_keys=True, allow_nan=False).encode()).hexdigest()
++    if not isinstance(digest, str) or digest != calculated:
++        raise ValueError("fitted normalization contract SHA256 mismatch")
++    return json.loads(json.dumps(inline, allow_nan=False))
++
++
++def apply_action_normalization(model, host):
++    """Overlay fitted train-split statistics in memory, leaving host files intact."""
++    inline = _inline_action_normalization(host)
++    if inline is not None:
++        model.norm_stats = dict(model.norm_stats or {})
++        for key, record in inline.items():
++            model.norm_stats[key] = {**model.norm_stats.get(key, {}), **record}
++
++
++def checkpoint_path(host):
++    path = Path(host["checkpoint"]).expanduser().resolve()
++    if not path.is_dir():
++        raise ValueError(f"Local checkpoint directory not found: {path}")
++    if host.get("family", "openvla_token") != "openvla_token":
++        raise ValueError("This workflow implements token OpenVLA; OpenVLA-OFT is a separate host")
++    if not re.fullmatch(r"[0-9a-f]{40}", host.get("revision", "")):
++        raise ValueError("Declare the immutable 40-character checkpoint revision")
++    if host.get("adaptation_state") not in {"merged", "none"}:
++        raise ValueError("Host must be a verified dense merged checkpoint or unadapted checkpoint")
++    if (path / "adapter_config.json").exists() or (path / "lora_adapter").exists():
++        raise ValueError("Active/unmerged LoRA is not supported in this host loader")
++    checkpoint_config = json.loads((path / "config.json").read_text())
++    if checkpoint_config.get("model_type") != "openvla":
++        raise ValueError("Checkpoint is not token OpenVLA")
++    if checkpoint_config.get("quantization_config"):
++        raise ValueError("QuIC requires dense host weights; quantized checkpoints are unsupported")
++    return path
++
++
++def checkpoint_identity(host):
++    from quic_petf_vla import adapter as method
++    path = checkpoint_path(host)
++    files = sorted(p for p in path.iterdir() if p.is_file() and
++                   (p.suffix in {".json", ".model", ".safetensors"}))
++    if not any(p.suffix == ".safetensors" for p in files):
++        raise ValueError("Checkpoint must contain safetensors weights")
++    # Verify bytes on every load; file timestamps alone are not a content proof.
++    hashes = {p.name: sha256_file(p) for p in files}
++    index_path = path / "model.safetensors.index.json"
++    if index_path.exists():
++        index = json.loads(index_path.read_text())
++        if any("lora_" in k for k in index["weight_map"]):
++            raise ValueError("Checkpoint contains active LoRA parameters")
++        if not set(index["weight_map"].values()).issubset(hashes):
++            raise ValueError("Missing checkpoint shards")
++    from safetensors import safe_open
++    for shard in (p for p in files if p.suffix == ".safetensors"):
++        with safe_open(str(shard), framework="pt", device="cpu") as saved:
++            if any("lora_" in key for key in saved.keys()):
++                raise ValueError("Checkpoint contains active LoRA parameters")
++    digest = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
++    normalization_sha256 = None
++    if host.get("norm_stats_path"):
++        norm_stats_path = Path(host["norm_stats_path"]).expanduser().resolve()
++        if not norm_stats_path.is_file():
++            raise ValueError(f"Normalization statistics file not found: {norm_stats_path}")
++        normalization_sha256 = sha256_file(norm_stats_path)
++    # Bind the model implementation actually loaded by this fork. The adapter
++    # implementation has its own identity in the artifact metadata.
++    source = {str(p.relative_to(SOURCE_ROOT)): sha256_file(p)
++              for p in sorted((SOURCE_ROOT / "prismatic").rglob("*.py"))}
++    identity = {"family": "openvla_token", "checkpoint_id": host.get("checkpoint_id", "content-addressed-local"), "revision": host["revision"],
++                "adaptation_state": host["adaptation_state"], "checkpoint_sha256": digest,
++                "source_sha256": hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest(),
++                "quic_method_sha256": sha256_file(method.__file__),
++                "integration_source_sha256": hashlib.sha256(json.dumps({
++                    name: sha256_file(Path(__file__).parent / name)
++                    for name in ("host.py", "config.py", "preprocessing.py", "peft_provider.py")
++                }, sort_keys=True).encode()).hexdigest()}
++    if normalization_sha256:
++        identity["normalization_stats_sha256"] = normalization_sha256
++    if _inline_action_normalization(host) is not None:
++        identity["normalization_contract_sha256"] = host["normalization_contract_sha256"]
++    return identity
++
++
++def disable_tensorflow_gpu():
++    import tensorflow as tf
++    tf.config.set_visible_devices([], "GPU")
++    # Keep TFDS from spawning one thread per host CPU during small demos.
++    if not tf.config.threading.get_inter_op_parallelism_threads():
++        tf.config.threading.set_inter_op_parallelism_threads(2)
++    if not tf.config.threading.get_intra_op_parallelism_threads():
++        tf.config.threading.set_intra_op_parallelism_threads(2)
++
++
++def _verify_model_source():
++    import prismatic
++    actual = Path(prismatic.__file__).resolve().parent
++    expected = (SOURCE_ROOT / "prismatic").resolve()
++    if actual != expected:
++        raise RuntimeError(f"Loaded prismatic source {actual} differs from QuIC fork {expected}")
++
++
++def load_processor(host):
++    disable_tensorflow_gpu()
++    _verify_model_source()
++    from transformers import AutoTokenizer
++    from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
++    path = checkpoint_path(host)
++    image_processor = PrismaticImageProcessor.from_pretrained(path, local_files_only=True)
++    tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
++    return PrismaticProcessor(image_processor=image_processor, tokenizer=tokenizer)
++
++
++def layer_inventory(host):
++    """Instantiate architecture on meta device; no 7B weights are allocated."""
++    disable_tensorflow_gpu()
++    _verify_model_source()
++    from accelerate import init_empty_weights
++    from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
++    from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
++    path = checkpoint_path(host)
++    config = OpenVLAConfig.from_pretrained(path, local_files_only=True)
++    if getattr(config.text_config, "pretraining_tp", 1) != 1:
++        raise ValueError("pretraining_tp must equal 1: TP sliced F.linear branches bypass adapter wrappers")
++    with init_empty_weights():
++        model = OpenVLAForActionPrediction(config)
++    entries = [{"name": name, "in_features": m.in_features, "out_features": m.out_features,
++                "bias": m.bias is not None, "type": type(m).__name__}
++               for name, m in model.named_modules() if isinstance(m, torch.nn.Linear)]
++    for entry in entries:
++        entry["used_in_policy"] = True
++        match = re.match(r"vision_backbone\.(featurizer|fused_featurizer)\.blocks\.(\d+)\.", entry["name"])
++        if match:
++            encoder = getattr(model.vision_backbone, match[1])
++            if int(match[2]) > len(encoder.blocks) - 2:
++                entry["used_in_policy"] = False
++                entry["inactive_reason"] = "OpenVLA returns second-to-last vision block features"
++    return entries, config.text_config.num_hidden_layers
++
++
++def load_host(host, training=False):
++    disable_tensorflow_gpu()
++    _verify_model_source()
++    from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
++    from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
++    path = checkpoint_path(host)
++    device = host.get("device", "cuda:0")
++    if device.startswith("cuda") and not torch.cuda.is_available():
++        raise RuntimeError("CUDA unavailable: execute outside GPU-restricted sandbox")
++    dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[host.get("dtype", "bfloat16")]
++    if training and dtype == torch.float16:
++        raise ValueError("Reference trainer supports BF16 or FP32; FP16 requires a scaler")
++    config = OpenVLAConfig.from_pretrained(path, local_files_only=True)
++    if getattr(config.text_config, "pretraining_tp", 1) != 1:
++        raise ValueError("pretraining_tp must equal 1: TP sliced F.linear branches bypass adapter wrappers")
++    start = time.perf_counter()
++    model = OpenVLAForActionPrediction.from_pretrained(
++        path, config=config, local_files_only=True, torch_dtype=dtype,
++        attn_implementation=host.get("attention", "flash_attention_2"), low_cpu_mem_usage=True)
++    model.to(device).eval()
++    stats = path / "dataset_statistics.json"
++    if stats.exists():
++        model.norm_stats = json.loads(stats.read_text())
++    if host.get("norm_stats_path"):
++        stats_path = Path(host["norm_stats_path"]).expanduser().resolve()
++        if not stats_path.is_file():
++            raise ValueError(f"Normalization statistics file not found: {stats_path}")
++        payload = json.loads(stats_path.read_text())
++        model.norm_stats = payload.get("norm_stats", payload)
++    apply_action_normalization(model, host)
++    key = host.get("unnorm_key")
++    if key not in (model.norm_stats or {}):
++        raise ValueError(f"Host normalization key {key!r} missing; available: {list(model.norm_stats or {})}")
++    processor = load_processor(host)
++    runtime = {"cold_load_seconds": time.perf_counter() - start,
++               "device": device, "dtype": str(dtype),
++               "torch_version": torch.__version__, "torch_cuda_runtime": torch.version.cuda}
++    if device.startswith("cuda"):
++        properties = torch.cuda.get_device_properties(device)
++        runtime.update(gpu_name=properties.name, gpu_total_memory_bytes=properties.total_memory)
++    return model, processor, runtime
++
++
++class OpenVLAQuICPolicy:
++    def __init__(self, model, processor, host, baseline=False):
++        self.model, self.processor, self.host = model, processor, host
++        self.baseline = baseline
++
++    def predict(self, image, instruction):
++        from contextlib import nullcontext
++        from quic_petf_vla import disabled_adapters
++        pil_image = Image.fromarray(image).convert("RGB")
++        if self.host.get("center_crop", False):
++            import numpy as np
++            import tensorflow as tf
++            from .preprocessing import crop_and_resize
++            values = tf.image.convert_image_dtype(tf.convert_to_tensor(np.array(pil_image)), tf.float32)
++            values = crop_and_resize(values, 0.9, 1)
++            pil_image = Image.fromarray(tf.image.convert_image_dtype(tf.clip_by_value(values, 0, 1), tf.uint8, saturate=True).numpy())
++        style = self.host.get("prompt_style", "modern")
++        if style == "modern":
++            prompt = f"In: What action should the robot take to {instruction.lower()}?\nOut:"
++        elif style == "v01":
++            from .preprocessing import OPENVLA_V01_SYSTEM_PROMPT
++            prompt = f"{OPENVLA_V01_SYSTEM_PROMPT} USER: What action should the robot take to {instruction.lower()}? ASSISTANT:"
++        else:
++            raise ValueError("prompt_style must be modern or v01")
++        inputs = self.processor(prompt, pil_image)
++        inputs = inputs.to(self.host.get("device", "cuda:0"), dtype=self.model.dtype)
++        self.model.eval()
++        context = disabled_adapters(self.model) if self.baseline else nullcontext()
++        with context, torch.inference_mode():
++            return self.model.predict_action(**inputs, unnorm_key=self.host["unnorm_key"], do_sample=False)
+diff --git a/openvla_quic/preprocessing.py b/openvla_quic/preprocessing.py
+new file mode 100644
+index 0000000..4ade3c1
+--- /dev/null
++++ b/openvla_quic/preprocessing.py
+@@ -0,0 +1,23 @@
++"""Token OpenVLA preprocessing, independent of robot and benchmark utilities."""
++
++OPENVLA_V01_SYSTEM_PROMPT = (
++    "A chat between a curious user and an artificial intelligence assistant. "
++    "The assistant gives helpful, detailed, and polite answers to the user's questions."
++)
++
++
++def crop_and_resize(image, crop_scale, batch_size):
++    """Upstream TensorFlow center crop; preserve its bilinear 224px contract."""
++    import tensorflow as tf
++
++    if image.shape.ndims not in (3, 4):
++        raise ValueError("center crop expects HWC or NHWC images")
++    expanded = image.shape.ndims == 3
++    if expanded:
++        image = tf.expand_dims(image, axis=0)
++    heights = tf.reshape(tf.clip_by_value(tf.sqrt(crop_scale), 0, 1), (batch_size,))
++    widths = tf.reshape(tf.clip_by_value(tf.sqrt(crop_scale), 0, 1), (batch_size,))
++    top, left = (1 - heights) / 2, (1 - widths) / 2
++    boxes = tf.stack([top, left, top + heights, left + widths], axis=1)
++    image = tf.image.crop_and_resize(image, boxes, tf.range(batch_size), (224, 224))
++    return image[0] if expanded else image

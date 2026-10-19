@@ -1,0 +1,30 @@
+{
+  "base_revision": "533b1a76ea600f50738cb9369ed47192a216e2af",
+  "patch_sha256": "5b00705c1a50f4694fcbab67db86e07eb7680de59f977b23b842b2bbecfbee20",
+  "patched_files": {
+    "openvla_quic/__init__.py": "3abda20255708278786c33b88d29c747754741c23f9670b3efcb86d3c93f5515",
+    "openvla_quic/compound_peft_bridge.py": "ea9f7116d59ae1a15407f462cde87608178f1bdd6d66d99a45ed492a1339ccdf",
+    "openvla_quic/config.py": "f6ee0cff3c7df33050337be8f16ee954820f886cb1dcb445ff6f51c5a45a6215",
+    "openvla_quic/host.py": "b09c07ef5ca56c011fcc1dc9762cab4888294e006f2795def62cc2be88ad2c68",
+    "openvla_quic/ovlab_provider.py": "bee3479912f756fc0bab53e1da798c72fac7e0c2a83d20c3f0fa6b8664ad69d6",
+    "openvla_quic/peft_provider.py": "96b9669f8d290993049c9338c35d72fb389d2448fb83097c5a7a96da820f8a34",
+    "openvla_quic/preprocessing.py": "c7f41002ee36a941c099cf2987c4bf6cd2695afd655a65d56f915cd6e80d6c1c",
+    "openvla_quic/wc_provider.py": "7b76e8b36428e41904d64611d93b25150d20237d8ce791e6a11135b8fd255b7a",
+    "pyproject.toml": "0c9fd907ffef7ea0e7eed2228278cf21cdd21b759b42a07b80e3fc7402cc1a22"
+  },
+  "portable_method": {
+    "path": "code/packages/quic-petf-vla/src/quic_petf_vla/adapter.py",
+    "sha256": "a0dcaa1e7ec45753397f4b7dfca95f24091020aa9a8fa2494a15769bf3c4d33c"
+  },
+  "provider_python_content_sha256": "a008e39e50e929530f263a02a393f832fea98067dfa7643c8db5df3cf4a25460",
+  "schema_version": 1,
+  "source_files": [
+    "quic_openvla/adapter.py",
+    "quic_openvla/config.py",
+    "quic_openvla/host.py",
+    "MIGRATE.md"
+  ],
+  "source_project": "quic-petf-mpv",
+  "state": "reviewable_patch_on_pinned_submodule",
+  "validation_scope": "CPU numerical and tiny dense provider contracts; generic CUDA BF16 smoke only; no 7B host train/inference or benchmark validation"
+}

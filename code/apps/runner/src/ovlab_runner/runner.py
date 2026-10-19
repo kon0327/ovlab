@@ -4,6 +4,7 @@ from collections import Counter
 import warnings
 
 from ovlab_core.contracts import OVLAB_VERSION
+from ovlab_core.progress import ConsoleProgress
 from ovlab_metrics import (
     MetricEvaluator, MetricRegistry, MetricStatus, TaskMetricPlugin, aggregate_episode_results,
 )
@@ -91,7 +92,12 @@ class ExperimentRunner:
         metric_errors = 0
         episode_count = 0
         all_task_results = {}
+        progress = ConsoleProgress(
+            "Evaluation", total=len(self.connection_report.selected_tasks) * self.plan.rollout_count_per_task,
+            unit="episode",
+        )
         try:
+            progress.start()
             for task_index, task in enumerate(self.connection_report.selected_tasks):
                 episode_results = []
                 stop_task = False
@@ -108,6 +114,7 @@ class ExperimentRunner:
                         self.plan.run_context.run_id, task.task_id, trace.episode_context.episode_id, results
                     )
                     episode_results.extend(results)
+                    progress.advance(detail=f"task={task.task_id} status={trace.terminal_status.value}")
                     required_errors = [result for result in results if result.metric_id in self.plan.required_metric_ids and result.status is MetricStatus.ERROR]
                     if error is not None or required_errors:
                         if isinstance(error, KeyboardInterrupt): raise error
@@ -141,6 +148,7 @@ class ExperimentRunner:
             except Exception: pass
             raise
         finally:
+            progress.close(status=self.state.value)
             self._close_resources()
 
     def close(self):

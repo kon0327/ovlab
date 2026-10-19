@@ -1,5 +1,8 @@
 # OVLAB Docker deployment
 
+QuIC role images, pinned requirements, adapter mounts, and console progress
+are documented in [QUIC.md](QUIC.md).
+
 This directory contains the production Dockerfiles for the isolated OVLAB
 runtime. The public `ovlab deploy run` command owns the Compose lifecycle; users
 do not need to activate Conda or start containers separately. The Dockerfiles

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout, redirect_stderr
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,35 @@ def _context(root: Path) -> TrainingRunContext:
     return TrainingRunContext(run_id=root.name, root=root, plan=plan)
 
 
+class _ConsoleTee:
+    def __init__(self, console, log):
+        self.console, self.log = console, log
+
+    def write(self, value):
+        self.log.write(value)
+        self.log.flush()
+        return self.console.write(value)
+
+    def flush(self):
+        self.log.flush()
+        self.console.flush()
+
+    def isatty(self):
+        return False  # Persist readable progress lines in canonical evidence.
+
+    def __getattr__(self, name):
+        return getattr(self.console, name)
+
+
 def train(root: Path) -> int:
+    logs = root / "logs"
+    logs.mkdir(exist_ok=True)
+    with (logs / "stdout.log").open("a", buffering=1) as stdout_log, (logs / "stderr.log").open("a", buffering=1) as stderr_log:
+        with redirect_stdout(_ConsoleTee(sys.stdout, stdout_log)), redirect_stderr(_ConsoleTee(sys.stderr, stderr_log)):
+            return _train(root)
+
+
+def _train(root: Path) -> int:
     context = _context(root)
     store = TrainingRunStore(root.parent.parent.parent, training_runs_root=root.parent)
     adapter = OpenVlaTrainerAdapter()
@@ -51,7 +80,12 @@ def finalize(root: Path, model_data_root: Path) -> int:
     context = _context(root)
     try:
         result = CheckpointBundleStore(model_data_root).finalize(context)
-        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        print(
+            "ovlab checkpoint finalized: "
+            f"status={result.get('status', 'completed')} "
+            f"run={result.get('run_id', context.run_id)} "
+            f"checkpoint={result.get('checkpoint_id', 'unknown')}"
+        )
         return 0
     except Exception as exc:
         TrainingRunStore(model_data_root, training_runs_root=root.parent).fail(context, exc)

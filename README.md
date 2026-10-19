@@ -99,3 +99,7 @@ conda run -n ovlab-tester deploy/scripts/test.sh
 ```
 
 GPU and policy-specific smoke tests remain isolated in their corresponding policy environments.
+
+The experimental QuIC integration, portable method, isolated images and
+supported migration scope are described in [QuIC migration](docs/QUIC_MIGRATION.md).
+Shared training variants use the [ablation workflow](docs/ABLATIONS.md).

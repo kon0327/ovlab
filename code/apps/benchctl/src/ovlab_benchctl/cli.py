@@ -114,7 +114,7 @@ def _parser() -> argparse.ArgumentParser:
     deploy_run = deploy_commands.add_parser("run", help="run one experiment through Docker Compose")
     deploy_run.add_argument("experiment")
     deploy_run.add_argument(
-        "--profile", choices=("openvla", "oft"),
+        "--profile", choices=("openvla", "oft", "quic"),
         help="override deployment.profile from the experiment",
     )
     deploy_run.add_argument(
@@ -304,7 +304,18 @@ def _parser() -> argparse.ArgumentParser:
     train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
     train_run.add_argument("--profile", required=True)
     train_run.add_argument("--allow-dataset-download", action="store_true")
+    for command in (train_validate, train_plan, train_run):
+        command.add_argument("--fit-action-normalization", action="store_true", help="fit frozen action q01/q99 from training episodes only (requires dataset.partition)")
     _output_options(train_run)
+    ablate = train_commands.add_parser("ablate", help="validate, resolve, or materialize a shared ablation suite")
+    ablate_commands = ablate.add_subparsers(dest="ablate_command", required=True)
+    for operation in ("validate", "plan", "materialize", "run"):
+        command = ablate_commands.add_parser(operation, help=f"{operation} an ablation suite of ordinary training profiles")
+        command.add_argument("--suite", required=True)
+        command.add_argument("--fit-action-normalization", action="store_true", help="fit one consistent train-only action normalization contract across all variants")
+        if operation in {"materialize", "run"}:
+            command.add_argument("--output", required=True, help="new directory for immutable resolved profiles and plan")
+        _output_options(command)
     for command_name in ("status", "inspect", "verify"):
         command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
         command.add_argument(
@@ -350,7 +361,7 @@ def _command_name(args) -> str:
     for name in (
         "config_command", "policy_command", "service_command", "deploy_command",
         "metrics_command", "report_command", "export_command",
-        "data_command", "dataset_command", "train_command", "checkpoint_command",
+        "data_command", "dataset_command", "train_command", "ablate_command", "checkpoint_command",
     ):
         value = getattr(args, name, None)
         if value:
@@ -574,6 +585,25 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("execution plan", ("execution_plan_id",)),
         ("estimated VRAM GiB", ("execution.estimated_vram_gib",)),
         ("network", ("execution.network",)),
+    ),
+    "train ablate validate": (
+        ("valid", ("valid",)), ("suite", ("suite_id",)),
+        ("variants", ("variant_count",)), ("ablation", ("ablation_id",)),
+        ("model initialized", ("model_initialized",)), ("network used", ("network_used",)),
+    ),
+    "train ablate plan": (
+        ("suite", ("suite_id",)), ("variants", ("variant_count",)),
+        ("ablation", ("ablation_id",)),
+        ("partition contract", ("scientific.partition_contract_id",)),
+    ),
+    "train ablate materialize": (
+        ("suite", ("suite_id",)), ("variants", ("variant_count",)),
+        ("ablation", ("ablation_id",)), ("output", ("output",)),
+    ),
+    "train ablate run": (
+        ("suite", ("suite_id",)), ("status", ("status",)),
+        ("ablation", ("ablation_id",)), ("shared split", ("shared_manifest_id",)),
+        ("output", ("output",)),
     ),
     "train run": (
         ("status", ("status", "result.status")), ("run", ("run_id",)),
@@ -919,16 +949,24 @@ def _dispatch(args):
         return app.dataset_verify(args.dataset_id), args.json, None
     if args.command == "train":
         app = _application()
+        if args.train_command == "ablate":
+            return app.train_ablate(
+                args.suite, resolve=args.ablate_command != "validate",
+                output=args.output if args.ablate_command in {"materialize", "run"} else None,
+                execute=args.ablate_command == "run",
+                fit_action_normalization=args.fit_action_normalization,
+            ), args.json, None
         if args.train_command == "profiles":
             return app.train_profiles(), args.json, None
         if args.train_command == "validate":
-            return app.train_validate(args.profile), args.json, None
+            return app.train_validate(args.profile, fit_action_normalization=args.fit_action_normalization), args.json, None
         if args.train_command == "plan":
-            return app.train_plan(args.profile), args.json, None
+            return app.train_plan(args.profile, fit_action_normalization=args.fit_action_normalization), args.json, None
         if args.train_command == "run":
             from .training_deployment import TrainingDeployment
             return TrainingDeployment(_repository_root()).run(
                 args.profile, allow_dataset_download=args.allow_dataset_download,
+                fit_action_normalization=args.fit_action_normalization,
             ), args.json, None
         if args.train_command == "status":
             return app.train_status(args.run_id), args.json, None

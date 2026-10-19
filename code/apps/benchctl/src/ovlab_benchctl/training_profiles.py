@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import math
 from pathlib import Path
 from typing import Mapping
 
@@ -49,7 +50,7 @@ def _number(value: object, label: str, minimum: float, maximum: float, *, lower_
     if type(value) not in {int, float}:
         raise TrainingProfileError(f"{label} must be numeric")
     result = float(value)
-    if (result <= minimum if lower_open else result < minimum) or result > maximum:
+    if not math.isfinite(result) or (result <= minimum if lower_open else result < minimum) or result > maximum:
         bracket = "(" if lower_open else "["
         raise TrainingProfileError(f"{label} must be in {bracket}{minimum}, {maximum}]")
     return result
@@ -77,11 +78,13 @@ class TrainingProfile:
 
         trainer = _mapping(document["trainer"], "trainer")
         _keys(trainer, {"id", "implementation"}, {"id", "implementation"}, "trainer")
-        if trainer != {"id": "openvla", "implementation": "openvla-reference"}:
-            raise TrainingProfileError("Gate I registers only trainer openvla/openvla-reference")
+        if trainer.get("id") != "openvla" or trainer.get("implementation") not in {"openvla-reference", "openvla-quic"}:
+            raise TrainingProfileError("trainer must select openvla-reference or openvla-quic")
 
         model = _mapping(document["model"], "model")
-        _keys(model, {"base_checkpoint", "revision", "processor"}, {"base_checkpoint", "revision", "processor"}, "model")
+        _keys(model, {"base_checkpoint", "revision", "processor", "adaptation_state"}, {"base_checkpoint", "revision", "processor"}, "model")
+        if model.get("adaptation_state", "none") not in {"none", "merged"}:
+            raise TrainingProfileError("model.adaptation_state must be none or merged; active adapters are unsupported")
         if not isinstance(model["base_checkpoint"], str) or not model["base_checkpoint"]:
             raise TrainingProfileError("model.base_checkpoint must be a logical resource ID")
         if Path(model["base_checkpoint"]).is_absolute():
@@ -92,11 +95,14 @@ class TrainingProfile:
             raise TrainingProfileError("Gate I OpenVLA profiles require processor: inherited")
 
         dataset = _mapping(document["dataset"], "dataset")
-        _keys(dataset, {"ref", "preparation", "split"}, {"ref", "preparation", "split"}, "dataset")
+        _keys(dataset, {"ref", "preparation", "split", "partition"}, {"ref", "preparation", "split"}, "dataset")
         if not isinstance(dataset["ref"], str) or not dataset["ref"] or Path(dataset["ref"]).is_absolute():
             raise TrainingProfileError("dataset.ref must be a portable logical or immutable dataset ID")
         if dataset["preparation"] != "openvla-rlds" or dataset["split"] != "train":
             raise TrainingProfileError("OpenVLA Gate I requires preparation openvla-rlds and split train")
+        if "partition" in dataset:
+            from .training_data import validate_partition
+            validate_partition(dataset["partition"])
 
         training = _mapping(document["training"], "training")
         _keys(
@@ -105,6 +111,7 @@ class TrainingProfile:
                 "mode", "peft", "seed", "max_steps", "per_device_batch_size",
                 "gradient_accumulation_steps", "learning_rate", "precision",
                 "gradient_checkpointing", "quantization",
+                "validation_batches", "normalization",
             },
             {
                 "mode", "seed", "max_steps", "per_device_batch_size",
@@ -120,6 +127,8 @@ class TrainingProfile:
             raise TrainingProfileError("training.mode must be full or peft")
         _integer(training["seed"], "training.seed", 0, 2**63 - 1)
         _integer(training["max_steps"], "training.max_steps", 1, 10_000_000)
+        if "validation_batches" in training:
+            _integer(training["validation_batches"], "training.validation_batches", 1, 1_000_000)
         _integer(training["per_device_batch_size"], "training.per_device_batch_size", 1, 4096)
         _integer(training["gradient_accumulation_steps"], "training.gradient_accumulation_steps", 1, 65536)
         _number(training["learning_rate"], "training.learning_rate", 0.0, 1.0, lower_open=True)
@@ -136,16 +145,38 @@ class TrainingProfile:
             if "peft" not in training:
                 raise TrainingProfileError("peft training requires training.peft")
             peft = _mapping(training["peft"], "training.peft")
-            _keys(peft, {"method", "target_modules", "rank", "alpha", "dropout"}, {"method", "target_modules", "rank", "alpha", "dropout"}, "training.peft")
-            if peft["method"] != "lora":
-                raise TrainingProfileError("Gate I registers only the lora PEFT method; QuIC belongs to Gate J")
-            if peft["target_modules"] != ["all-linear"]:
-                raise TrainingProfileError("OpenVLA reference LoRA requires target_modules: [all-linear]")
-            rank = _integer(peft["rank"], "training.peft.rank", 1, 256)
-            alpha = _integer(peft["alpha"], "training.peft.alpha", 1, 256)
-            if alpha != min(rank, 16):
-                raise TrainingProfileError("OpenVLA reference LoRA alpha must equal min(rank, 16)")
-            _number(peft["dropout"], "training.peft.dropout", 0.0, 1.0)
+            if peft.get("method") == "quic":
+                from .training_quic import validate_quic_settings
+                validate_quic_settings(peft)
+                if trainer["implementation"] != "openvla-quic":
+                    raise TrainingProfileError("QuIC belongs to Gate J: select trainer implementation openvla-quic")
+                if "partition" not in dataset or "validation_batches" not in training:
+                    raise TrainingProfileError("QuIC requires dataset.partition and training.validation_batches")
+                normalization = _mapping(training.get("normalization"), "training.normalization")
+                _keys(normalization, {"unnorm_key"}, {"unnorm_key"}, "training.normalization")
+                if not isinstance(normalization["unnorm_key"], str) or not normalization["unnorm_key"]:
+                    raise TrainingProfileError("training.normalization.unnorm_key must select host statistics")
+            else:
+                _keys(peft, {"method", "target_modules", "rank", "alpha", "dropout"}, {"method", "target_modules", "rank", "alpha", "dropout"}, "training.peft")
+                if peft["method"] != "lora":
+                    raise TrainingProfileError("supported PEFT methods are lora and quic")
+                if peft["target_modules"] != ["all-linear"]:
+                    raise TrainingProfileError("OpenVLA reference LoRA requires target_modules: [all-linear]")
+                rank = _integer(peft["rank"], "training.peft.rank", 1, 256)
+                alpha = _integer(peft["alpha"], "training.peft.alpha", 1, 256)
+                if alpha != min(rank, 16):
+                    raise TrainingProfileError("OpenVLA reference LoRA alpha must equal min(rank, 16)")
+                _number(peft["dropout"], "training.peft.dropout", 0.0, 1.0)
+
+        is_quic = mode == "peft" and training.get("peft", {}).get("method") == "quic"
+        if not is_quic and trainer["implementation"] != "openvla-reference":
+            raise TrainingProfileError("openvla-quic trainer requires method: quic")
+        if not is_quic and "normalization" in training:
+            raise TrainingProfileError("explicit host normalization is currently supported by the QuIC trainer")
+        if not is_quic and "partition" in dataset and dataset["partition"].get("action_normalization", "host") != "train-q99":
+            raise TrainingProfileError("reference training partitions require action_normalization: train-q99")
+        if "validation_batches" in training and "partition" not in dataset:
+            raise TrainingProfileError("validation_batches requires an explicit dataset.partition")
 
         checkpointing = _mapping(document["checkpointing"], "checkpointing")
         _keys(checkpointing, {"save_strategy", "save_optimizer_state", "output_kind"}, {"save_strategy", "save_optimizer_state", "output_kind"}, "checkpointing")
@@ -182,6 +213,19 @@ def _checkpoint_candidates(model_data_root: Path, repo_id: str, resource_id: str
     global_snapshot = hub / ("models--" + repo_id.replace("/", "--")) / "snapshots" / revision
     managed = model_data_root / "checkpoints" / "huggingface" / resource_id / revision
     return (("global-huggingface-cache", global_snapshot), ("ovlab-managed-cache", managed))
+
+
+def with_fitted_action_normalization(profile: TrainingProfile, enabled: bool) -> TrainingProfile:
+    """Resolve the CLI override into scientific configuration without mutation."""
+    if not enabled:
+        return profile
+    from copy import deepcopy
+    document = deepcopy(dict(profile.document))
+    partition = document["dataset"].get("partition")
+    if not isinstance(partition, dict):
+        raise TrainingProfileError("--fit-action-normalization requires dataset.partition; validation episodes must be excluded")
+    partition["action_normalization"] = "train-q99"
+    return TrainingProfile.from_document(document)
 
 
 class TrainingPlanner:
@@ -239,6 +283,11 @@ class TrainingPlanner:
     def _estimated_vram(profile: TrainingProfile) -> float:
         training = profile.document["training"]
         assert isinstance(training, dict)
+        if training.get("peft", {}).get("method") == "quic":
+            # The source's bounded BF16 QuIC runs fit a 24 GiB RTX4090.
+            # This is a planning heuristic, not a measured bound for arbitrary
+            # targets/batch sizes; the trainer also enforces its runtime cap.
+            return 23.0 if training["precision"] == "bf16" else 45.0
         # Published OpenVLA reference guidance reports >=27 GiB for non-quantized LoRA.
         return 60.0 if training["mode"] == "full" else 27.0
 
@@ -272,7 +321,7 @@ class TrainingPlanner:
         scientific = {
             "schema_version": TRAINING_PLAN_SCHEMA,
             "profile": profile.document,
-            "trainer": {"id": "openvla-reference", "version": OPENVLA_TRAINER_VERSION},
+            "trainer": {"id": profile.document["trainer"]["implementation"], "version": OPENVLA_TRAINER_VERSION},
             "trainer_contract": {
                 "model_class": "OpenVLAForActionPrediction",
                 "processor": "PrismaticProcessor inherited from base checkpoint",
@@ -308,11 +357,23 @@ class TrainingPlanner:
                 "count_status": "measured during trainer initialization",
             },
         }
+        if "partition" in profile.document["dataset"]:
+            scientific["dataset"]["partition"] = profile.document["dataset"]["partition"]
+            scientific["trainer_contract"]["validation"] = "held-out whole-episode SHA256 partition; teacher-forced action-token diagnostics"
+        if training.get("peft", {}).get("method") == "quic":
+            scientific["parameter_selection"]["trainable"] = "QuIC adapter parameters on explicit resolved dense Linear targets"
+            scientific["trainer_contract"]["action_semantics"]["normalization"] = (
+                "q01/q99 fitted only on selected training frames, frozen for validation/inference"
+                if profile.document["dataset"]["partition"].get("action_normalization", "host") == "train-q99"
+                else "frozen host action statistics selected by training.normalization.unnorm_key"
+            )
+            scientific["trainer_contract"]["predict_stop_token"] = False
         scientific_id = identity("training-plan", scientific, 32)
         execution = {
             "scientific_training_id": scientific_id,
             "resources": resources,
             "estimated_vram_gib": estimated_vram,
+            "vram_estimate_qualification": "planning heuristic; actual peak depends on targets, images, batch size and checkpointing; GPU free memory is not reserved",
             "image_identity": image_identity,
             "model_source_kind": model["source_kind"],
             "model_host_path": model["host_path"],

@@ -95,8 +95,9 @@ training; without it a missing dataset is an actionable error.
 Portable YAML profiles live in `configs/training/` and use
 `ovlab.training-profile/v1`. They contain immutable logical model and dataset
 selectors, a seed, bounded hyperparameters, precision, training mode and output
-semantics. Absolute host paths, shell commands, unknown keys and unresolved
-aliases are rejected.
+semantics. Relative `extends` composes a shared base with variant overrides; mappings
+merge and sequences replace. Absolute host paths, shell commands, unknown keys
+and unresolved aliases are rejected.
 
 ```bash
 ./ovlab train profiles
@@ -107,20 +108,68 @@ aliases are rejected.
 Validation does not resolve large assets. Planning verifies local dataset and
 base-checkpoint bytes, negotiates capabilities and evaluates resources, but
 does not initialize OpenVLA, allocate CUDA or download anything. The generic
-schema represents `full` and `peft`; Gate I registers unquantized LoRA as its
-only PEFT method. QuIC, QLoRA and quantized training are deliberately rejected.
+schema represents `full` and `peft`, including unquantized LoRA and the
+experimental `quic` method. QuIC selects the `openvla-quic` trainer and the
+independent `quic-petf-vla` method dependency. QLoRA and quantized training
+remain unsupported.
 
 The OpenVLA reference LoRA recipe uses `target_modules: [all-linear]`, an
 explicit rank, `alpha: min(rank, 16)`, BF16 or FP32 and an unmerged adapter
 output. Reference guidance estimates at least 27 GiB for unquantized LoRA;
 planning fails if either the profile limit or detected GPU memory is lower.
 
+## QuIC profiles and ablations
+
+The QuIC smoke profile uses a dense, suite-finetuned LIBERO-10 host with its
+inherited action statistics, explicit deterministic episode train/validation
+partition, and adapter-only output:
+
+```bash
+./ovlab train validate --profile configs/training/openvla-libero10-quic-smoke.yaml
+./ovlab train plan --profile configs/training/openvla-libero10-quic-smoke.yaml
+./ovlab train run --profile configs/training/openvla-libero10-quic-smoke.yaml
+./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+  --output /tmp/quic-placement-run
+```
+
+Suites validate declared factors and shared host/data/training invariants,
+materialize ordinary resolved profiles, execute through the existing isolated
+owner and compare immutable split/normalization manifests across child runs.
+See [`docs/ABLATIONS.md`](docs/ABLATIONS.md) for plan/materialize commands, data
+selection, source-workflow differences, and the vanilla normalization sidecar
+limitation. A three-step smoke verifies wiring, not training quality.
+
+Every explicit partition splits immutable TFDS episode IDs before frame
+sampling. Training and validation cannot share an episode. QuIC defaults to frozen selected
+host action statistics. `--fit-action-normalization` on `train validate|plan|run`
+or any `train ablate` operation selects training-only q01/q99 fitting before
+planning. It requires a partition, applies consistently to every suite variant,
+changes the scientific identity, and leaves source profiles unchanged. The
+resolved YAML alternative is `dataset.partition.action_normalization: train-q99`;
+reference full/LoRA profiles also support this mode. Fitted statistics exclude
+validation episodes, stay frozen throughout the run, and accompany the QuIC
+adapter through reload and inference.
+Teacher-forced validation remains separate from benchmark rollout evaluation.
+
+```bash
+./ovlab train run --profile configs/training/openvla-libero10-quic-smoke.yaml \
+  --fit-action-normalization
+./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+  --fit-action-normalization --output /tmp/quic-placement-fitted-run
+```
+
+Training optimizer steps, QuIC teacher-forced validation, and rollout task/episode
+progress write to stderr. `OVLAB_PROGRESS=off` disables the console tracker;
+JSON stdout and canonical metrics remain available. Set the same variable on
+the relevant container/service environment when invoking a worker directly.
+
 ## Isolated execution
 
 Build the purpose-specific images after changing packaged source or locks:
 
 ```bash
-bash deploy/scripts/build-images.sh dataset training-openvla reporting
+bash deploy/scripts/build-images.sh dataset training-openvla training-openvla-quic reporting
 ```
 
 Then start a bounded run:
@@ -137,6 +186,19 @@ finalizer reopens and validates the staged safetensors, creates the manifest
 last, and atomically publishes the bundle. The isolated reporting image then
 reads the finalized training run read-only and publishes its performance
 report. Base weights are never modified and LoRA weights remain unmerged.
+
+Before starting the trainer, OVLAB's checkpoint resolver prepares a verified
+managed snapshot with hardlinks, so Hugging Face blob symlinks cannot become
+broken references inside the isolated mount. Planning stays read-only. The
+mounted run keeps its canonical run ID in both the trainer and finalizer.
+Run directories explicitly use shared-group permissions (`2770`, with `660`
+for append-only metrics/events), independently of the host umask. Workers
+receive the actual groups of their writable mounts; running as root or making
+the run directory world-writable is unnecessary.
+When finalization crosses bind mounts, the finalizer copies staged files after
+an `EXDEV` link failure and publishes them through the same verified, atomic
+checkpoint path. Worker-owned evidence receives shared-group read access,
+including private Safetensors staging files, so host-side verification works.
 
 Inspect canonical evidence offline:
 

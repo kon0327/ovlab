@@ -4,6 +4,24 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repository_root"
 
+roles=("$@")
+for requested in "${roles[@]}"; do
+  case "$requested" in
+    benchmark|reporting|dataset|training-openvla|training-openvla-quic|policy-openvla|policy-openvla-oft|policy-openvla-quic) ;;
+    *) printf 'unknown image role: %s\n' "$requested" >&2; exit 2 ;;
+  esac
+done
+if [[ "${#roles[@]}" -eq 0 ]]; then
+  python deploy/scripts/prepare_openvla_quic.py --check
+else
+  for requested in "${roles[@]}"; do
+    if [[ "$requested" == "policy-openvla-quic" || "$requested" == "training-openvla-quic" ]]; then
+      python deploy/scripts/prepare_openvla_quic.py --check
+      break
+    fi
+  done
+fi
+
 manifest="$(mktemp)"
 trap 'rm -f "$manifest"' EXIT
 python deploy/scripts/source_manifest.py --root "$repository_root" --output "$manifest"
@@ -48,14 +66,6 @@ selected() {
   return 1
 }
 
-roles=("$@")
-for requested in "${roles[@]}"; do
-  case "$requested" in
-    benchmark|reporting|dataset|training-openvla|policy-openvla|policy-openvla-oft) ;;
-    *) printf 'unknown image role: %s\n' "$requested" >&2; exit 2 ;;
-  esac
-done
-
 if [[ "${#roles[@]}" -eq 0 ]] || selected benchmark; then
   build_role benchmark deploy/docker/Dockerfile.benchmark ovlab-benchmark-libero:local \
     deploy/locks/benchmark.pylock.toml deploy/locks/benchmark.requirements.txt
@@ -82,5 +92,15 @@ fi
 if [[ "${#roles[@]}" -eq 0 ]] || selected policy-openvla-oft; then
   build_role policy-openvla-oft deploy/docker/Dockerfile.openvla-oft ovlab-policy-openvla-oft:local \
     deploy/locks/openvla-oft.pylock.toml deploy/locks/openvla-oft.requirements.txt \
+    deploy/locks/flash-attn.pylock.toml deploy/locks/flash-attn.requirements.txt
+fi
+if [[ "${#roles[@]}" -eq 0 ]] || selected policy-openvla-quic; then
+  build_role policy-openvla-quic deploy/docker/Dockerfile.openvla-quic ovlab-policy-openvla-quic:local \
+    deploy/locks/quic-openvla.pylock.toml deploy/locks/quic-openvla.requirements.txt \
+    deploy/locks/flash-attn.pylock.toml deploy/locks/flash-attn.requirements.txt
+fi
+if [[ "${#roles[@]}" -eq 0 ]] || selected training-openvla-quic; then
+  build_role training-openvla-quic deploy/docker/Dockerfile.training-openvla-quic ovlab-training-openvla-quic:local \
+    deploy/locks/quic-openvla.pylock.toml deploy/locks/quic-openvla.requirements.txt \
     deploy/locks/flash-attn.pylock.toml deploy/locks/flash-attn.requirements.txt
 fi

@@ -38,7 +38,7 @@ def test_unknown_field_and_quic_settings_are_rejected():
         TrainingProfile.from_document(value)
     value = _lora()
     value["training"]["peft"]["method"] = "quic"
-    with pytest.raises(TrainingProfileError, match="Gate J"):
+    with pytest.raises(TrainingProfileError, match="unknown fields"):
         TrainingProfile.from_document(value)
 
 

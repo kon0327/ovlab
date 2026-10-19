@@ -24,3 +24,15 @@ services:
         source: ${OVLAB_X11_SOCKET:-/tmp/.X11-unix}
         target: /tmp/.X11-unix
         read_only: true
+
+  benchmark-quic:
+    environment:
+      OVLAB_EXECUTION_PROFILE: profiles/libero-playground-glfw.yaml
+      MUJOCO_GL: glfw
+      MUJOCO_EGL_DEVICE_ID: !reset null
+      DISPLAY: ${OVLAB_DISPLAY:-:0}
+    volumes:
+      - type: bind
+        source: ${OVLAB_X11_SOCKET:-/tmp/.X11-unix}
+        target: /tmp/.X11-unix
+        read_only: true

@@ -1,7 +1,7 @@
 """Contract-only QuIC wrapper API."""
 
 from .adapter import OpenVLAQuICAdapter, OpenVLAQuICPEFTAdapter, OpenVLAQuICWCAdapter
-from .config import descriptor_from_document
+from .config import OpenVlaQuICSettings, descriptor_from_document
 from .descriptors import (
     EXTERNAL_QUIC_COMMIT, QuICImplementationStatus, QuICMethodDescriptor,
     QuICPEFTAccounting, QuICPlacementEntry, QuICPlacementManifest, QuICProfileDefinition,
@@ -14,7 +14,7 @@ from .errors import (
 )
 from .provider import QuICCapabilityDeclaration, QuICExternalProvider, QuICProviderLoader
 from .registration import QUIC_ADAPTER_REGISTRY, adapter_class_for
-from .service import create_runtime_adapter
+from .service import create_policy_adapter, create_runtime_adapter, descriptor_from_settings
 from .source import (
     COMPOUND_PEFT_ARCHIVE_SHA256, COMPOUND_PEFT_FILE_COUNT,
     COMPOUND_PEFT_MANIFEST_SHA256, COMPOUND_PEFT_PACKAGE_VERSION,
@@ -24,6 +24,7 @@ from .source import (
 )
 
 __all__ = [
+    "OpenVlaQuICSettings", "create_policy_adapter", "descriptor_from_settings",
     "EXTERNAL_QUIC_COMMIT", "OpenVLAQuICAdapter", "OpenVLAQuICPEFTAdapter",
     "OpenVLAQuICWCAdapter", "QUIC_ADAPTER_REGISTRY", "QuICCapabilityDeclaration",
     "COMPOUND_PEFT_ARCHIVE_SHA256", "COMPOUND_PEFT_FILE_COUNT",

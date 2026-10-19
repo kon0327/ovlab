@@ -48,6 +48,7 @@ class QuICProfileId(str, Enum):
     QP2 = "QP2"
     QP3 = "QP3"
     QP4 = "QP4"
+    CUSTOM = "custom"
 
 
 def _plain(value):
@@ -100,7 +101,7 @@ class QuICProfileDefinition:
 
     def __post_init__(self) -> None:
         if not isinstance(self.profile_id, QuICProfileId):
-            raise QuICDescriptorError("profile_id must be QP0 through QP4")
+            raise QuICDescriptorError("profile_id must be custom or QP0 through QP4")
         supplied = self.definition_version is not None or self.definition_hash is not None
         if supplied and (self.definition_version is None or self.definition_hash is None):
             raise QuICDescriptorError("profile version and hash must be supplied together")
@@ -347,8 +348,8 @@ class QuICMethodDescriptor:
         if self.variant is QuICVariant.PEFT:
             if self.source_import_status != "present":
                 raise QuICDescriptorError("QuIC-PEFT requires the registered legacy source intake")
-            if self.generic_compound_backend_status != "legacy_reference_available":
-                raise QuICDescriptorError("QuIC-PEFT generic backend must be a legacy reference")
+            if self.generic_compound_backend_status not in {"legacy_reference_available", "portable_determinant_backend"}:
+                raise QuICDescriptorError("QuIC-PEFT generic backend identity is unsupported")
         elif self.implementation_status is QuICImplementationStatus.SKELETON:
             if self.source_import_status != "absent" or self.generic_compound_backend_status != "not_applicable":
                 raise QuICDescriptorError("Gate F QuIC-WC must not reuse the compound-PEFT source")
@@ -506,7 +507,15 @@ class QuICMethodDescriptor:
 
     @property
     def scientific_hash(self) -> str:
-        return _hash(self.canonical_dict())
+        identity = self.canonical_dict()
+        if self.generic_compound_backend_status == "portable_determinant_backend":
+            # The exact bytes and preprocessing are scientific identity; local
+            # host/container paths and runtime hardware belong to execution.
+            identity["artifact_identity"].pop("directory", None)
+            host = identity["base_model_identity"].get("host", {})
+            for key in ("checkpoint", "device", "dtype", "attention"):
+                host.pop(key, None)
+        return _hash(identity)
 
     def execution_hash(
         self,

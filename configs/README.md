@@ -74,6 +74,27 @@ Docker deployment resolves global Hugging Face cache, local override, and
 OVLAB-managed cache in that order. The policy always sees the selected artifact
 at `/checkpoints/resolved/<checkpoint-id>` and cannot observe its host location.
 
-Only OpenVLA Vanilla currently has a complete policy configuration. LoRA, OFT,
-and QuIC experiment files will be added together with their owner settings and
-adapters rather than being represented by non-runnable placeholders.
+Model-family policy owners validate their own deployment and artifact contracts.
+QuIC adapter-only training and placement studies live under `training/` and
+`ablations/`; benchmark experiments continue to select policies and benchmarks
+independently.
+
+## Training and ablation profiles
+
+`training/` uses `ovlab.training-profile/v1` with the same explicit relative
+`extends` merge rules. `ablations/` uses `ovlab.training-ablation/v1` and references
+a common training base plus ordinary variant profiles. Declared method factor
+paths may differ; checkpoint/data identities, episode split, normalization, seed,
+optimizer budget and resource contract must remain shared.
+
+```bash
+./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab train ablate materialize --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+  --output /tmp/quic-placement-plan
+```
+
+Materialization resolves and verifies local data/model resources and creates a
+new immutable plan plus profiles. `train ablate run` executes those profiles
+through the normal isolated training/checkpoint/report lifecycle. See
+[`../docs/ABLATIONS.md`](../docs/ABLATIONS.md) for the episode partition contract
+and source-project migration audit.

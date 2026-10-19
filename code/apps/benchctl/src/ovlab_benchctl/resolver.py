@@ -29,6 +29,7 @@ from ovlab_openvla_vanilla import (
     InferenceSynchronization, ModelDType, ModelQuantization, OpenVlaVanillaSettings,
 )
 from ovlab_openvla_oft import OpenVlaOftArtifact, OpenVlaOftSettings
+from ovlab_openvla_quic import OpenVlaQuICSettings
 from ovlab_runner import (
     ActionExecutionMode, ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
     MetricAvailabilityPolicy, TraceRecordingPolicy,
@@ -230,7 +231,15 @@ class ConfigResolver:
         self._cross_validate_refs(experiment_doc, components, action_path, action_spec)
         protocol = self._protocol(components["protocol"])
         benchmark = self._benchmark(components["benchmark"], protocol, renderer)
-        policy = self._policy(components["policy"], components["benchmark"], action_spec, resolved_checkpoints, devices)
+        quic_adapter_path = None
+        if components["policy"]["type"] == "openvla_quic":
+            configured_path = components["policy"]["settings"]["quic"]["adapter_path"]
+            adapter_value = values.get("OVLAB_QUIC_ADAPTER_PATH", configured_path)
+            candidate = Path(adapter_value).expanduser()
+            quic_adapter_path = str((candidate if candidate.is_absolute() else self.repository_root / candidate).resolve())
+            resources["quic_adapter_path"] = quic_adapter_path
+        policy = self._policy(components["policy"], components["benchmark"], action_spec, resolved_checkpoints, devices,
+                              quic_adapter_path=quic_adapter_path)
         metrics = self._metrics(components["metrics"])
         artifact = self._artifacts(components["artifacts"], paths)
         reporting = ReportingSettings(**experiment_doc.get("reporting", {}))
@@ -242,6 +251,10 @@ class ConfigResolver:
             raise ConfigCompatibilityError("LiberoBenchmarkAdapter always exposes its declared privileged signal registry")
 
         scientific_components = deepcopy(components)
+        if components["policy"]["type"] == "openvla_quic":
+            # Host/container filesystem layout is execution identity; the two
+            # explicit content digests bind the scientific adapter identity.
+            scientific_components["policy"]["settings"]["quic"].pop("adapter_path")
         scientific_components["policy"]["settings"]["action"]["resolved_action_interface"] = action_doc
         scientific = {
             "schema_version": SCHEMA_VERSION, "kind": "scientific_experiment",
@@ -254,8 +267,8 @@ class ConfigResolver:
             resolved_profile = values.get(
                 "OVLAB_DEPLOYMENT_PROFILE", configured_deployment["profile"]
             )
-            if resolved_profile not in ("openvla", "oft"):
-                raise ConfigSchemaError("OVLAB_DEPLOYMENT_PROFILE must be one of: openvla, oft")
+            if resolved_profile not in ("openvla", "oft", "quic"):
+                raise ConfigSchemaError("OVLAB_DEPLOYMENT_PROFILE must be one of: openvla, oft, quic")
             execution["deployment"] = {
                 "configured": configured_deployment,
                 "resolved": {
@@ -278,6 +291,7 @@ class ConfigResolver:
                 "openvla_vanilla": "openvla",
                 "openvla_lora_merged": "openvla",
                 "openvla_oft": "oft",
+                "openvla_quic": "quic",
             }.get(components["policy"]["type"])
             if expected_profile is None:
                 raise ConfigCompatibilityError(
@@ -311,7 +325,7 @@ class ConfigResolver:
         elif policy_input["camera"] != benchmark_camera:
             raise ConfigCompatibilityError("policy input camera is not supplied by the benchmark observation interface")
         if components["benchmark"]["type"] == "mock":
-            expected_proprio = components["policy"]["settings"]["input"]["proprioception"]
+            expected_proprio = components["policy"]["settings"]["input"].get("proprioception")
             if expected_proprio is not None and expected_proprio != observation["proprioception"]:
                 raise ConfigCompatibilityError("policy proprioception is not supplied by the benchmark observation interface")
 
@@ -380,7 +394,7 @@ class ConfigResolver:
         )
 
     @staticmethod
-    def _policy(doc, benchmark_doc, action_spec, checkpoints, devices):
+    def _policy(doc, benchmark_doc, action_spec, checkpoints, devices, *, quic_adapter_path=None):
         settings = doc["settings"]
         if doc["type"] == "mock":
             return MockPolicySettings(
@@ -398,6 +412,22 @@ class ConfigResolver:
         source = lambda item: OpenVlaModelSource(
             item["source"], item["revision"], item["expected_sha256"], item.get("local_path")
         )
+        if doc["type"] == "openvla_quic":
+            if settings["checkpoint_id"] != settings["processor_id"]:
+                raise ConfigCompatibilityError("QuIC model and processor resources must be identical")
+            quic = settings["quic"]
+            return OpenVlaQuICSettings(
+                model=source(model), unnorm_key=settings["unnorm_key"],
+                adapter_path=quic_adapter_path or quic["adapter_path"], target_action_spec=action_spec,
+                adapter_manifest_sha256=quic["adapter_manifest_sha256"],
+                adapter_tensor_sha256=quic["adapter_tensor_sha256"],
+                canonical_camera_name=settings["input"]["camera"],
+                input_image_shape=(obs["height"], obs["width"], 3), device=device,
+                model_dtype=runtime["dtype"], attention_implementation=runtime["attention_implementation"] or "eager",
+                prompt_style=quic["prompt_style"], center_crop=quic["center_crop"],
+                adaptation_state=quic["adaptation_state"], action_codec=settings["action"]["codec"],
+                synchronize_inference=runtime["synchronize_inference"],
+            )
         if doc["type"] == "openvla_oft":
             if settings["checkpoint_id"] != settings["processor_id"]:
                 raise ConfigCompatibilityError("OFT model and processor resources must be identical")

@@ -78,7 +78,7 @@ def test_role_closures_do_not_cross_heavy_runtime_boundaries():
     assert "COPY external/" not in reporting
     assert "mujoco" not in reporting.lower()
     assert "resolved-checkpoint" not in reporting
-    assert "openvla-quic" not in COMPOSE.lower()
+    assert "COPY external/libero " not in _dockerfile("Dockerfile.openvla-quic")
 
 
 def test_oft_quantization_stack_pins_the_dispatch_compatible_accelerate_version():
@@ -99,7 +99,9 @@ def test_compose_is_socket_only_offline_and_least_privilege():
         ("policy-openvla", "benchmark-openvla"),
         ("benchmark-openvla", "policy-openvla-oft"),
         ("policy-openvla-oft", "benchmark-oft"),
-        ("benchmark-oft", "reporting"),
+        ("benchmark-oft", "policy-openvla-quic"),
+        ("policy-openvla-quic", "benchmark-quic"),
+        ("benchmark-quic", "reporting"),
         ("reporting", "export"),
         ("export", "dataset-acquire"),
         ("training-openvla", "checkpoint-finalizer"),
@@ -115,20 +117,20 @@ def test_compose_is_socket_only_offline_and_least_privilege():
     assert "OVLAB_DEPLOYMENT_MANIFEST_SHA256" in COMPOSE
     assert "OVLAB_CONTAINER_RUNTIME_VERSION" in COMPOSE
     assert "OVLAB_MOUNT_CONTRACT" in COMPOSE
-    assert COMPOSE.count("OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-") == 4
+    assert COMPOSE.count("OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-") == 6
     assert COMPOSE.count(
         "OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver"
-    ) == 4
+    ) == 6
     assert "service, health, --socket, /run/ovlab/policy.sock" in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?") == 2
+    assert COMPOSE.count("source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?") == 3
     assert "../../checkpoints" not in COMPOSE
-    assert COMPOSE.count("target: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}") == 2
+    assert COMPOSE.count("target: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}") == 3
     assert "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH" in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_DATASETS_PATH:?") == 2
+    assert COMPOSE.count("source: ${OVLAB_DATASETS_PATH:?") == 3
     assert "../../datasets" not in COMPOSE
     assert "target: /datasets\n        read_only: true" in COMPOSE
-    assert COMPOSE.count("${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver") == 4
-    assert COMPOSE.count("OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?") == 4
+    assert COMPOSE.count("${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver") == 6
+    assert COMPOSE.count("OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?") == 6
     assert "source: ${OVLAB_CONFIG_BUNDLE_PATH:?" in COMPOSE
     assert "target: /opt/ovlab/configs" in COMPOSE
     assert "config-bundle-ro" in COMPOSE
@@ -136,9 +138,9 @@ def test_compose_is_socket_only_offline_and_least_privilege():
 
 def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports():
     assert "OVLAB_RUNS_PATH" not in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 4
-    assert COMPOSE.count("target: /var/lib/ovlab/runs") == 4
-    assert COMPOSE.count("--output-root, /var/lib/ovlab/runs/evaluate") == 2
+    assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 5
+    assert COMPOSE.count("target: /var/lib/ovlab/runs") == 5
+    assert COMPOSE.count("--output-root, /var/lib/ovlab/runs/evaluate") == 3
     assert COMPOSE.count("target: /var/lib/ovlab/runs\n        read_only: true") == 2
     assert "OVLAB_DERIVED_ROOT" not in COMPOSE
     assert "/var/lib/ovlab/derived" not in COMPOSE
@@ -177,9 +179,9 @@ def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports():
     assert "runs_root: /var/lib/ovlab/runs" in profile
     benchmark = _dockerfile("Dockerfile.benchmark")
     assert "install -d -o 10001 -g 10001 -m 0700 /run/ovlab /var/lib/ovlab/runs" in benchmark
-    assert COMPOSE.count("OVLAB_POSTPROCESSING_MODE: external") == 2
-    benchmark_services = COMPOSE.split("  benchmark-openvla:\n", 1)[1].split("  policy-openvla-oft:\n", 1)[0] + COMPOSE.split("  benchmark-oft:\n", 1)[1].split("  reporting:\n", 1)[0]
-    assert benchmark_services.count("stop_grace_period: 5m") == 2
+    assert COMPOSE.count("OVLAB_POSTPROCESSING_MODE: external") == 3
+    benchmark_services = COMPOSE.split("  benchmark-openvla:\n", 1)[1].split("  policy-openvla-oft:\n", 1)[0] + COMPOSE.split("  benchmark-oft:\n", 1)[1].split("  policy-openvla-quic:\n", 1)[0] + COMPOSE.split("  benchmark-quic:\n", 1)[1].split("  reporting:\n", 1)[0]
+    assert benchmark_services.count("stop_grace_period: 5m") == 3
     assert "/var/lib/ovlab/derived" not in benchmark_services
     assert "/var/lib/ovlab/exports" not in benchmark_services
 
@@ -325,10 +327,10 @@ def test_benchmark_renderer_is_selected_at_runtime_and_libero_paths_are_portable
 
 
 def test_glfw_overlay_requires_a_display_and_removes_egl_device_configuration():
-    assert GLFW_COMPOSE.count("OVLAB_EXECUTION_PROFILE: profiles/libero-playground-glfw.yaml") == 2
-    assert GLFW_COMPOSE.count("MUJOCO_GL: glfw") == 2
-    assert GLFW_COMPOSE.count("MUJOCO_EGL_DEVICE_ID: !reset null") == 2
-    assert GLFW_COMPOSE.count("target: /tmp/.X11-unix") == 2
+    assert GLFW_COMPOSE.count("OVLAB_EXECUTION_PROFILE: profiles/libero-playground-glfw.yaml") == 3
+    assert GLFW_COMPOSE.count("MUJOCO_GL: glfw") == 3
+    assert GLFW_COMPOSE.count("MUJOCO_EGL_DEVICE_ID: !reset null") == 3
+    assert GLFW_COMPOSE.count("target: /tmp/.X11-unix") == 3
     assert "privileged:" not in GLFW_COMPOSE
     assert "ports:" not in GLFW_COMPOSE
 
@@ -395,6 +397,46 @@ def test_portable_config_change_does_not_invalidate_image_source_hash(tmp_path):
 
     assert config_only == initial
     assert code_changed != initial
+
+
+def test_dirty_submodule_manifest_distinguishes_local_source_bytes_and_deletions(tmp_path):
+    source = tmp_path / "adapter.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.email=ovlab@example.invalid", "-c", "user.name=OVLAB Test", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.email=ovlab@example.invalid", "-c", "user.name=OVLAB Test", "commit", "-qm", "fixture"], cwd=tmp_path, check=True)
+    changes = runpy.run_path(str(ROOT / "deploy/scripts/source_manifest.py"))["_submodule_changes"]
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    first = changes(tmp_path)
+    source.write_text("VALUE = 3\n", encoding="utf-8")
+    second = changes(tmp_path)
+    assert first[0]["sha256"] != second[0]["sha256"]
+    source.unlink()
+    assert changes(tmp_path) == [{"path": "adapter.py", "deleted": True}]
+
+
+def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount():
+    policy = _dockerfile("Dockerfile.openvla-quic")
+    training = _dockerfile("Dockerfile.training-openvla-quic")
+    lock = (ROOT / "deploy/locks/quic-openvla.requirements.txt").read_text()
+    for dockerfile in (policy, training):
+        assert "/opt/ovlab/code/packages/quic-petf-vla" in dockerfile
+        assert "COPY external/openvla-quic " in dockerfile
+        assert "COPY external/libero " not in dockerfile
+        assert 'USER 10001:10001' in dockerfile
+        assert "--require-hashes" in dockerfile
+    assert "transformers==4.40.1" in lock
+    assert "tensorflow-metadata==1.17.2 --hash=sha256:" in lock
+    assert "protobuf==4.21.12 --hash=sha256:" in lock
+    assert "transformers-openvla-oft" not in lock
+    assert not any(name in lock.lower() for name in ("robosuite", "mujoco", "libero"))
+    installer = (DOCKER / "install-ovlab-packages.sh").read_text()
+    assert "quic-petf-vla" not in installer
+    service = _service("policy-openvla-quic", "benchmark-quic")
+    assert "target: /adapters/quic\n        read_only: true" in service
+    assert "OVLAB_QUIC_ADAPTER_PATH: /adapters/quic" in service
+    benchmark = _service("benchmark-quic", "reporting")
+    assert "/adapters/" not in benchmark and "/checkpoints/base" not in benchmark
 
 
 def test_container_root_revision_and_deployment_provenance_are_explicit(monkeypatch):

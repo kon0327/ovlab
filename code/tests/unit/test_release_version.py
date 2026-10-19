@@ -21,6 +21,12 @@ def _project_version(pyproject: Path) -> str:
     return match.group(1)
 
 
+def _ovlab_projects():
+    # Reusable methods have their own release cadence and no OVLAB dependency.
+    return [path for path in sorted((REPOSITORY / "code").glob("**/pyproject.toml"))
+            if re.search(r'(?m)^name\s*=\s*"ovlab-[^"]+"$', path.read_text())]
+
+
 def test_release_version_is_semantic_and_shared_by_public_surfaces() -> None:
     version = (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip()
     assert SEMANTIC_VERSION.fullmatch(version)
@@ -31,14 +37,14 @@ def test_release_version_is_semantic_and_shared_by_public_surfaces() -> None:
     ).read_text(encoding="utf-8")
     assert f'CLI_VERSION = "{version}"' in versioning
 
-    pyprojects = sorted((REPOSITORY / "code").glob("**/pyproject.toml"))
+    pyprojects = _ovlab_projects()
     assert len(pyprojects) == 12
     assert {_project_version(path) for path in pyprojects} == {version}
 
 
 def test_internal_distribution_requirements_do_not_accept_an_older_release() -> None:
     version = (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip()
-    for pyproject in sorted((REPOSITORY / "code").glob("**/pyproject.toml")):
+    for pyproject in _ovlab_projects():
         source = pyproject.read_text(encoding="utf-8")
         project_name = re.search(r'(?m)^name\s*=\s*"(ovlab-[^"]+)"$', source)
         assert project_name is not None

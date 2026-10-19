@@ -83,7 +83,7 @@ def validate_experiment(doc, path):
             f"{path}.deployment",
             required=("profile", "renderer"),
         )
-        enum(deployment["profile"], ("openvla", "oft"), f"{path}.deployment.profile")
+        enum(deployment["profile"], ("openvla", "oft", "quic"), f"{path}.deployment.profile")
         enum(deployment["renderer"], ("egl", "glfw"), f"{path}.deployment.renderer")
     if "reporting" in doc:
         reporting = mapping(
@@ -177,12 +177,13 @@ def validate_policy(doc, path):
         raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
         exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
         return
-    if doc["type"] not in ("openvla_vanilla", "openvla_lora_merged", "openvla_oft"):
+    if doc["type"] not in ("openvla_vanilla", "openvla_lora_merged", "openvla_oft", "openvla_quic"):
         raise ConfigSchemaError(
-            f"{path}.type supports only 'openvla_vanilla', 'openvla_lora_merged', 'openvla_oft', or 'mock'"
+            f"{path}.type supports openvla_vanilla, openvla_lora_merged, openvla_oft, openvla_quic or mock"
         )
     settings = mapping(doc["settings"], f"{path}.settings", required=(
-        "checkpoint_id", "processor_id", "unnorm_key", "input", "runtime", "action", "raw_output"))
+        "checkpoint_id", "processor_id", "unnorm_key", "input", "runtime", "action", "raw_output"),
+        optional=("quic",) if doc["type"] == "openvla_quic" else ())
     for key in ("checkpoint_id", "processor_id", "unnorm_key"):
         exact_type(settings[key], str, f"{path}.settings.{key}")
     if doc["type"] == "openvla_oft":
@@ -208,10 +209,29 @@ def validate_policy(doc, path):
     for key in ("local_files_only", "trust_remote_code", "deterministic", "synchronize_inference"):
         exact_type(runtime[key], bool, f"{path}.settings.runtime.{key}")
     action = mapping(settings["action"], f"{path}.settings.action", required=("codec", "action_interface"))
-    enum(action["codec"], ("openvla-to-libero-v1",), f"{path}.settings.action.codec")
+    codecs = ("openvla-to-libero-v1", "openvla-decoded-v1") if doc["type"] == "openvla_quic" else ("openvla-to-libero-v1",)
+    enum(action["codec"], codecs, f"{path}.settings.action.codec")
     non_empty_string(action["action_interface"], f"{path}.settings.action.action_interface")
     raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
     exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
+    if doc["type"] == "openvla_quic":
+        if "quic" not in settings:
+            raise ConfigSchemaError(f"{path}.settings.quic is required")
+        quic = mapping(settings["quic"], f"{path}.settings.quic", required=(
+            "adapter_path", "adapter_manifest_sha256", "adapter_tensor_sha256",
+            "prompt_style", "center_crop", "adaptation_state"))
+        non_empty_string(quic["adapter_path"], f"{path}.settings.quic.adapter_path")
+        for name in ("adapter_manifest_sha256", "adapter_tensor_sha256"):
+            digest = quic[name]
+            if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise ConfigSchemaError(f"{path}.settings.quic.{name} must be SHA256")
+        enum(quic["prompt_style"], ("modern", "v01"), f"{path}.settings.quic.prompt_style")
+        exact_type(quic["center_crop"], bool, f"{path}.settings.quic.center_crop")
+        enum(quic["adaptation_state"], ("none", "merged"), f"{path}.settings.quic.adaptation_state")
+        if runtime["quantization"] != "none":
+            raise ConfigSchemaError("QuIC supports dense hosts only; quantization must be none")
+        if raw["enabled"]:
+            raise ConfigSchemaError("QuIC provider does not expose raw policy output")
 
 
 def validate_action_interface(doc, path):

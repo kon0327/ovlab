@@ -144,12 +144,23 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
         fi
         data_root="${OVLAB_DATA_ROOT:-$repository_root/../ovlab-data}"
         model_data_root="${OVLAB_MODEL_DATA_ROOT:-$data_root}"
+        runs_root="$(realpath -m -- "${OVLAB_RUNS_ROOT:-$model_data_root/runs}")"
         training_runs_root="$(realpath -m -- "$model_data_root/training-runs")"
-        exports_root="$(realpath -m -- "${OVLAB_EXPORTS_ROOT:-$data_root/exports}")"
+        exports_root="$(realpath -m -- "${OVLAB_EXPORTS_ROOT:-$model_data_root/exports}")"
         derived_root="$exports_root/derived"
-        if [[ ! -d "$training_runs_root" ]]; then
-            echo "ovlab: canonical training run directory does not exist: $training_runs_root" >&2
+        if [[ ! -d "$runs_root/train" && ! -d "$training_runs_root" ]]; then
+            echo "ovlab: training run directories do not exist: $runs_root/train or $training_runs_root" >&2
             exit 4
+        fi
+        training_report_mounts=()
+        training_report_roots=()
+        if [[ -d "$runs_root/train" ]]; then
+            training_report_mounts+=(--mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly")
+            training_report_roots+=("$runs_root" "$runs_root/train")
+        fi
+        if [[ -d "$training_runs_root" ]]; then
+            training_report_mounts+=(--mount "type=bind,source=$training_runs_root,target=/var/lib/ovlab/model-data/training-runs,readonly")
+            training_report_roots+=("$training_runs_root")
         fi
         reporting_image="${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}"
         if ! docker image inspect "$reporting_image" >/dev/null 2>&1; then
@@ -172,15 +183,26 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
             chmod 2770 -- "$exports_root" "$derived_root" "$exports_root/interactive"
             exports_mount="type=bind,source=$exports_root,target=/var/lib/ovlab/exports"
         fi
+        declare -A training_report_groups=(["$(id -g)"]=1)
+        for report_root in "${training_report_roots[@]}" "$exports_root" "$derived_root" "$exports_root/interactive"; do
+            if [[ -d "$report_root" ]]; then
+                training_report_groups["$(stat -c %g -- "$report_root")"]=1
+            fi
+        done
+        training_report_group_args=()
+        for report_group in "${!training_report_groups[@]}"; do
+            training_report_group_args+=(--group-add "$report_group")
+        done
         echo "ovlab: reporting: using isolated image $reporting_image for training performance." >&2
         exec docker run --rm \
-            --network none --read-only --user 10001:10001 --group-add "$(id -g)" \
+            --network none --read-only --user 10001:10001 "${training_report_group_args[@]}" \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
             --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data \
+            --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
             --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
             --env OVLAB_ARTIFACT_UMASK=0007 \
             --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
-            --mount "type=bind,source=$training_runs_root,target=/var/lib/ovlab/model-data/training-runs,readonly" \
+            "${training_report_mounts[@]}" \
             --mount "$exports_mount" \
             "$reporting_image" "$@"
     fi

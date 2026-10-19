@@ -217,14 +217,14 @@ class OvlabApplication:
         ).expanduser().resolve()
 
     def _training_profile(self, reference):
-        from .training_profiles import TrainingProfile
+        from .training_composition import load_training_profile
 
         path = Path(reference).expanduser()
         if not path.is_absolute():
             path = self.repository_root / path
         if not path.is_file():
             raise ConfigReferenceError(f"training profile does not exist: {path.resolve()}")
-        return path.resolve(), TrainingProfile.from_document(load(path.resolve()))
+        return path.resolve(), load_training_profile(path, config_root=self.config_root)
 
     def _report_profile(self, reference):
         from ovlab_runner import ArtifactError, ReportProfile, builtin_profile
@@ -374,6 +374,9 @@ class OvlabApplication:
         from ovlab_openvla_oft import OpenVlaOftAdapter, OpenVlaOftSettings
         if isinstance(settings, OpenVlaOftSettings):
             return OpenVlaOftAdapter(settings)
+        from ovlab_openvla_quic import OpenVlaQuICSettings, create_policy_adapter
+        if isinstance(settings, OpenVlaQuICSettings):
+            return create_policy_adapter(settings)
         from ovlab_openvla_common import OpenVlaMethodFamily
         if settings.method_descriptor.family is OpenVlaMethodFamily.LORA:
             from ovlab_openvla_lora_merged import OpenVlaMergedLoraAdapter
@@ -394,6 +397,10 @@ class OvlabApplication:
         if capabilities.component_name == "ovlab-openvla-oft":
             from ovlab_openvla_oft.service import _identity
             identity = _identity(capabilities)
+            return OvlabApplication._with_deployment_identity(identity)
+        if capabilities.component_name == "ovlab-openvla-quic-peft":
+            from ovlab_openvla_quic.service import _identity_provider
+            identity = _identity_provider(capabilities)
             return OvlabApplication._with_deployment_identity(identity)
         if capabilities.component_name not in {"mock-policy", "handshake-only-policy", "qualification-test-policy"}:
             raise ConfigCompatibilityError(
@@ -837,20 +844,46 @@ class OvlabApplication:
         return DatasetStore(self._model_data_root()).verify(dataset_id)
 
     def train_profiles(self):
-        from .training_profiles import TrainingProfile
+        from .training_composition import load_training_profile
         profiles = []
-        for path in sorted((self.config_root / "training").glob("*.yaml")):
+        for path in sorted((self.config_root / "training").rglob("*.yaml")):
             try:
-                profile = TrainingProfile.from_document(load(path))
+                profile = load_training_profile(path, config_root=self.config_root)
             except Exception as exc:
                 profiles.append({"path": str(path), "valid": False, "error": str(exc)})
             else:
                 profiles.append({"id": profile.profile_id, "path": str(path), "valid": True})
         return {"schema_version": "ovlab.training-profiles/v1", "profiles": profiles}
 
-    def train_validate(self, profile):
+    def train_ablate(self, suite, *, resolve=False, output=None, execute=False, fit_action_normalization=False):
+        from .training_ablations import TrainingAblation
+        from .training_profiles import TrainingPlanner
+        path = Path(suite).expanduser()
+        if not path.is_absolute():
+            path = self.repository_root / path
+        ablation = TrainingAblation(path, config_root=self.config_root, fit_action_normalization=fit_action_normalization)
+        kwargs = {}
+        planner = None
+        if resolve:
+            planner = TrainingPlanner(self.repository_root, self._model_data_root())
+            gpu_count = self.environment.get("OVLAB_AVAILABLE_GPU_COUNT")
+            vram = self.environment.get("OVLAB_AVAILABLE_VRAM_GIB")
+            kwargs = {
+                "available_gpu_count": None if gpu_count is None else int(gpu_count),
+                "available_vram_gib": None if vram is None else float(vram),
+                "image_identity": self.environment.get("OVLAB_TRAINING_IMAGE_DIGEST", "unavailable"),
+            }
+        plan = ablation.plan(planner, **kwargs)
+        if execute:
+            from .training_deployment import TrainingDeployment
+            return ablation.run(Path(output), TrainingDeployment(self.repository_root, environment=self.environment), plan=plan)
+        return ablation.materialize(Path(output), plan=plan) if output is not None else plan
+
+    def train_validate(self, profile, *, fit_action_normalization=False):
         from .training_identity import identity
         path, parsed = self._training_profile(profile)
+        from .training_profiles import with_fitted_action_normalization
+        parsed = with_fitted_action_normalization(parsed, fit_action_normalization)
         return {
             "schema_version": "ovlab.training-validation/v1",
             "valid": True,
@@ -861,9 +894,10 @@ class OvlabApplication:
             "network_used": False,
         }
 
-    def train_plan(self, profile, *, allow_dataset_download=False):
-        from .training_profiles import TrainingPlanner
+    def train_plan(self, profile, *, allow_dataset_download=False, fit_action_normalization=False):
+        from .training_profiles import TrainingPlanner, with_fitted_action_normalization
         _, parsed = self._training_profile(profile)
+        parsed = with_fitted_action_normalization(parsed, fit_action_normalization)
         gpu_count = self.environment.get("OVLAB_AVAILABLE_GPU_COUNT")
         vram = self.environment.get("OVLAB_AVAILABLE_VRAM_GIB")
         return TrainingPlanner(self.repository_root, self._model_data_root()).plan(

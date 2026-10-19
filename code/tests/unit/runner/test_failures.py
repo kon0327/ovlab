@@ -42,12 +42,14 @@ def test_continue_task_can_start_next_episode_after_policy_failure() -> None:
     assert len(store.runs["runner-test"]["episodes"]) == 2
 
 
-def test_continue_run_skips_remaining_rollouts_of_failed_task() -> None:
+def test_continue_run_skips_remaining_rollouts_of_failed_task(capsys) -> None:
     store = InMemoryRunArtifactStore()
     plan = runner_plan(rollout_count_per_task=2, episode_error_policy=EpisodeErrorPolicy.CONTINUE_RUN)
     runner = ExperimentRunner(plan, TrackingBenchmark(), FailingPolicy(), store, clock=DeterministicClock())
     runner.connect(); runner.run()
     assert len(store.runs["runner-test"]["episodes"]) == 1
+    final_progress = capsys.readouterr().err.splitlines()[-1]
+    assert "1/2 episode" in final_progress and "completed" in final_progress
 
 
 def test_keyboard_interrupt_preserves_aborted_trace_and_aborted_manifest() -> None:

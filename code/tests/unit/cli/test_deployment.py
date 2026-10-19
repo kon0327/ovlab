@@ -24,6 +24,21 @@ OFT = "configs/experiments/libero10-openvla-oft-rpc-smoke.yaml"
 _PREFLIGHT_IMAGES = ComposeDeployment._preflight_images
 
 
+def test_quic_adapter_override_requires_both_files_and_resolves_from_environment_file(tmp_path):
+    adapter = tmp_path / "adapter"
+    adapter.mkdir()
+    env_file = tmp_path / "compose.env"
+    env_file.write_text("OVLAB_QUIC_ADAPTER_HOST_PATH=adapter\n", encoding="utf-8")
+    deployment = ComposeDeployment(REPOSITORY, environment={})
+    plan = SimpleNamespace(profile="quic", env_file=str(env_file))
+    with pytest.raises(ComposeDeploymentError, match="adapter.json, adapter.safetensors"):
+        deployment._quic_adapter_path(plan)
+    (adapter / "adapter.json").write_text("{}", encoding="utf-8")
+    (adapter / "adapter.safetensors").write_bytes(b"fixture")
+    assert deployment._quic_adapter_path(plan) == adapter.resolve()
+    assert deployment._quic_adapter_path(SimpleNamespace(profile="openvla")) is None
+
+
 @dataclass
 class _Result:
     returncode: int

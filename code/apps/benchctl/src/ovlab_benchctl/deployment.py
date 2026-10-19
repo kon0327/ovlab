@@ -74,16 +74,19 @@ class ComposeDeployment:
     _PROFILES = {
         "openvla": "benchmark-openvla",
         "oft": "benchmark-oft",
+        "quic": "benchmark-quic",
     }
     _POLICY_SERVICES = {
         "openvla": "policy-openvla",
         "oft": "policy-openvla-oft",
+        "quic": "policy-openvla-quic",
     }
     _RENDERERS = {"egl", "glfw"}
     _POLICY_PROFILES = {
         "openvla_vanilla": "openvla",
         "openvla_lora_merged": "openvla",
         "openvla_oft": "oft",
+        "openvla_quic": "quic",
     }
     _RENDERER_EXECUTION_PROFILES = {
         "egl": "profiles/libero-bench-egl.yaml",
@@ -96,6 +99,7 @@ class ComposeDeployment:
         "reporting": "canonical-readonly-reporting-v1",
         "policy-openvla": "resolved-checkpoint-quantization-config-bundle-v2",
         "policy-openvla-oft": "resolved-checkpoint-quantization-config-bundle-v2",
+        "policy-openvla-quic": "resolved-checkpoint-quantization-config-bundle-v2",
     }
     _PROFILE_IMAGES = {
         "openvla": (
@@ -106,6 +110,11 @@ class ComposeDeployment:
         "oft": (
             ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
             ("OVLAB_OFT_IMAGE", "ovlab-policy-openvla-oft:local", "policy-openvla-oft"),
+            ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"),
+        ),
+        "quic": (
+            ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
+            ("OVLAB_QUIC_IMAGE", "ovlab-policy-openvla-quic:local", "policy-openvla-quic"),
             ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"),
         ),
     }
@@ -155,8 +164,10 @@ class ComposeDeployment:
             raise ValueError("Docker deployment requires an experiment below configs/experiments/")
         experiment_reference = str(experiment_path.relative_to(self.repository_root))
 
-        experiment_doc = load(experiment_path)
-        validate(experiment_doc, str(experiment_path), "experiment")
+        resolver = ConfigBundleBuilder(self.repository_root)
+        experiment_doc = resolver.load_component(
+            str(experiment_path.relative_to(config_root)), "experiment"
+        )
         configured = experiment_doc.get("deployment")
         if configured is None:
             raise ValueError(
@@ -177,7 +188,7 @@ class ComposeDeployment:
         policy_path = (config_root / policy_reference).resolve()
         if not policy_path.is_relative_to(config_root / "policies") or not policy_path.is_file():
             raise ValueError(f"experiment policy must resolve below configs/policies/: {policy_reference}")
-        policy_type = load(policy_path).get("type")
+        policy_type = resolver.load_component(policy_reference, "policy").get("type")
         required_profile = self._POLICY_PROFILES.get(policy_type)
         if required_profile is None:
             raise ValueError(f"policy type {policy_type!r} has no Docker deployment profile")
@@ -468,6 +479,32 @@ class ComposeDeployment:
         )
         return resolver.resolve(spec, local_path=local_path, offline=plan.offline)
 
+    def _quic_adapter_path(self, plan: ComposeDeploymentPlan) -> Path | None:
+        if plan.profile != "quic":
+            return None
+        override = self._environment_value(plan, "OVLAB_QUIC_ADAPTER_HOST_PATH")
+        if override:
+            adapter = Path(override).expanduser()
+            if not adapter.is_absolute():
+                adapter = Path(plan.env_file).parent / adapter
+        else:
+            resolver = ConfigBundleBuilder(self.repository_root)
+            experiment = resolver.load_component(
+                str(Path(plan.experiment).relative_to("configs")), "experiment"
+            )
+            policy = resolver.load_component(experiment["components"]["policy"], "policy")
+            adapter = Path(policy["settings"]["quic"]["adapter_path"]).expanduser()
+            if not adapter.is_absolute():
+                adapter = self.repository_root / adapter
+        adapter = adapter.resolve()
+        missing = [name for name in ("adapter.json", "adapter.safetensors") if not (adapter / name).is_file()]
+        if missing:
+            raise ComposeDeploymentError(
+                f"QuIC adapter directory {adapter} is missing {', '.join(missing)}; "
+                "set OVLAB_QUIC_ADAPTER_HOST_PATH to the finalized adapter directory"
+            )
+        return adapter
+
     @staticmethod
     def _run_directories(root: Path | None) -> set[Path]:
         if root is None or not root.is_dir():
@@ -490,6 +527,7 @@ class ComposeDeployment:
         self._preflight_bind_sources(plan)
         datasets_root = self._dataset_root(plan)
         self._preflight_images(plan)
+        adapter_path = self._quic_adapter_path(plan)
         checkpoint = self._resolve_checkpoint(plan)
         with bundle_builder.materialize(bundle) as bundle_root:
             environment = {
@@ -515,6 +553,8 @@ class ComposeDeployment:
                 "OVLAB_CHECKPOINT_REVISION": checkpoint.spec.revision,
                 "OVLAB_CHECKPOINT_SHA256": checkpoint.spec.expected_sha256,
             }
+            if adapter_path is not None:
+                environment["OVLAB_QUIC_ADAPTER_HOST_PATH"] = str(adapter_path)
             runs_root = self._bind_source(plan, "OVLAB_RUNS_ROOT")
             runs_before = self._run_directories(runs_root)
             checked = self._execute(plan.config_command, environment)

@@ -1,0 +1,13 @@
+extends: ../openvla-libero10-quic-smoke.yaml
+id: openvla-libero10-quic-a1-qp2
+training:
+  peft:
+    placement:
+      id: A1
+    targets:
+      - names:
+          - vision_backbone.featurizer.blocks.8.attn.proj
+          - vision_backbone.featurizer.blocks.12.attn.proj
+          - vision_backbone.fused_featurizer.blocks.8.attn.proj
+          - vision_backbone.fused_featurizer.blocks.12.attn.proj
+        region: vision

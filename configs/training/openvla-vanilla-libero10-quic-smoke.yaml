@@ -1,0 +1,12 @@
+extends: openvla-libero10-quic-smoke.yaml
+id: openvla-vanilla-libero10-quic-smoke
+
+model:
+  base_checkpoint: openvla-7b
+  revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
+  adaptation_state: none
+
+# Vanilla has no LIBERO-10 key. Fit from selected training episodes only.
+dataset:
+  partition:
+    action_normalization: train-q99

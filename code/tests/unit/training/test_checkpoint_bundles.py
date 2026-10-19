@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import errno
+import os
 from pathlib import Path
 import struct
+import shutil
 
 import pytest
 
@@ -80,6 +83,62 @@ def test_adapter_bundle_finalizes_unmerged_and_verifies(tmp_path):
     assert finalized_result["performance"]["schema_version"] == "ovlab.performance-summary/v1"
     assert finalized_result["adapter_parameter_count"] == 100
     assert result["checkpoint"]["parameter_counts"]["adapter"] == 100
+
+
+@pytest.mark.parametrize("link_error", [errno.EXDEV, errno.EACCES])
+def test_finalizer_copies_across_bind_mounts_and_propagates_other_link_errors(tmp_path, monkeypatch, link_error):
+    context = _context(tmp_path)
+    private_tensor = context.staging_checkpoint / "weights-or-adapter/adapter_model.safetensors"
+    private_tensor.chmod(0o600)
+    original_link = os.link
+
+    def link(source, target, *args, **kwargs):
+        if Path(source).is_relative_to(context.staging_checkpoint):
+            raise OSError(link_error, "simulated bind-mount link failure")
+        return original_link(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "link", link)
+    if link_error != errno.EXDEV:
+        with pytest.raises(OSError) as failure:
+            CheckpointBundleStore(tmp_path).finalize(context)
+        assert failure.value.errno == link_error
+        assert not list((tmp_path / "checkpoints").glob("checkpoint-*"))
+        return
+    result = CheckpointBundleStore(tmp_path).finalize(context)
+    assert CheckpointBundleStore(tmp_path).verify(result["checkpoint_id"])["status"] == "verified"
+    source = context.staging_checkpoint / "weights-or-adapter/adapter_model.safetensors"
+    published = Path(result["checkpoint_path"]) / "weights-or-adapter/adapter_model.safetensors"
+    assert published.read_bytes() == source.read_bytes()
+    assert published.stat().st_ino != source.stat().st_ino
+    assert source.stat().st_mode & 0o040  # Host group can verify worker-private staging files.
+    assert TrainingRunStore(tmp_path, training_runs_root=context.root.parent).verify(context.run_id)["status"] == "verified"
+
+
+def test_reusing_checkpoint_finalizes_new_training_run_and_preserves_original(tmp_path):
+    first_context = _context(tmp_path)
+    first = CheckpointBundleStore(tmp_path).finalize(first_context)
+    first_checkpoint_document = (Path(first["checkpoint_path"]) / "checkpoint.json").read_bytes()
+    second_root = tmp_path / "training-runs" / "run-2"
+    second_root.mkdir()
+    shutil.copytree(first_context.staging_checkpoint, second_root / "staging-checkpoints/final")
+    for name in ("events.jsonl", "metrics.jsonl", "training-plan.json"):
+        shutil.copyfile(first_context.root / name, second_root / name)
+    (second_root / "result.json").write_text(json.dumps({"status": "checkpointing", "optimizer_steps": 3}))
+    second_context = TrainingRunContext("run-2", second_root, first_context.plan)
+
+    second = CheckpointBundleStore(tmp_path).finalize(second_context)
+
+    assert second["reused"] is True
+    assert second["checkpoint_id"] == first["checkpoint_id"]
+    assert second["run_id"] == "run-2"
+    assert second["status"] == "completed"
+    assert second["optimizer_steps"] == 3
+    assert json.loads((second_root / "result.json").read_text())["status"] == "completed"
+    assert TrainingRunStore(tmp_path, training_runs_root=second_root.parent).verify("run-2")["status"] == "verified"
+    assert (Path(first["checkpoint_path"]) / "checkpoint.json").read_bytes() == first_checkpoint_document
+    repeated = CheckpointBundleStore(tmp_path).finalize(second_context)
+    assert repeated["reused"] is True
+    assert repeated["run_id"] == "run-2"
 
 
 def test_incompatible_adapter_configuration_is_rejected(tmp_path):

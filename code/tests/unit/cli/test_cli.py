@@ -737,3 +737,17 @@ def test_application_delegates_to_runner_without_duplicating_episode_loop():
     assert "runner.connect()" in source and "runner.run()" in source
     assert "execute_episode" not in source
     assert "while step" not in source
+
+
+@pytest.mark.parametrize("arguments", [
+    ["train", "validate", "--profile", "profile.yaml"],
+    ["train", "plan", "--profile", "profile.yaml"],
+    ["train", "run", "--profile", "profile.yaml"],
+    ["train", "ablate", "validate", "--suite", "suite.yaml"],
+    ["train", "ablate", "plan", "--suite", "suite.yaml"],
+    ["train", "ablate", "materialize", "--suite", "suite.yaml", "--output", "/tmp/fit-plan"],
+    ["train", "ablate", "run", "--suite", "suite.yaml", "--output", "/tmp/fit-run"],
+])
+def test_training_normalization_override_is_explicit_across_commands(arguments):
+    assert _parser().parse_args(arguments).fit_action_normalization is False
+    assert _parser().parse_args([*arguments, "--fit-action-normalization"]).fit_action_normalization is True

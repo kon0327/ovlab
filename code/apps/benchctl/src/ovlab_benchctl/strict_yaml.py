@@ -167,12 +167,14 @@ class _Parser:
                     continue
                 if not _safe_key(key):
                     raise StrictYamlError(f"{self.source}:{line.number}: mapping keys must match {_SAFE_KEY.pattern!r}")
-                if not raw:
-                    raise StrictYamlError(
-                        f"{self.source}:{line.number}: a sequence mapping's first key requires a scalar value"
-                    )
-                mapping_item = {key: _scalar(raw, self.source, line.number)}
                 index += 1
+                if raw:
+                    mapping_item = {key: _scalar(raw, self.source, line.number)}
+                else:
+                    if index >= len(self.lines) or self.lines[index].indent != indent + 4:
+                        raise StrictYamlError(f"{self.source}:{line.number}: sequence mapping key {key!r} requires a nested value")
+                    nested, index = self._block(index, indent + 4)
+                    mapping_item = {key: nested}
                 if index < len(self.lines) and self.lines[index].indent == indent + 2:
                     continuation, index = self._block(index, indent + 2)
                     if not isinstance(continuation, dict):
@@ -259,9 +261,16 @@ def dumps(value: Any) -> str:
                     lines.append(f"{prefix}{key}: {scalar(nested)}")
         elif isinstance(item, (list, tuple)):
             for nested in item:
-                if isinstance(nested, (Mapping, list, tuple)):
-                    raise TypeError("resolved YAML sequences must contain only scalar values")
-                lines.append(f"{prefix}- {scalar(nested)}")
+                if isinstance(nested, Mapping):
+                    if not nested:
+                        raise TypeError("empty mappings in YAML sequences are unsupported")
+                    start = len(lines)
+                    emit(nested, indent + 2)
+                    lines[start] = prefix + "- " + lines[start][indent + 2:]
+                elif isinstance(nested, (list, tuple)):
+                    raise TypeError("nested YAML sequences are unsupported")
+                else:
+                    lines.append(f"{prefix}- {scalar(nested)}")
         else:
             raise TypeError("resolved YAML root values must be mappings or sequences")
 

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import uuid
 
 from .application import OvlabApplication
@@ -15,6 +16,7 @@ from .strict_yaml import load
 from .training_errors import DatasetUnavailableError, TrainingRuntimeError
 from .training_profiles import TrainingProfile, TrainingPlanner
 from .training_runs import TrainingRunStore
+from .training_identity import atomic_json, identity
 from .versioning import repository_revision
 
 
@@ -41,7 +43,8 @@ class TrainingDeployment:
             path = self.repository_root / path
         if not path.is_file():
             raise TrainingRuntimeError(f"training profile does not exist: {path.resolve()}")
-        return path.resolve(), TrainingProfile.from_document(load(path.resolve()))
+        from .training_ablations import load_training_profile
+        return path.resolve(), load_training_profile(path.resolve(), config_root=self.repository_root / "configs")
 
     def _gpu(self) -> tuple[int, float]:
         completed = self.runner(
@@ -70,6 +73,27 @@ class TrainingDeployment:
             )
         return image, digest
 
+    @staticmethod
+    def _container_groups(*directories: Path) -> list[str]:
+        """Grant the worker the actual groups of its managed bind mounts."""
+        groups = {os.getgid(), *(path.stat().st_gid for path in directories)}
+        return [argument for group in sorted(groups) for argument in ("--group-add", str(group))]
+
+    def _prepare_base_checkpoint(self, plan: dict[str, object]) -> dict[str, object]:
+        """Materialize HF blob links for an isolated, offline snapshot mount."""
+        from .checkpointing import CheckpointResolver, checkpoint_spec_by_id, default_global_cache
+
+        execution = dict(plan["execution"])
+        spec = checkpoint_spec_by_id(self.repository_root, plan["scientific"]["base_checkpoint"]["resource_id"])
+        global_cache = Path(self.environment.get("OVLAB_GLOBAL_HF_CACHE", default_global_cache(self.environment)))
+        resolved = CheckpointResolver(
+            global_cache=global_cache,
+            managed_cache=self.model_data_root / "checkpoints/huggingface",
+            progress=lambda message: print(f"ovlab: checkpoint: {message}", file=sys.stderr, flush=True),
+        ).resolve(spec, local_path=Path(execution["model_host_path"]), offline=True)
+        execution.update(model_host_path=str(resolved.host_path), model_source_kind=resolved.source_kind)
+        return {**plan, "execution": execution, "execution_plan_id": identity("training-execution", execution, 32)}
+
     def _explicit_dataset_acquisition(self, profile: TrainingProfile, dataset_image: str) -> None:
         dataset = profile.document["dataset"]
         assert isinstance(dataset, dict)
@@ -83,7 +107,7 @@ class TrainingDeployment:
         datasets_root.mkdir(parents=True, exist_ok=True)
         command = [
             "docker", "run", "--rm", "--network", "bridge", "--read-only",
-            "--user", "10001:10001", "--group-add", str(os.getgid()),
+            "--user", "10001:10001", *self._container_groups(datasets_root),
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700",
             "--env", "OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data",
@@ -94,7 +118,7 @@ class TrainingDeployment:
         if completed.returncode != 0:
             raise DatasetUnavailableError(f"explicit LIBERO acquisition container failed with exit code {completed.returncode}")
 
-    def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False) -> dict[str, object]:
+    def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False, fit_action_normalization: bool = False) -> dict[str, object]:
         for directory in (
             self.model_data_root / "datasets",
             self.runs_root / "train",
@@ -103,8 +127,13 @@ class TrainingDeployment:
             directory.mkdir(parents=True, exist_ok=True)
             directory.chmod(0o2770)
         profile_path, profile = self._profile(profile_reference)
+        from .training_profiles import with_fitted_action_normalization
+        profile = with_fitted_action_normalization(profile, fit_action_normalization)
+        is_quic = profile.document["training"].get("peft", {}).get("method") == "quic"
         training_image, training_digest = self._docker_image(
-            "OVLAB_TRAINING_IMAGE", "ovlab-training-openvla:local", "training-openvla"
+            "OVLAB_TRAINING_QUIC_IMAGE" if is_quic else "OVLAB_TRAINING_IMAGE",
+            "ovlab-training-openvla-quic:local" if is_quic else "ovlab-training-openvla:local",
+            "training-openvla-quic" if is_quic else "training-openvla",
         )
         dataset_image, dataset_digest = self._docker_image(
             "OVLAB_DATASET_IMAGE", "ovlab-dataset:local", "dataset"
@@ -132,9 +161,10 @@ class TrainingDeployment:
             available_vram_gib=vram_gib,
             image_identity=training_digest,
         )
+        plan = self._prepare_base_checkpoint(plan)
         store = TrainingRunStore(self.model_data_root, runs_root=self.runs_root)
         context = store.create(
-            profile.document,
+            load(profile_path),
             profile.document,
             plan,
             {
@@ -147,6 +177,7 @@ class TrainingDeployment:
                 "detected_vram_gib": vram_gib,
                 "network": "disabled",
                 "profile_source": str(profile_path),
+                "fit_action_normalization_requested": fit_action_normalization,
             },
         )
         scientific = plan["scientific"]
@@ -161,23 +192,27 @@ class TrainingDeployment:
         base_path = Path(str(execution["model_host_path"]))
         prepared = Path(str(dataset_manifest["host_path"])) / "prepared"
         container_name = f"ovlab-training-{uuid.uuid4().hex[:12]}"
+        # Workers derive the canonical run ID from the mounted root's basename.
+        container_run_root = f"/var/lib/ovlab/training-run/{context.run_id}"
         command = [
             "docker", "run", "--name", container_name, "--rm", "--network", "none", "--read-only",
             "--gpus", f"device={self.environment.get('OVLAB_GPU_DEVICE', '0')}",
             "--user", "10001:10001", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-            "--group-add", str(os.getgid()),
+            *self._container_groups(context.root),
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=4g,uid=10001,gid=10001,mode=0700",
             "--env", "OVLAB_TRAINING_RUNTIME=isolated-container", "--env", "HF_HUB_OFFLINE=1",
             "--env", "TRANSFORMERS_OFFLINE=1", "--env", "WANDB_MODE=offline",
+            "--env", f"OVLAB_PROGRESS={self.environment.get('OVLAB_PROGRESS', 'auto')}",
             "--env", "OVLAB_TRAINING_BASE_CHECKPOINT=/checkpoints/base",
             "--env", "OVLAB_TRAINING_DATA_ROOT=/datasets/resolved",
             "--env", f"OVLAB_TRAINING_DATASET_NAME={tfds_name}",
             "--mount", f"type=bind,source={base_path},target=/checkpoints/base,readonly",
             "--mount", f"type=bind,source={prepared},target=/datasets/resolved/{tfds_name}/1.0.0,readonly",
-            "--mount", f"type=bind,source={context.root},target=/var/lib/ovlab/training-run",
+            "--mount", f"type=bind,source={context.root},target={container_run_root}",
             "--entrypoint", "python", training_image,
-            "-m", "ovlab_benchctl.training_worker", "train", "--run-root", "/var/lib/ovlab/training-run",
+            "-m", "ovlab_benchctl.training_worker", "train", "--run-root", container_run_root,
         ]
+        atomic_json(context.root / "container-commands.json", {"training": command}, mode=0o644)
         try:
             completed = self.runner(command, check=False)
         except KeyboardInterrupt as exc:
@@ -186,18 +221,22 @@ class TrainingDeployment:
             store.fail(context, exc, interrupted=True)
             raise
         if completed.returncode != 0:
-            raise TrainingRuntimeError(f"isolated OpenVLA trainer failed with exit code {completed.returncode}; evidence: {context.root}")
+            error = TrainingRuntimeError(f"isolated OpenVLA trainer failed with exit code {completed.returncode}; evidence: {context.root}")
+            if not (context.root / "result.json").is_file():
+                store.fail(context, error)
+            raise error
         finalizer = [
             "docker", "run", "--rm", "--network", "none", "--read-only", "--user", "10001:10001",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-            "--group-add", str(os.getgid()),
+            *self._container_groups(context.root, self.model_data_root / "checkpoints"),
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
-            "--mount", f"type=bind,source={context.root},target=/var/lib/ovlab/training-run",
+            "--mount", f"type=bind,source={context.root},target={container_run_root}",
             "--mount", f"type=bind,source={self.model_data_root / 'checkpoints'},target=/var/lib/ovlab/model-data/checkpoints",
             "--entrypoint", "python", dataset_image,
-            "-m", "ovlab_benchctl.training_worker", "finalize", "--run-root", "/var/lib/ovlab/training-run",
+            "-m", "ovlab_benchctl.training_worker", "finalize", "--run-root", container_run_root,
             "--model-data-root", "/var/lib/ovlab/model-data",
         ]
+        atomic_json(context.root / "container-commands.json", {"training": command, "finalizer": finalizer}, exclusive=False, mode=0o644)
         finalized = self.runner(finalizer, check=False)
         if finalized.returncode != 0:
             raise TrainingRuntimeError(f"checkpoint finalizer failed; staged training evidence remains at {context.root}")
@@ -213,7 +252,7 @@ class TrainingDeployment:
             output_root.chmod(0o2770)
         reporting = [
             "docker", "run", "--rm", "--network", "none", "--read-only",
-            "--user", "10001:10001", "--group-add", str(os.getgid()),
+            "--user", "10001:10001", *self._container_groups(self.runs_root, context.root, exports_root, derived_root, interactive_root),
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
             "--env", "OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data",

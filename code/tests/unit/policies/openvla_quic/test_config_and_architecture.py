@@ -143,10 +143,15 @@ def test_non_quic_registry_method_metadata_has_no_qp_fields():
         assert not any(key.lower().startswith("qp") for key in method), resource_id
 
 
-def test_no_runnable_quic_experiment_was_added():
+def test_weight_compression_remains_unavailable_and_peft_has_an_explicit_adapter_configuration():
     experiment_text = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (CONFIG_ROOT / "experiments").rglob("*.yaml")
     )
-    assert "quic-peft" not in experiment_text
     assert "quic-wc" not in experiment_text
+    policy = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(
+        "policies/openvla-quic/adapter-libero10.yaml", "policy"
+    )
+    assert policy["type"] == "openvla_quic"
+    assert policy["settings"]["runtime"]["quantization"] == "none"
+    assert "adapter_manifest_sha256" in policy["settings"]["quic"]

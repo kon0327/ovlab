@@ -126,6 +126,10 @@ class ConfigBundleBuilder:
         validate(resolved, relative, expected_kind)
         return resolved
 
+    def load_component(self, reference: str, expected_kind: str) -> dict[str, object]:
+        """Resolve inheritance for host orchestration using only the stdlib."""
+        return self._extends_closure(reference, expected_kind, set())
+
     def build(self, experiment: str, execution_profile: str) -> ConfigBundle:
         experiment_reference = experiment.removeprefix("configs/")
         execution_reference = execution_profile.removeprefix("configs/")

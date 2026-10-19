@@ -41,6 +41,26 @@ def _included_status(line: str) -> bool:
     return any(_included(path.strip('"')) for path in paths)
 
 
+def _submodule_changes(root: Path) -> list[dict[str, object]]:
+    """Bind dirty source bytes to the manifest, beyond the submodule commit.
+
+    HEAD plus these modifications/deletions identifies the source used in a
+    build; the dirty boolean alone cannot distinguish two local implementations.
+    """
+    changed = _git(root, "diff", "--name-only", "-z", "HEAD", check=False).split("\0")
+    untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
+    rows = []
+    for relative in sorted({name for name in (*changed, *untracked) if name}):
+        path = root / relative
+        if path.is_symlink():
+            rows.append({"path": relative, "symlink": path.readlink().as_posix()})
+        elif path.is_file():
+            rows.append({"path": relative, "size": path.stat().st_size, "sha256": _sha(path)})
+        elif not path.exists():
+            rows.append({"path": relative, "deleted": True})
+    return rows
+
+
 def build_manifest(root: Path) -> dict[str, object]:
     root = root.resolve()
     head = _git(root, "rev-parse", "HEAD").strip()
@@ -61,7 +81,10 @@ def build_manifest(root: Path) -> dict[str, object]:
         revision, path, *_ = rest.split()
         submodule_paths.add(path)
         dirty = bool(_git(root / path, "status", "--short", check=False).strip())
-        submodule_rows.append({"path": path, "revision": revision, "state": state, "dirty": dirty})
+        submodule_rows.append({
+            "path": path, "revision": revision, "state": state, "dirty": dirty,
+            "dirty_files": _submodule_changes(root / path) if dirty else [],
+        })
 
     files = []
     for relative in paths:

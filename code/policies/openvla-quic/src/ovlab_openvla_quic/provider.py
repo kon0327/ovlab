@@ -134,7 +134,10 @@ class QuICProviderLoader:
             raise QuICProviderContractError(
                 f"{descriptor.provider.package} must export callable create_provider(variant=...)"
             )
-        provider = factory(variant=descriptor.variant.value)
+        provider = factory(
+            variant=descriptor.variant.value,
+            method_descriptor=descriptor.as_metadata(),
+        )
         required = (
             "api_version", "describe", "capability_description", "load", "reset_episode",
             "predict", "close", "load_counts",

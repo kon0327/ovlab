@@ -30,6 +30,7 @@ services:
     image: ${OVLAB_OPENVLA_IMAGE:-ovlab-policy-openvla:local}
     command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --socket, /run/ovlab/policy.sock]
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-openvla}
       OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
       OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
@@ -69,6 +70,7 @@ services:
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
     command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs/evaluate]
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-openvla}
       OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
       OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
@@ -116,6 +118,7 @@ services:
     image: ${OVLAB_OFT_IMAGE:-ovlab-policy-openvla-oft:local}
     command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --socket, /run/ovlab/policy.sock]
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-oft}
       OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
       OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
@@ -156,6 +159,7 @@ services:
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
     command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs/evaluate]
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-oft}
       OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
       OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
@@ -197,6 +201,100 @@ services:
         source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}
         target: /var/lib/ovlab/runs
 
+  policy-openvla-quic:
+    <<: *policy-security
+    profiles: [quic]
+    image: ${OVLAB_QUIC_IMAGE:-ovlab-policy-openvla-quic:local}
+    command: [service, serve, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --socket, /run/ovlab/policy.sock]
+    environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
+      OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-quic}
+      OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
+      OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
+      OVLAB_QUIC_ADAPTER_PATH: /adapters/quic
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: /tmp/ovlab-huggingface
+      HF_HUB_CACHE: /tmp/ovlab-huggingface/hub
+      HF_MODULES_CACHE: /tmp/ovlab-transformers-modules
+      OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID:?checkpoint resolver did not set an ID}
+      OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_SOURCE_KIND: ${OVLAB_CHECKPOINT_SOURCE_KIND:?checkpoint resolver did not set provenance}
+      OVLAB_CHECKPOINT_REPOSITORY: ${OVLAB_CHECKPOINT_REPOSITORY:?checkpoint resolver did not set repository}
+      OVLAB_CHECKPOINT_REVISION: ${OVLAB_CHECKPOINT_REVISION:?checkpoint resolver did not set revision}
+      OVLAB_CHECKPOINT_SHA256: ${OVLAB_CHECKPOINT_SHA256:?checkpoint resolver did not set SHA-256}
+      TF_CPP_MIN_LOG_LEVEL: "3"
+      OVLAB_IMAGE_DIGEST: ${OVLAB_QUIC_IMAGE_DIGEST:-unavailable}
+      OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
+      OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
+      OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-quic
+      OVLAB_OFFLINE_MODE: hf-hub-offline,transformers-offline,network-none
+      OVLAB_MOUNT_CONTRACT: config-bundle-ro,resolved-checkpoint-ro,rpc-rw
+      NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all
+    volumes:
+      - *config-bundle
+      - rpc-quic:/run/ovlab
+      - type: bind
+        source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?checkpoint resolver did not set a host path}
+        target: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
+        read_only: true
+      - type: bind
+        source: ${OVLAB_QUIC_ADAPTER_HOST_PATH:-/tmp}
+        target: /adapters/quic
+        read_only: true
+    healthcheck: *policy-health
+
+  benchmark-quic:
+    <<: *policy-security
+    profiles: [quic]
+    stop_grace_period: 5m
+    image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs/evaluate]
+    environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
+      OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-quic}
+      OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
+      OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
+      MUJOCO_GL: egl
+      MUJOCO_EGL_DEVICE_ID: ${OVLAB_EGL_DEVICE_ID:-0}
+      OVLAB_IMAGE_DIGEST: ${OVLAB_BENCHMARK_IMAGE_DIGEST:-unavailable}
+      OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
+      OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}
+      OVLAB_SERVICE_TOPOLOGY: benchmark-libero--af-unix--policy-openvla-quic
+      OVLAB_OFFLINE_MODE: network-none
+      OVLAB_MOUNT_CONTRACT: config-bundle-ro,datasets-ro,runs-rw,rpc-rw
+      OVLAB_ARTIFACT_UMASK: "0007"
+      OVLAB_POSTPROCESSING_MODE: external
+      OVLAB_RESOLVED_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_ID: ${OVLAB_RESOLVED_CHECKPOINT_ID}
+      OVLAB_CHECKPOINT_SOURCE_KIND: ${OVLAB_CHECKPOINT_SOURCE_KIND}
+      OVLAB_CHECKPOINT_HOST_PATH: ${OVLAB_RESOLVED_CHECKPOINT_PATH}
+      OVLAB_CHECKPOINT_REPOSITORY: ${OVLAB_CHECKPOINT_REPOSITORY}
+      OVLAB_CHECKPOINT_REVISION: ${OVLAB_CHECKPOINT_REVISION}
+      OVLAB_CHECKPOINT_SHA256: ${OVLAB_CHECKPOINT_SHA256}
+      NVIDIA_VISIBLE_DEVICES: ${OVLAB_GPU_DEVICE:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility
+    gpus: all
+    group_add:
+      - ${OVLAB_HOST_ARTIFACT_GID:-1000}
+    depends_on:
+      policy-openvla-quic:
+        condition: service_healthy
+        restart: false
+    volumes:
+      - *config-bundle
+      - rpc-quic:/run/ovlab
+      - type: bind
+        source: ${OVLAB_DATASETS_PATH:?dataset resolver did not set a host path}
+        target: /datasets
+        read_only: true
+      - type: bind
+        source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}
+        target: /var/lib/ovlab/runs
+
   reporting:
     <<: *policy-security
     profiles: [reporting]
@@ -211,6 +309,7 @@ services:
       - --report-enabled
       - ${OVLAB_REPORT_ENABLED:-true}
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_ARTIFACT_UMASK: "0007"
       OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw
       OVLAB_RUNS_ROOT: /var/lib/ovlab/runs
@@ -243,6 +342,7 @@ services:
     image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}
     command: [export, generate, --spec, /etc/ovlab/export.yaml]
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_ARTIFACT_UMASK: "0007"
       OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro
       OVLAB_RUNS_ROOT: /var/lib/ovlab/runs
@@ -283,6 +383,7 @@ services:
       - /tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700
     restart: "no"
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_MODEL_DATA_ROOT: /var/lib/ovlab/model-data
       OVLAB_MOUNT_CONTRACT: datasets-rw
       OVLAB_NETWORK_CONTRACT: explicit-acquisition-only
@@ -300,6 +401,7 @@ services:
     entrypoint: [python, -m, ovlab_benchctl.training_worker]
     command: [train, --run-root, /var/lib/ovlab/training-run]
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_TRAINING_RUNTIME: isolated-container
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -339,6 +441,7 @@ services:
       - --model-data-root
       - /var/lib/ovlab/model-data
     environment:
+      OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_MOUNT_CONTRACT: training-run-rw,finalized-checkpoints-rw
       OVLAB_NETWORK_CONTRACT: disabled
     group_add:
@@ -354,3 +457,4 @@ services:
 volumes:
   rpc-openvla:
   rpc-oft:
+  rpc-quic:

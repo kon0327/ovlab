@@ -266,12 +266,16 @@ def test_external_bridge_has_recorded_uncommitted_content_identity():
         for path in files
     ).encode()
     digest = hashlib.sha256(manifest).hexdigest()
-    provenance = load(PROVENANCE_PATH)["ownership"]
-    assert digest == provenance["backend_bridge_python_content_sha256"]
-    assert provenance["backend_bridge_base_revision"] == (
-        "deab81fbe4035c3de2c2da3d63db966fe3361f82"
+    import json
+    provenance = json.loads((REPOSITORY_ROOT / "external/openvla-quic.migration.json").read_text())
+    assert digest == provenance["provider_python_content_sha256"]
+    assert provenance["base_revision"] == "533b1a76ea600f50738cb9369ed47192a216e2af"
+    assert provenance["state"] == "reviewable_patch_on_pinned_submodule"
+    # Preserve the historical Gate F evidence rather than relabelling it as
+    # validation of the portable method or current OpenVLA implementation.
+    assert load(PROVENANCE_PATH)["ownership"]["backend_bridge_python_content_sha256"] == (
+        "5068a544cf918bf19bceec6d879d56409eb602ec1c0d2c38f47b398988bc92ba"
     )
-    assert provenance["backend_bridge_git_state"] == "modified_uncommitted_gate_f_addendum"
 
 
 def test_peft_and_wc_runtime_fail_with_distinct_typed_errors_before_loading():
