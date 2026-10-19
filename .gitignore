@@ -1,11 +1,6 @@
-# Generated experiment data (retain directory markers)
+# Optional repo-local experiment output
 runs/*
-!runs/.gitkeep
-
-# Generated analytical laboratory outputs
 lab/reports/*
-!lab/reports/.gitkeep
-lab/notebooks/.ipynb_checkpoints/
 deploy/compose/images.local.env
 
 # Python caches and compiled files

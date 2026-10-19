@@ -1,0 +1,9 @@
+name: openvla-quic
+channels:
+  - defaults
+dependencies:
+  - setuptools[version='>=77']
+  - pip
+  - python=3.10
+  - wheel[version='>=0.45']
+prefix: /home/kony/miniconda3/envs/openvla-quic

@@ -1,0 +1,11 @@
+name: openvla-quic
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - setuptools>=77
+  - wheel>=0.45
+  - pip:
+      - torch==2.2.0
+      - torchvision==0.17.0

@@ -50,7 +50,6 @@ flowchart TB
 
     subgraph Offline["Offline evidence plane"]
         Reporting["Reporting container"]
-        Lab["lab/ analysis workspace"]
     end
 
     subgraph Data["External ovlab-data workspace"]
@@ -77,7 +76,6 @@ flowchart TB
     Runs -->|read-only| Reporting
     Reporting --> Derived
     Reporting --> Exports
-    Runs -->|read-only| Lab
     Datasets --> TrainingRuns
     Checkpoints --> TrainingRuns
 ```
@@ -105,8 +103,7 @@ ovlab/
 ├── configs/           portable experiment and component configuration
 ├── deploy/            Dockerfiles, Compose topology, locks and environments
 ├── external/          pinned upstream sources and the OpenVLA-QuIC fork
-├── lab/               offline exploratory/reusable analysis workspace
-└── runs/              optional repo-local development output only
+└── ovlab              launcher for the host CLI
 ```
 
 The Python packages form a layered dependency graph:
@@ -178,8 +175,8 @@ Important ownership rules are:
   integration coupling, not dependencies of the runner loop; a future service
   bootstrap package could remove this cycle.
 - The production report engine currently lives in `ovlab-runner` because it
-  consumes runner artifacts. `lab/` is a separate research workspace and must
-  treat `runs/` as read-only.
+  consumes runner artifacts. It reads canonical runs as immutable inputs and
+  writes reports and exports under the managed data root.
 
 ## 4. Configuration architecture
 
@@ -562,11 +559,6 @@ on explicit request and can select all runs, the same model or a manual run set.
 Both publish metadata and file inventories atomically. They do not become part
 of the canonical run.
 
-The `lab/` workspace is reserved for exploratory notebooks and reusable offline
-analysis. `lab/src/ovlab_lab/` is the intended home of reusable loaders,
-analyses, visualizations and report research; generated lab reports are ignored
-by Git.
-
 ## 12. Managed data and checkpoint resolution
 
 ```text
@@ -693,9 +685,9 @@ carry their own explicit version.
 
 ### Add a report or export
 
-Read only finalized, verified canonical runs. Put reusable production behavior
-in the reporting engine and exploratory work in `lab/`. Give templates and
-selection rules stable identities; never repair source evidence while rendering.
+Read only finalized, verified canonical runs. Put reusable behavior in the
+reporting engine. Give templates and selection rules stable identities; never
+repair source evidence while rendering.
 
 ## 16. Current constraints
 
@@ -704,9 +696,7 @@ selection rules stable identities; never repair source evidence while rendering.
 - Production deployment supports Vanilla/merged-LoRA and OFT profiles. QuIC is
   still an experimental provider/contract boundary rather than a qualified
   Compose topology.
-- The reporting implementation is packaged with `ovlab-runner`; the root `lab/`
-  tree is currently a structured workspace rather than a second production
-  report engine.
+- The reporting implementation is packaged with `ovlab-runner`.
 - GLFW requires a display server. EGL remains the supported unattended path.
 - Real evaluation and training require locally available compatible GPU,
   checkpoint and dataset resources.

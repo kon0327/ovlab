@@ -50,9 +50,9 @@ deploy/scripts/
 **/*.py[cod]
 code/tests/
 runs/
+lab/reports/
 checkpoints/
 datasets/
-lab/
 docs/
 notebooks/
 .env

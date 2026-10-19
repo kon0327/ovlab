@@ -1,0 +1,26 @@
+Environment: openvla-quic
+Python: 3.10.22
+PyTorch: 2.2.0+cu121 (CUDA runtime 12.1)
+CUDA device visible to this test process: no
+
+OpenVLA-QuIC tests:
+  python -m pytest external/openvla-quic/tests/quic -q
+  5 passed, 1 skipped (opt-in RLDS test)
+
+RLDS preparation test:
+  OPENVLA_QUIC_TEST_RLDS=1 python -m pytest external/openvla-quic/tests/quic/test_rlds.py -q
+  1 passed
+
+QuIC method tests:
+  python -m pytest external/quic-peft-vla/tests -q
+  22 passed, 1 skipped (CUDA unavailable), 18 subtests passed
+
+Runtime checks:
+  pip check: no broken requirements found
+  openvla-quic --help: passed
+  PyTorch CPU tensor smoke test: passed
+  OpenVLA and QuIC modules imported from the expected package locations
+
+GPU-specific execution was unavailable because this test process could not see
+a CUDA device. No LIBERO, Robosuite, or MuJoCo runtime was installed for these
+model-package tests.

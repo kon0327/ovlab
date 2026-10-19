@@ -1,0 +1,15 @@
+python=3.10.22
+executable=/home/kony/miniconda3/envs/openvla-quic/bin/python
+platform=Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35
+torch=2.2.0+cu121
+torch_cuda=12.1
+cuda_available=False
+torchvision=0.17.0+cu121
+transformers=4.40.1
+numpy=1.26.4
+tensorflow=2.15.0
+tensorflow_datasets=4.9.3
+openvla_quic=/home/kony/dissertation/ovlab/external/openvla-quic/quic_petf/__init__.py
+quic_petf_vla=/home/kony/miniconda3/envs/openvla-quic/lib/python3.10/site-packages/quic_petf_vla/__init__.py
+openvla_model=prismatic.extern.hf.modeling_prismatic
+tensor_smoke=3
