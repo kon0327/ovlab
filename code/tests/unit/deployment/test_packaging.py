@@ -344,7 +344,8 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
     assert re.fullmatch(r"[0-9a-f]{40}", document["repository_revision"])
     assert re.fullmatch(r"[0-9a-f]{64}", document["source_content_sha256"])
     assert {row["path"] for row in document["submodules"]} == {
-        "external/libero", "external/openvla", "external/openvla-oft", "external/openvla-quic"
+        "external/libero", "external/openvla", "external/openvla-oft", "external/openvla-quic",
+        "external/quic-peft-vla",
     }
     status = subprocess.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
@@ -420,7 +421,8 @@ def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount():
     training = _dockerfile("Dockerfile.training-openvla-quic")
     lock = (ROOT / "deploy/locks/quic-openvla.requirements.txt").read_text()
     for dockerfile in (policy, training):
-        assert "/opt/ovlab/code/packages/quic-petf-vla" in dockerfile
+        assert "/opt/ovlab/external/quic-peft-vla" in dockerfile
+        assert "COPY external/quic-peft-vla " in dockerfile
         assert "COPY external/openvla-quic " in dockerfile
         assert "COPY external/libero " not in dockerfile
         assert 'USER 10001:10001' in dockerfile

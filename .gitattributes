@@ -1,0 +1,2 @@
+# Reviewed unified diffs preserve original upstream context byte-for-byte.
+external/openvla-quic.migration.patch -whitespace

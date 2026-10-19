@@ -73,7 +73,7 @@ def _optional_positive(value: int | None, name: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class QuICProviderSpec:
-    package: str = "openvla_quic.ovlab_provider"
+    package: str = "ovlab_openvla_quic.runtime"
     api_name: str = "ovlab-quic-provider"
     api_version: str = "1.0.0"
     source_repository: str = "external/openvla-quic"
@@ -124,7 +124,7 @@ class QuICProfileDefinition:
         if self.active and not self.resolved:
             raise QuICImplementationUnavailableError(
                 variant.value,
-                "openvla_quic.ovlab_provider",
+                "ovlab_openvla_quic.runtime",
                 f"{self.profile_id.value} profile definition unresolved",
                 variant.next_gate,
             )

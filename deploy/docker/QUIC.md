@@ -3,12 +3,14 @@
 Build the dedicated serving and training roles from the repository root:
 
 ```bash
+git submodule update --init external/openvla-quic external/quic-peft-vla
+python deploy/scripts/prepare_openvla_quic.py --apply
 bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic
 ```
 
 The images are `ovlab-policy-openvla-quic:local` and
 `ovlab-training-openvla-quic:local`. They install the portable
-`code/packages/quic-petf-vla` method before the host integration in
+`external/quic-peft-vla` method before the host integration in
 `external/openvla-quic`. Neither image installs LIBERO, Robosuite, MuJoCo, or
 OpenGL. OVLAB's benchmark image owns rollout environments and communicates
 with the policy over the existing AF_UNIX service contract.
@@ -62,12 +64,14 @@ submodule commit.
 
 `ovlab_core.progress.ConsoleProgress` provides shared stderr tracking for
 optimizer steps, validation batches, and evaluation episodes. Interactive
-terminals receive an updating line; captured Docker logs receive a start
-line, progress at most every 30 seconds, and the final actual count and
-status. Failure or interruption preserves the partial count. `OVLAB_PROGRESS=on`
-prints every update in captured logs; `OVLAB_PROGRESS=off` silences tracking.
-JSON command results remain on stdout. Console progress supplements persisted
-scientific metrics and does not change their values.
+`train run` attaches a Docker terminal so the worker redraws each bar in
+place; its evidence log records plain start, periodic (at most every 30
+seconds), and final snapshots. Redirected and JSON-mode runs print plain
+progress snapshots to stderr. Failure or interruption preserves the partial
+count. `OVLAB_PROGRESS=on` records every update in captured logs;
+`OVLAB_PROGRESS=off` silences tracking. JSON command results remain on stdout.
+Console progress supplements persisted scientific metrics without changing
+their values.
 
 ```python
 from ovlab_core.progress import ConsoleProgress

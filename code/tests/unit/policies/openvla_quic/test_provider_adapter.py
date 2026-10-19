@@ -314,7 +314,7 @@ def test_skeleton_fails_typed_before_discovery_cuda_model_checkpoint_socket_or_t
     with pytest.raises(error_type) as failure:
         adapter.initialize(make_run_context())
     assert failure.value.variant == variant.value
-    assert failure.value.expected_package == "openvla_quic.ovlab_provider"
+    assert failure.value.expected_package == "ovlab_openvla_quic.runtime"
     assert failure.value.expected_source == source
     assert failure.value.implementation_status == status
     assert failure.value.next_implementation_gate == next_gate

@@ -23,7 +23,14 @@ def test_reviewed_patch_reconstructs_a_pristine_pinned_submodule_and_preserves_c
         helper.prepare(tmp_path)
     assert helper.prepare(tmp_path, apply=True)["status"] == "verified"
     assert helper.prepare(tmp_path, apply=True)["status"] == "verified"
-    source = external / "openvla-quic/openvla_quic/peft_provider.py"
+    removed = external / "openvla-quic/openvla_quic/wc_provider.py"
+    removed.parent.mkdir()
+    removed.write_text("# obsolete backend restored by mistake\n")
+    with pytest.raises(RuntimeError, match="missing or changed"):
+        helper.prepare(tmp_path)
+    removed.unlink()
+    removed.parent.rmdir()
+    source = external / "openvla-quic/quic_petf/runtime.py"
     source.write_text(source.read_text() + "\n# local edit must be preserved\n")
     before = source.read_bytes()
     with pytest.raises(RuntimeError, match="does not apply cleanly"):

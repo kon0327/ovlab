@@ -20,9 +20,11 @@ def prepare(root, *, apply=False):
         raise RuntimeError("QuIC submodule revision differs from migration base; run git submodule update --init external/openvla-quic")
 
     def differences():
-        return [name for name, digest in snapshot["patched_files"].items()
-                if not (repository / name).is_file()
-                or hashlib.sha256((repository / name).read_bytes()).hexdigest() != digest]
+        changed = [name for name, digest in snapshot["patched_files"].items()
+                   if not (repository / name).is_file()
+                   or hashlib.sha256((repository / name).read_bytes()).hexdigest() != digest]
+        changed.extend(name for name in snapshot.get("deleted_files", []) if (repository / name).exists())
+        return changed
 
     changed = differences()
     if changed and apply:

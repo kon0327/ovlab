@@ -50,7 +50,7 @@ def test_lightweight_commands_do_not_import_runtime_packages(arguments):
     expression = (
         "import json,sys; from ovlab_benchctl.cli import main,_parser; "
         f"{invocation}; "
-        "blocked=('torch','transformers','peft','libero','mujoco','robosuite','openvla_quic'); "
+        "blocked=('torch','transformers','peft','libero','mujoco','robosuite','openvla_quic','quic_petf'); "
         "print(json.dumps({'code':code,'loaded':sorted(k for k in sys.modules if k.split('.')[0] in blocked)}))"
     )
     env = os.environ.copy()
@@ -77,6 +77,21 @@ def test_help_and_version_have_stable_identity():
     version = _run("--version")
     assert version.returncode == 0
     assert version.stdout.startswith("ovlab 0.2.0 (revision ")
+
+
+def test_training_summary_separates_completed_checkpoint_from_weak_validation():
+    report = {"run_id": "smoke", "host_path": "/runs/smoke", "result": {
+        "status": "completed", "checkpoint_id": "checkpoint-1", "optimizer_steps": 3,
+        "adapter_parameter_count": 14880, "changed_adapter_tensor_count": 4,
+        "identity_logit_max_absolute_error": 0.0, "reload_logit_max_absolute_error": 0.0,
+        "adapter_validation": {"action_token_accuracy": 0.0, "action_tokens": 28,
+                               "action_token_cross_entropy": 27.2857},
+    }}
+    summary = _compact("train run", report)
+    assert "[OK] checkpoint finalized; 3 optimizer steps; 4 adapter tensors updated; exact save/reload" in summary
+    assert "[CHECK] 0.0% on 28 action tokens" in summary
+    assert "rollout not measured" in summary
+    assert "adapter_parameter_count" not in summary
 
 
 def test_dataset_version_does_not_trigger_global_cli_version():

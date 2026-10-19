@@ -32,7 +32,8 @@ COPY code /opt/ovlab/code
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 COPY external/openvla-quic /opt/ovlab/external/openvla-quic
-RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/code/packages/quic-petf-vla \
+COPY external/quic-peft-vla /opt/ovlab/external/quic-peft-vla
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/quic-peft-vla \
     && bash /tmp/install-ovlab-packages.sh \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla-quic \
     && python -m pip check \

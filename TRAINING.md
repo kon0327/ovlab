@@ -102,6 +102,7 @@ and unresolved aliases are rejected.
 ```bash
 ./ovlab train profiles
 ./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
+./ovlab train run --profile openvla-libero10-quic-smoke.yaml
 ./ovlab train plan --profile configs/training/openvla-libero10-lora-smoke.yaml
 ```
 
@@ -160,9 +161,14 @@ Teacher-forced validation remains separate from benchmark rollout evaluation.
 ```
 
 Training optimizer steps, QuIC teacher-forced validation, and rollout task/episode
-progress write to stderr. `OVLAB_PROGRESS=off` disables the console tracker;
-JSON stdout and canonical metrics remain available. Set the same variable on
-the relevant container/service environment when invoking a worker directly.
+progress write to stderr. In an interactive `train run`, Docker receives a
+terminal and each progress bar updates in place. Worker logs retain periodic
+plain-text snapshots. Redirected output and `--json` use plain progress lines
+on stderr, leaving JSON stdout intact. `OVLAB_PROGRESS=off` disables the
+console tracker; set the same variable on the relevant container/service
+environment when invoking a worker directly. The short human result includes
+separate checkpoint and validation checks: a completed smoke run can have a
+valid checkpoint while teacher-forced action-token accuracy remains low.
 
 ## Isolated execution
 

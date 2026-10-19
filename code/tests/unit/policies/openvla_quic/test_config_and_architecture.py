@@ -120,14 +120,16 @@ def test_quic_package_contains_only_wrapper_contract_layers():
     production_files = {path.name for path in (PACKAGE_ROOT / "src/ovlab_openvla_quic").glob("*.py")}
     assert production_files == {
         "__init__.py", "adapter.py", "config.py", "descriptors.py", "errors.py",
-        "provider.py", "registration.py", "service.py", "source.py",
+        "provider.py", "registration.py", "service.py", "source.py", "runtime.py",
     }
     source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((PACKAGE_ROOT / "src/ovlab_openvla_quic").glob("*.py"))
     )
-    assert "from openvla_quic" not in source
-    assert "import openvla_quic" not in source
+    import ast
+    tree = ast.parse((PACKAGE_ROOT / "src/ovlab_openvla_quic/runtime.py").read_text())
+    assert not any(isinstance(node, ast.ImportFrom) and (node.module or "").startswith("quic_petf")
+                   for node in tree.body)
     assert "NotImplementedError" not in source
     forbidden_modules = {
         "layers.py", "factorization.py", "training.py", "kernels.py",

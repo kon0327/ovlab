@@ -1,15 +1,23 @@
 # OVLAB QuIC
 
 QuIC-PEFT is now an experimental adapter-only runtime for dense token OpenVLA.
-Its method implementation lives in `code/packages/quic-petf-vla`, independently
+Its method implementation lives in `external/quic-peft-vla`, independently
 of OVLAB, OpenVLA and benchmarks. The OpenVLA fork imports that package; this
 OVLAB package contains settings, provenance, lifecycle and policy contracts.
 
 ```text
 OVLAB policy / training workflow
-  -> external/openvla-quic/openvla_quic (dense token host, targets, provider)
+  -> external/openvla-quic (standalone dense model, loading, training/serving runtime)
     -> quic-petf-vla (compound math, injection, adapter artifacts)
 ```
+
+The external fork also works independently: it exposes model-level QuIC APIs,
+an explicit JSON training CLI, verified episode datasets, and HTTP serving.
+Research-specific QP/A presets and placement selectors belong to
+`ovlab_benchctl.quic_experiments`, not to the external model. The OVLAB protocol adapter lives in
+`ovlab_openvla_quic.runtime`; it imports `quic_petf.host` only when loading a
+policy. Descriptor validation, episode lifecycle and action conversions stay in
+OVLAB. The external package contains no OVLAB provider or WC backend.
 
 `external/compound-peft` remains an immutable historical reference. Its bundled
 package named `peft` is never imported by the current runtime. The legacy
@@ -24,7 +32,7 @@ The root repository tracks the reviewable additions and their hashes in
 `external/openvla-quic.migration.patch` and `.migration.json`.
 
 ```bash
-git submodule update --init external/openvla-quic
+git submodule update --init external/openvla-quic external/quic-peft-vla
 python deploy/scripts/prepare_openvla_quic.py --apply
 python deploy/scripts/prepare_openvla_quic.py --check
 ```

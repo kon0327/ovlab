@@ -41,3 +41,33 @@ def test_disabled_progress_and_broken_console_do_not_affect_work(monkeypatch):
     with ConsoleProgress("Eval", total=2, stream=stream) as progress:
         progress.advance(2)
     assert progress.completed == 2
+
+
+def test_terminal_tee_updates_one_line_and_keeps_audit_snapshots_plain(monkeypatch):
+    monkeypatch.delenv("OVLAB_PROGRESS", raising=False)
+
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+
+    class Tee:
+        def __init__(self):
+            self.console, self.log = Terminal(), StringIO()
+
+        def isatty(self):
+            return False
+
+    stream = Tee()
+    with ConsoleProgress("QuIC training", total=3, unit="step", stream=stream, min_interval=0) as progress:
+        for step in range(3):
+            progress.advance(detail=f"loss={step}")
+    terminal = stream.console.getvalue()
+    assert terminal.count("\r") == 4
+    assert terminal.count("\n") == 1
+    assert "3/3 step" in terminal and "completed" in terminal
+    assert terminal.count("3/3 step") == 1
+    snapshots = stream.log.getvalue().splitlines()
+    assert len(snapshots) == 2
+    assert "0/3 step" in snapshots[0]
+    assert "3/3 step" in snapshots[1] and "completed" in snapshots[1]
+    assert "\r" not in stream.log.getvalue() and "\x1b" not in stream.log.getvalue()

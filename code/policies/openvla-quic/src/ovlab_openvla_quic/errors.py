@@ -42,7 +42,7 @@ class QuICPEFTIntegrationIncompleteError(QuICImplementationUnavailableError):
     def __init__(self) -> None:
         super().__init__(
             "quic-peft",
-            "openvla_quic.ovlab_provider",
+            "ovlab_openvla_quic.runtime",
             "legacy_reference_available_openvla_integration_skeleton",
             "I",
             "external/openvla-quic -> external/compound-peft",
@@ -55,7 +55,7 @@ class QuICWCImplementationIncompleteError(QuICImplementationUnavailableError):
     def __init__(self) -> None:
         super().__init__(
             "quic-wc",
-            "openvla_quic.ovlab_provider",
+            "ovlab_openvla_quic.runtime",
             "source_absent_implementation_skeleton",
             "J",
             "external/openvla-quic",

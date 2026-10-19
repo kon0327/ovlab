@@ -51,6 +51,7 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab policy list
 ./ovlab connect CONFIG
 ./ovlab run CONFIG --dry-run
+./ovlab run --profile EXPERIMENT.yaml --dry-run
 ./ovlab run inspect RUN_PATH_OR_ID_OR_HASH
 ./ovlab run verify RUN_PATH_OR_ID_OR_HASH
 ./ovlab metrics recompute RUN_PATH_OR_ID_OR_HASH

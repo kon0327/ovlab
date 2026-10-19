@@ -40,6 +40,8 @@ deploy/scripts/
 !external/openvla-oft/**
 !external/openvla-quic/
 !external/openvla-quic/**
+!external/quic-peft-vla/
+!external/quic-peft-vla/**
 
 # Never send repository identity, test caches, assets, outputs, or secrets.
 .git

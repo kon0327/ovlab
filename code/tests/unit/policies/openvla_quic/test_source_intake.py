@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import importlib
@@ -226,40 +225,22 @@ def test_descriptor_construction_imports_neither_torch_peft_nor_external_provide
     assert descriptor.openvla_integration_status == "skeleton"
     assert not {name for name in introduced if name == "torch" or name.startswith("torch.")}
     assert not {name for name in introduced if name == "peft" or name.startswith("peft.")}
-    assert "openvla_quic.ovlab_provider" not in sys.modules
+    assert "ovlab_openvla_quic.runtime" not in sys.modules
 
 
-@contextmanager
-def _external_provider_modules():
-    path = str(EXTERNAL_PROVIDER_ROOT)
-    before_modules = set(sys.modules)
-    before_bytecode = sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    sys.path.insert(0, path)
-    try:
-        yield importlib.import_module("openvla_quic.ovlab_provider")
-    finally:
-        sys.path.remove(path)
-        sys.dont_write_bytecode = before_bytecode
-        for name in set(sys.modules) - before_modules:
-            if name == "openvla_quic" or name.startswith("openvla_quic."):
-                sys.modules.pop(name, None)
-
-
-def test_provider_discovery_does_not_shadow_or_import_bundled_peft():
-    peft_spec_before = importlib.util.find_spec("peft")
-    with _external_provider_modules() as module:
-        wc = module.create_provider(variant="quic-wc")
-        assert "openvla_quic.compound_peft_bridge" not in sys.modules
-        peft = module.create_provider(variant="quic-peft")
-        assert peft.describe()["backend"]["source_import_status"] == "present"
-        assert wc.describe()["source_import_status"] == "absent"
-        assert "peft" not in sys.modules and "torch" not in sys.modules
-    assert importlib.util.find_spec("peft") == peft_spec_before is None
+def test_ovlab_provider_discovery_stays_lightweight_and_rejects_unsupported_backends():
+    before = set(sys.modules)
+    module = importlib.import_module("ovlab_openvla_quic.runtime")
+    with pytest.raises(ValueError, match="explicit implemented method descriptor"):
+        module.create_provider(variant="quic-peft")
+    with pytest.raises(ValueError, match="does not implement variant"):
+        module.create_provider(variant="quic-wc")
+    introduced = set(sys.modules) - before
+    assert not any(name.split(".")[0] in {"torch", "peft", "quic_petf"} for name in introduced)
 
 
 def test_external_bridge_has_recorded_uncommitted_content_identity():
-    files = sorted((EXTERNAL_PROVIDER_ROOT / "openvla_quic").glob("*.py"))
+    files = sorted((EXTERNAL_PROVIDER_ROOT / "quic_petf").glob("*.py"))
     manifest = "".join(
         f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
         f"{path.relative_to(EXTERNAL_PROVIDER_ROOT).as_posix()}\n"
@@ -268,7 +249,7 @@ def test_external_bridge_has_recorded_uncommitted_content_identity():
     digest = hashlib.sha256(manifest).hexdigest()
     import json
     provenance = json.loads((REPOSITORY_ROOT / "external/openvla-quic.migration.json").read_text())
-    assert digest == provenance["provider_python_content_sha256"]
+    assert digest == provenance["petf_python_content_sha256"]
     assert provenance["base_revision"] == "533b1a76ea600f50738cb9369ed47192a216e2af"
     assert provenance["state"] == "reviewable_patch_on_pinned_submodule"
     # Preserve the historical Gate F evidence rather than relabelling it as
@@ -290,29 +271,15 @@ def test_peft_and_wc_runtime_fail_with_distinct_typed_errors_before_loading():
     assert "source_absent" in wc_failure.value.implementation_status
 
 
-def test_external_provider_bones_raise_before_model_or_cuda_and_wc_does_not_load_peft_bridge():
-    with _external_provider_modules() as module:
-        wc = module.create_provider(variant="quic-wc")
-        wc_error = importlib.import_module("openvla_quic.wc_provider").QuICWCBackendIncompleteError
-        with pytest.raises(wc_error):
-            wc.load({})
-        assert "openvla_quic.compound_peft_bridge" not in sys.modules
-
-        peft = module.create_provider(variant="quic-peft")
-        peft_error = importlib.import_module(
-            "openvla_quic.compound_peft_bridge"
-        ).CompoundPeftOpenVLAIntegrationIncompleteError
-        with pytest.raises(peft_error):
-            peft.load({})
-        assert peft.load_counts() == {"base_model": 0, "quic_artifact": 0, "processor": 0}
-        assert wc.load_counts() == {"base_model": 0, "quic_artifact": 0, "processor": 0}
-        assert "peft" not in sys.modules and "torch" not in sys.modules
-
-
-def test_wc_source_has_no_compound_peft_dense_forward_dependency():
-    wc_source = (EXTERNAL_PROVIDER_ROOT / "openvla_quic/wc_provider.py").read_text()
-    assert "compound_peft" not in wc_source
-    assert "CompoundPeft" not in wc_source
+def test_external_petf_runtime_has_no_legacy_or_other_method_backends():
+    package = EXTERNAL_PROVIDER_ROOT / "quic_petf"
+    assert not (EXTERNAL_PROVIDER_ROOT / "openvla_quic").exists()
+    for name in ("wc_provider.py", "compound_peft_bridge.py", "ovlab_provider.py", "peft_provider.py"):
+        assert not (package / name).exists()
+    sources = "\n".join(path.read_text() for path in package.glob("*.py"))
+    assert "quic-wc" not in sources
+    assert "compound_peft_bridge" not in sources
+    assert "create_provider" not in sources
     descriptor = skeleton_descriptor(QuICVariant.WC).as_metadata()
     assert descriptor["dense_adapter_materialization_allowed"] is False
     assert descriptor["dense_runtime_reconstruction_allowed"] is False
@@ -324,7 +291,7 @@ def test_dependency_direction_never_imports_ovlab_from_external_sources():
         path.read_text(errors="ignore") for path in SOURCE_ROOT.rglob("*.py")
     ).lower()
     provider_source = "\n".join(
-        path.read_text() for path in (EXTERNAL_PROVIDER_ROOT / "openvla_quic").glob("*.py")
+        path.read_text() for path in (EXTERNAL_PROVIDER_ROOT / "quic_petf").glob("*.py")
     ).lower()
     assert "import ovlab" not in compound_source and "from ovlab" not in compound_source
     assert "import ovlab" not in provider_source and "from ovlab" not in provider_source

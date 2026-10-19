@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 from typing import TextIO
@@ -11,9 +12,9 @@ from typing import TextIO
 class ConsoleProgress:
     """Track work without adding a terminal dependency or polluting JSON stdout.
 
-    ``OVLAB_PROGRESS=off`` silences progress. The default ``auto`` draws an
-    updating line on terminals and writes periodic plain lines in captured logs.
-    ``OVLAB_PROGRESS=on`` also emits every update in captured logs.
+    ``OVLAB_PROGRESS=off`` silences progress. The default ``auto`` updates one
+    terminal line and writes periodic plain snapshots to a worker's log.
+    ``OVLAB_PROGRESS=on`` also records every update in captured logs.
     """
 
     def __init__(
@@ -26,22 +27,54 @@ class ConsoleProgress:
         self.total = total
         self.unit = unit
         self.stream = stream if stream is not None else sys.stderr
+        # A worker may tee stderr to its evidence log. Its isatty() is false so
+        # ordinary writes stay readable there; live progress targets the actual
+        # console while periodic snapshots go to the log, as in QuIC Progress.
+        self.console = getattr(self.stream, "console", self.stream)
+        self.log = getattr(self.stream, "log", None)
         self.completed = 0
         self.detail = ""
         self.mode = os.environ.get("OVLAB_PROGRESS", "auto").lower()
         self.enabled = self.mode not in {"off", "0", "false", "no"}
         try:
-            self.interactive = bool(getattr(self.stream, "isatty", lambda: False)())
+            self.interactive = bool(getattr(self.console, "isatty", lambda: False)())
         except (OSError, ValueError):
             self.interactive = False
-        self.min_interval = min_interval if min_interval is not None else (1.0 if self.interactive else 30.0)
+        self.min_interval = min_interval if min_interval is not None else (0.5 if self.interactive else 30.0)
         self._started: float | None = None
         self._last_render = 0.0
+        self._last_snapshot = 0.0
         self._closed = False
+        self._displayed = False
+        self._external_unterminated = False
+
+    def _terminal_columns(self) -> int:
+        configured = os.environ.get("OVLAB_TERMINAL_COLUMNS", "")
+        try:
+            columns = int(configured) if configured else shutil.get_terminal_size((80, 24)).columns
+        except ValueError:
+            columns = 80
+        return columns if columns > 1 else 80
+
+    def prepare_external_write(self, value: str) -> None:
+        """Give another console writer a clean line while a bar is active."""
+        if not value or not self.interactive or not self.enabled or self._closed:
+            return
+        try:
+            if self._displayed:
+                self.console.write("\r\x1b[2K")
+                self.console.flush()
+                self._displayed = False
+            self._external_unterminated = not value.endswith("\n")
+        except (OSError, ValueError):
+            self.enabled = False
 
     def start(self) -> "ConsoleProgress":
         if self._started is None:
             self._started = time.monotonic()
+            register = getattr(self.stream, "register_progress", None)
+            if self.interactive and callable(register):
+                register(self)
             self._render("running", force=True)
         return self
 
@@ -54,7 +87,10 @@ class ConsoleProgress:
         self.start()
         self.completed = completed
         self.detail = detail
-        self._render("running", force=self.total is not None and completed >= self.total)
+        # close() draws the final count and status. Avoid a redundant full bar
+        # marked "running" immediately before the completed line.
+        if self.total is None or completed < self.total:
+            self._render("running")
 
     def advance(self, count: int = 1, *, detail: str = "") -> None:
         self.update(self.completed + count, detail=detail)
@@ -65,33 +101,65 @@ class ConsoleProgress:
         self.start()
         self._render(status, force=True, final=True)
         self._closed = True
+        unregister = getattr(self.stream, "unregister_progress", None)
+        if self.interactive and callable(unregister):
+            unregister(self)
 
     def _render(self, status: str, *, force: bool = False, final: bool = False) -> None:
         if not self.enabled:
             return
         now = time.monotonic()
-        if not force and self.mode != "on" and now - self._last_render < self.min_interval:
+        draw = force or self.mode == "on" or now - self._last_render >= self.min_interval
+        snapshot = force or self.mode == "on" or now - self._last_snapshot >= 30.0
+        if not draw and (not self.interactive or self.log is None or not snapshot):
             return
-        self._last_render = now
         elapsed = max(0.0, now - (self._started if self._started is not None else now))
         count = str(self.completed) if self.total is None else f"{self.completed}/{self.total}"
-        if self.total is None:
-            bar = "[" + ("=" * (self.completed % 20)).ljust(20, ".") + "]"
-        else:
-            fraction = 1.0 if self.total == 0 else min(1.0, self.completed / self.total)
-            filled = int(fraction * 20)
-            bar = "[" + ("=" * filled).ljust(20, ".") + "]"
+        fraction = None if self.total is None else (1.0 if self.total == 0 else min(1.0, self.completed / self.total))
+        def bar(width: int) -> str:
+            filled = self.completed % width if fraction is None else int(fraction * width)
+            return "[" + ("=" * filled).ljust(width, ".") + "]"
         rate = self.completed / elapsed if elapsed else 0.0
         eta = ""
         if self.total is not None and rate > 0 and self.completed < self.total:
             eta = f" eta={max(0, self.total - self.completed) / rate:.0f}s"
         detail = " ".join(self.detail.split())
-        line = f"[{self.description}] {bar} {count} {self.unit} elapsed={elapsed:.0f}s{eta} {status}"
+        line = f"[{self.description}] {bar(20)} {count} {self.unit} elapsed={elapsed:.0f}s{eta} {status}"
         if detail:
             line += f" {detail}"
+        if self.interactive:
+            limit = self._terminal_columns() - 1
+            if len(line) > limit:
+                # A Docker PTY can report 0 columns. Keep the bar on one
+                # physical row so carriage return really replaces it.
+                state = " " + status if final else ""
+                for width in (20, 12, 8):
+                    candidate = f"[{self.description}] {bar(width)} {count} {self.unit}{eta}{state}"
+                    if detail:
+                        candidate += f" {detail}"
+                    line = candidate
+                    if len(line) <= limit:
+                        break
+                if len(line) > limit:
+                    line = line[:limit - 1].rstrip() + "…"
         try:
-            self.stream.write(("\r" if self.interactive else "") + line + ("\n" if final or not self.interactive else "\x1b[K"))
-            self.stream.flush()
+            if self.interactive:
+                if draw:
+                    if self._external_unterminated:
+                        self.console.write("\n")
+                        self._external_unterminated = False
+                    self.console.write("\r" + line + "\x1b[K" + ("\n" if final else ""))
+                    self.console.flush()
+                    self._last_render = now
+                    self._displayed = not final
+                if self.log is not None and snapshot:
+                    self.log.write(line + "\n")
+                    self.log.flush()
+                    self._last_snapshot = now
+            elif draw:
+                self.stream.write(line + "\n")
+                self.stream.flush()
+                self._last_render = now
         except (OSError, ValueError):
             # A detached console must not alter scientific run state/artifacts.
             self.enabled = False

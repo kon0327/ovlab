@@ -23,12 +23,23 @@ def _context(root: Path) -> TrainingRunContext:
 
 
 class _ConsoleTee:
-    def __init__(self, console, log):
+    def __init__(self, console, log, progress_state=None):
         self.console, self.log = console, log
+        self.progress_state = progress_state if progress_state is not None else {}
+
+    def register_progress(self, progress):
+        self.progress_state["active"] = progress
+
+    def unregister_progress(self, progress):
+        if self.progress_state.get("active") is progress:
+            self.progress_state.pop("active")
 
     def write(self, value):
         self.log.write(value)
         self.log.flush()
+        progress = self.progress_state.get("active")
+        if progress is not None:
+            progress.prepare_external_write(value)
         return self.console.write(value)
 
     def flush(self):
@@ -46,7 +57,8 @@ def train(root: Path) -> int:
     logs = root / "logs"
     logs.mkdir(exist_ok=True)
     with (logs / "stdout.log").open("a", buffering=1) as stdout_log, (logs / "stderr.log").open("a", buffering=1) as stderr_log:
-        with redirect_stdout(_ConsoleTee(sys.stdout, stdout_log)), redirect_stderr(_ConsoleTee(sys.stderr, stderr_log)):
+        progress_state = {}
+        with redirect_stdout(_ConsoleTee(sys.stdout, stdout_log, progress_state)), redirect_stderr(_ConsoleTee(sys.stderr, stderr_log, progress_state)):
             return _train(root)
 
 

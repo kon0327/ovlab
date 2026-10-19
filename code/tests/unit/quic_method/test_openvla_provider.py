@@ -54,8 +54,8 @@ class Processor:
 @pytest.mark.parametrize("normalization_mode", ("host", "train-q99"))
 def test_dense_provider_load_predict_close_and_host_integrity(tmp_path, monkeypatch, normalization_mode):
     monkeypatch.syspath_prepend(str(ROOT / "external/openvla-quic"))
-    from openvla_quic import host as backend
-    from openvla_quic.ovlab_provider import create_provider
+    from quic_petf import host as backend
+    from ovlab_openvla_quic.runtime import create_provider
 
     checkpoint = tmp_path / "host"
     checkpoint.mkdir()
@@ -123,7 +123,7 @@ def test_dense_provider_load_predict_close_and_host_integrity(tmp_path, monkeypa
 
 def test_inline_normalization_can_supply_a_missing_host_key_and_rejects_unbound_stats(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "external/openvla-quic"))
-    from openvla_quic.host import apply_action_normalization
+    from quic_petf.host import apply_action_normalization
 
     model = TinyDenseHost()
     stats = {"q01": [-2.] * 7, "q99": [2.] * 7, "mask": [True] * 6 + [False]}

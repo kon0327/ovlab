@@ -619,7 +619,7 @@ def validate_quic_policy_descriptor(doc, path):
         "package", "api_name", "api_version", "source_repository", "source_commit",
     ))
     expected_provider = {
-        "package": "openvla_quic.ovlab_provider", "api_name": "ovlab-quic-provider",
+        "package": "ovlab_openvla_quic.runtime", "api_name": "ovlab-quic-provider",
         "api_version": "1.0.0", "source_repository": "external/openvla-quic",
         "source_commit": "deab81fbe4035c3de2c2da3d63db966fe3361f82",
     }

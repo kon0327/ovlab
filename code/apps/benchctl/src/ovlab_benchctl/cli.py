@@ -136,8 +136,12 @@ def _parser() -> argparse.ArgumentParser:
     _output_options(deploy_run)
 
     run = commands.add_parser("run", help="execute, inspect, or verify a run")
-    run.add_argument("target", help="CONFIG, or 'inspect'/'verify'")
+    run.add_argument("target", nargs="?", help="CONFIG, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH, RUN_ID, or RUN_HASH for inspect or verify")
+    run.add_argument(
+        "--profile", dest="experiment_profile",
+        help="evaluation YAML name in configs/experiments (or an explicit path)",
+    )
     run.add_argument("--output-root")
     run.add_argument("--dry-run", action="store_true")
     _output_options(run)
@@ -440,6 +444,38 @@ def _columns(rows, fields: tuple[tuple[str, ...], ...], *, empty: str) -> str:
     return "\n".join(lines) if lines else empty
 
 
+def _training_check_rows(document: dict) -> list[tuple[str, str]]:
+    """Explain run health without treating a short validation as rollout proof."""
+    result = document.get("result")
+    if not isinstance(result, dict):
+        return []
+    if result.get("status") != "completed" or not result.get("checkpoint_id"):
+        return [("check", "[CHECK] training or checkpoint finalization is incomplete")]
+    steps = result.get("optimizer_steps")
+    summary = "[OK] checkpoint finalized"
+    if isinstance(steps, int):
+        summary += f"; {steps} optimizer steps"
+    if "adapter_parameter_count" in result:
+        changed = result.get("changed_adapter_tensor_count")
+        if isinstance(changed, int) and changed > 0 and result.get("identity_logit_max_absolute_error") == 0 and result.get("reload_logit_max_absolute_error") == 0:
+            summary += f"; {changed} adapter tensors updated; exact save/reload"
+        else:
+            summary = "[CHECK] adapter update or save/reload evidence is incomplete"
+    rows = [("check", summary)]
+    validation = result.get("adapter_validation")
+    if isinstance(validation, dict):
+        accuracy, tokens = validation.get("action_token_accuracy"), validation.get("action_tokens")
+        if isinstance(accuracy, (int, float)) and isinstance(tokens, int) and tokens > 0:
+            prefix = "[CHECK]" if accuracy == 0 else "[INFO]"
+            detail = f"{prefix} {accuracy:.1%} on {tokens} action tokens"
+            entropy = validation.get("action_token_cross_entropy")
+            if isinstance(entropy, (int, float)):
+                detail += f"; CE={entropy:.3f}"
+            detail += "; teacher-forced, rollout not measured"
+            rows.append(("validation", detail))
+    return rows
+
+
 _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     "config validate": (
         ("valid", ("valid",)), ("kind", ("kind",)), ("mode", ("mode",)),
@@ -698,6 +734,8 @@ def _compact(command: str, result) -> str:
         if label == "compatibility issues" and isinstance(value, list):
             value = len(value)
         rendered.append((label, _scalar(value)))
+    if command == "train run":
+        rendered.extend(_training_check_rows(result))
     if not rendered:
         return json.dumps(result, indent=2, sort_keys=True)
     width = max(len(label) for label, _ in rendered)
@@ -844,18 +882,30 @@ def _dispatch(args):
     if args.command == "run":
         app = _application()
         if args.target in {"inspect", "verify"}:
+            if args.experiment_profile:
+                raise CliUsageError("run inspect/verify cannot be combined with --profile")
             if args.path is None:
                 raise CliUsageError(f"run {args.target} requires RUN_PATH, RUN_ID, or RUN_HASH")
             result = app.inspect(args.path) if args.target == "inspect" else app.verify(args.path)
         else:
+            if args.target is not None and args.experiment_profile is not None:
+                raise CliUsageError("run accepts either CONFIG or --profile, not both")
             if args.path is not None:
-                raise CliUsageError("run CONFIG accepts no second positional argument")
+                raise CliUsageError("run CONFIG/--profile accepts no second positional argument")
+            config = args.experiment_profile or args.target
+            if config is None:
+                raise CliUsageError("run requires CONFIG or --profile YAML")
+            if args.experiment_profile:
+                from .config_paths import resolve_config_path
+                config = resolve_config_path(
+                    args.experiment_profile, _repository_root(), "experiments",
+                )
             if args.dry_run:
-                result = app.execution_plan(args.target, output_root=args.output_root)
+                result = app.execution_plan(config, output_root=args.output_root)
             else:
                 previous = _install_interrupt_handlers()
                 try:
-                    result = app.run(args.target, output_root=args.output_root)
+                    result = app.run(config, output_root=args.output_root)
                 finally:
                     _restore_handlers(previous)
         return result, args.json, None
@@ -967,6 +1017,7 @@ def _dispatch(args):
             return TrainingDeployment(_repository_root()).run(
                 args.profile, allow_dataset_download=args.allow_dataset_download,
                 fit_action_normalization=args.fit_action_normalization,
+                interactive_progress=not args.json and sys.stderr.isatty(),
             ), args.json, None
         if args.train_command == "status":
             return app.train_status(args.run_id), args.json, None

@@ -113,11 +113,11 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
         variant=QuICVariant.PEFT, display_name="QuIC-PEFT (dense token OpenVLA)",
         provider=QuICProviderSpec(source_commit="533b1a76ea600f50738cb9369ed47192a216e2af"),
         implementation_status=QuICImplementationStatus.IMPLEMENTED,
-        profile=QuICProfileDefinition(profile, "quic-petf-vla/0.1.0", config_hash),
+        profile=QuICProfileDefinition(profile, "quic-peft-vla/0.1.0", config_hash),
         placement=QuICPlacementManifest("available", "quic-adapter-v1", entries),
         source_import_status="present", generic_compound_backend_status="portable_determinant_backend",
         openvla_integration_status="implemented",
-        source_identity={"availability": "available", "package": "quic-petf-vla", "version": "0.1.0",
+        source_identity={"availability": "available", "package": "quic-peft-vla", "version": "0.1.0",
                          "sha256": identity.get("quic_method_sha256"),
                          "integration_source_sha256": identity.get("integration_source_sha256")},
         base_model_identity={"availability": "available", "host_identity": identity, "host": host},
@@ -149,7 +149,7 @@ def _identity_provider(capabilities):
     contract = method["normalization_identity"]["contract"]
     preprocessing = method["normalization_identity"]["preprocessing"]
     versions = {"python": platform.python_version()}
-    for distribution in ("torch", "transformers", "safetensors", "quic-petf-vla", "ovlab-openvla-quic"):
+    for distribution in ("torch", "transformers", "safetensors", "quic-peft-vla", "openvla-quic", "ovlab-openvla-quic"):
         try:
             versions[distribution] = importlib.metadata.version(distribution)
         except importlib.metadata.PackageNotFoundError:
@@ -164,7 +164,7 @@ def _identity_provider(capabilities):
         "prompt_template_identity": f"openvla-{preprocessing['prompt_style']}@1.0.0",
         "action_codec_identity": {
             "identifier": method["capability_identity"]["action_codec"],
-            "conversion_owner": "openvla_quic.peft_provider.QuICPEFTProvider",
+            "conversion_owner": "ovlab_openvla_quic.runtime.QuICPETFProvider",
             "application_count": 1,
             "output_gripper_convention": capabilities.output_action_spec.gripper_convention.value,
         },

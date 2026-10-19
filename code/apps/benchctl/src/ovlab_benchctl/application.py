@@ -218,10 +218,9 @@ class OvlabApplication:
 
     def _training_profile(self, reference):
         from .training_composition import load_training_profile
+        from .config_paths import resolve_config_path
 
-        path = Path(reference).expanduser()
-        if not path.is_absolute():
-            path = self.repository_root / path
+        path = resolve_config_path(reference, self.repository_root, "training")
         if not path.is_file():
             raise ConfigReferenceError(f"training profile does not exist: {path.resolve()}")
         return path.resolve(), load_training_profile(path, config_root=self.config_root)

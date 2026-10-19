@@ -75,7 +75,8 @@ def test_training_materializes_hf_blob_links_without_changing_scientific_identit
 
 
 @pytest.mark.parametrize("trainer_status", [0, 1])
-def test_isolated_lifecycle_preserves_run_id_and_records_early_failure(tmp_path, monkeypatch, trainer_status):
+@pytest.mark.parametrize("interactive_progress", [False, True])
+def test_isolated_lifecycle_preserves_run_id_and_records_early_failure(tmp_path, monkeypatch, trainer_status, interactive_progress):
     from ovlab_benchctl import training_deployment
     from ovlab_benchctl.training_errors import TrainingRuntimeError
 
@@ -104,10 +105,12 @@ def test_isolated_lifecycle_preserves_run_id_and_records_early_failure(tmp_path,
     })
     if trainer_status:
         with pytest.raises(TrainingRuntimeError, match="trainer failed"):
-            deployment.run(profile_path)
+            deployment.run(profile_path, interactive_progress=interactive_progress)
     else:
-        deployment.run(profile_path)
+        deployment.run(profile_path, interactive_progress=interactive_progress)
     run_root, = (tmp_path / "data/runs/train").iterdir()
+    trainer_command = next(command for command in commands if "train" in command and "--run-root" in command)
+    assert ("--tty" in trainer_command) is interactive_progress
     for command in commands:
         if "--run-root" in command:
             mount_root = Path(command[command.index("--run-root") + 1])

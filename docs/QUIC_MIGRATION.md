@@ -9,18 +9,43 @@ training, immutable checkpoint and policy-service lifecycle.
 
 ```text
 OVLAB configuration / trainer / policy wrapper
-    -> external/openvla-quic (OpenVLA host, target placement, neutral provider)
-        -> code/packages/quic-petf-vla (portable PyTorch method)
+    -> external/openvla-quic (standalone OpenVLA model, loader, neutral provider)
+        -> external/quic-peft-vla (portable PyTorch method)
 
 OVLAB benchmark adapter -> simulator and rollout evaluation
 ```
 
-`quic-petf-vla` has its own package version and depends on Torch and
-Safetensors. Its determinant C1–C3 compounds, Cayley bases, injection,
+`quic-peft-vla` has its own repository and depends on Torch and Safetensors. It is
+an independent MIT-licensed Git repository pinned as the
+`external/quic-peft-vla` submodule. Its published Python distribution and import
+names remain compatible. Tests, CI, source provenance and installation
+instructions are in its README.
+OpenVLA declares the versioned dependency; QuIC images install the local package
+explicitly before the fork. Its determinant C1–C3 compounds, Cayley bases, injection,
 adapter-only artifacts and in-memory merge know nothing about OVLAB,
 Transformers, OpenVLA, TFDS or LIBERO. The OpenVLA fork supplies the host
-identity, named QP profiles and A1–A9 target resolution; the source's monolithic
-LIBERO rollout and experiment CLI are replaced by OVLAB owners.
+identity and a model-level adapter API. Named QP profiles and A1–A9 target
+resolution now live in `ovlab_benchctl/quic_experiments.py`, beside OVLAB's
+experiment hierarchy and ablation workflow. The fork also has its own explicit
+standalone CLI, tuner, verified episode-data interface, optional RLDS preparation
+and HTTP deployment; none requires OVLAB or a benchmark simulator. The
+standalone JSON schema uses exact target names and adapter parameters, without
+interpreting OVLAB research profiles.
+
+The model API exposes `enable_quic`, `quic_parameters`, `save_quic_adapter` and
+`load_quic_adapter` on `OpenVLAForActionPrediction`; ordinary forward/generation
+uses the inserted adapters. `quic_petf/host.py` supplies runtime loading,
+checkpoint identity and preprocessing rather than experiment selection.
+`quic_petf/runtime.py` composes checkpoint, processor and adapter for standalone
+callers. Its Python namespace is now `quic_petf`; the distribution and command
+remain `openvla-quic`. The OVLAB protocol provider is owned by
+`ovlab_openvla_quic.runtime`. The external PETF package contains no WC skeleton,
+legacy compound-PEFT bridge, or experiment-selection layer.
+
+Adding the model API changes the verified model/integration source hashes.
+Adapter artifacts bound to the previous source remain reproducible with the
+previous source/image. New runs use the new identity; source metadata must not
+be rewritten to make an old adapter appear compatible.
 
 The historical compound-PEFT snapshot and QuIC-WC skeleton remain separate.
 WC stays unavailable. No runtime path uses the legacy compound-PEFT backend

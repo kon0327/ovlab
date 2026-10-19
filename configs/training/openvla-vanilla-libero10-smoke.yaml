@@ -1,0 +1,46 @@
+schema_version: ovlab.training-profile/v1
+id: openvla-vanilla-libero10-smoke
+
+trainer:
+  id: openvla
+  implementation: openvla-reference
+
+model:
+  base_checkpoint: openvla-7b
+  revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
+  processor: inherited
+  adaptation_state: none
+
+dataset:
+  ref: libero/libero_10
+  preparation: openvla-rlds
+  split: train
+  partition:
+    seed: 42
+    validation_fraction: 0.2
+    max_episodes_per_group: 2
+    frame_stride: 8
+    max_frames_per_episode: 4
+    action_normalization: train-q99
+
+training:
+  mode: full
+  seed: 7
+  max_steps: 3
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 0.00001
+  precision: bf16
+  gradient_checkpointing: true
+  quantization: none
+
+checkpointing:
+  save_strategy: final
+  save_optimizer_state: false
+  output_kind: full
+
+resources:
+  accelerator: cuda
+  gpu_count: 1
+  max_vram_gib: 80
+  network: disabled

@@ -270,8 +270,8 @@ def execute(plan, context):
     import numpy as np
     import torch
     from torch.utils.data import DataLoader
-    from openvla_quic.config import resolve_targets
-    from openvla_quic.host import checkpoint_identity, layer_inventory, load_host
+    from .quic_experiments import resolve_targets
+    from quic_petf.host import checkpoint_identity, layer_inventory, load_host
     from quic_petf_vla import adapter_parameters, inject, save_adapter, load_adapter, disabled_adapters, QuICLinear
     from prismatic.models.backbones.llm.prompting import PurePromptBuilder
     from prismatic.util.data_utils import PaddedCollatorForActionPrediction

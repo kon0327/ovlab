@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import uuid
@@ -38,9 +39,9 @@ class TrainingDeployment:
         ).expanduser().resolve()
 
     def _profile(self, reference: str | Path) -> tuple[Path, TrainingProfile]:
-        path = Path(reference).expanduser()
-        if not path.is_absolute():
-            path = self.repository_root / path
+        from .config_paths import resolve_config_path
+
+        path = resolve_config_path(reference, self.repository_root, "training")
         if not path.is_file():
             raise TrainingRuntimeError(f"training profile does not exist: {path.resolve()}")
         from .training_ablations import load_training_profile
@@ -114,11 +115,12 @@ class TrainingDeployment:
             "--mount", f"type=bind,source={datasets_root},target=/var/lib/ovlab/model-data/datasets",
             dataset_image, "dataset", "fetch", "--source", "libero", "--name", name, "--json",
         ]
-        completed = self.runner(command, check=False)
+        completed = self.runner(command, check=False, stdout=sys.stderr)
         if completed.returncode != 0:
             raise DatasetUnavailableError(f"explicit LIBERO acquisition container failed with exit code {completed.returncode}")
 
-    def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False, fit_action_normalization: bool = False) -> dict[str, object]:
+    def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False,
+            fit_action_normalization: bool = False, interactive_progress: bool = False) -> dict[str, object]:
         for directory in (
             self.model_data_root / "datasets",
             self.runs_root / "train",
@@ -195,7 +197,8 @@ class TrainingDeployment:
         # Workers derive the canonical run ID from the mounted root's basename.
         container_run_root = f"/var/lib/ovlab/training-run/{context.run_id}"
         command = [
-            "docker", "run", "--name", container_name, "--rm", "--network", "none", "--read-only",
+            "docker", "run", *(["--tty"] if interactive_progress else []),
+            "--name", container_name, "--rm", "--network", "none", "--read-only",
             "--gpus", f"device={self.environment.get('OVLAB_GPU_DEVICE', '0')}",
             "--user", "10001:10001", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             *self._container_groups(context.root),
@@ -203,6 +206,7 @@ class TrainingDeployment:
             "--env", "OVLAB_TRAINING_RUNTIME=isolated-container", "--env", "HF_HUB_OFFLINE=1",
             "--env", "TRANSFORMERS_OFFLINE=1", "--env", "WANDB_MODE=offline",
             "--env", f"OVLAB_PROGRESS={self.environment.get('OVLAB_PROGRESS', 'auto')}",
+            *(["--env", f"OVLAB_TERMINAL_COLUMNS={shutil.get_terminal_size((80, 24)).columns or 80}"] if interactive_progress else []),
             "--env", "OVLAB_TRAINING_BASE_CHECKPOINT=/checkpoints/base",
             "--env", "OVLAB_TRAINING_DATA_ROOT=/datasets/resolved",
             "--env", f"OVLAB_TRAINING_DATASET_NAME={tfds_name}",
@@ -214,7 +218,7 @@ class TrainingDeployment:
         ]
         atomic_json(context.root / "container-commands.json", {"training": command}, mode=0o644)
         try:
-            completed = self.runner(command, check=False)
+            completed = self.runner(command, check=False, stdout=sys.stderr)
         except KeyboardInterrupt as exc:
             self.runner(["docker", "stop", "--time", "20", container_name], check=False)
             self.runner(["docker", "rm", "--force", container_name], check=False)
@@ -237,7 +241,7 @@ class TrainingDeployment:
             "--model-data-root", "/var/lib/ovlab/model-data",
         ]
         atomic_json(context.root / "container-commands.json", {"training": command, "finalizer": finalizer}, exclusive=False, mode=0o644)
-        finalized = self.runner(finalizer, check=False)
+        finalized = self.runner(finalizer, check=False, stdout=sys.stderr)
         if finalized.returncode != 0:
             raise TrainingRuntimeError(f"checkpoint finalizer failed; staged training evidence remains at {context.root}")
         exports_root = Path(

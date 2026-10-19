@@ -1,4 +1,4 @@
-"""Neutral, lazy external provider boundary; external code need not import OVLAB."""
+"""Lazy OVLAB provider boundary for standalone model runtimes."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from .errors import QuICImplementationUnavailableError, QuICProviderContractErro
 
 @runtime_checkable
 class QuICExternalProvider(Protocol):
-    """Duck-typed API to be implemented publicly by external/openvla-quic."""
+    """Protocol implemented by OVLAB integrations of standalone model runtimes."""
 
     def api_version(self) -> str: ...
     def describe(self) -> Mapping[str, object]: ...
@@ -115,7 +115,7 @@ class QuICCapabilityDeclaration:
 
 
 class QuICProviderLoader:
-    """Discover the external provider only after the descriptor is runtime-complete."""
+    """Load the protocol integration only after the descriptor is runtime-complete."""
 
     def load(self, descriptor: QuICMethodDescriptor) -> QuICExternalProvider:
         descriptor.require_runtime_ready()
