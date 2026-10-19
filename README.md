@@ -37,6 +37,8 @@ Dataset discovery, explicit acquisition, local import, verification and storage
 are documented in the [`Dataset operations guide`](DATASETS.md). Versioned
 training profiles, isolated OpenVLA-LoRA training and immutable checkpoint
 handoff are documented in the [`Training operations guide`](TRAINING.md).
+Evaluation invocation and the difference between Docker deployment and a
+machine-local run are described in [`RUN.md`](RUN.md).
 Safe listing, archival and deletion of benchmark runs, derived reports, and
 publication exports are documented in the [`Data management guide`](DATA_MANAGEMENT.md).
 

@@ -1,0 +1,16 @@
+extends: openvla-libero10-quic-smoke.yaml
+id: openvla-libero10-quic-hard
+
+# Broad LIBERO-10 split based on the source project's QP2 experiment:
+# 20 demonstrations per task, held-out whole episodes, and every 8th frame.
+dataset:
+  partition:
+    max_episodes_per_group: 20
+    frame_stride: 8
+    max_frames_per_episode: null
+
+training:
+  max_steps: 2000
+  validation_batches: 1400
+  peft:
+    max_trainable_parameters: 50000

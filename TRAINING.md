@@ -103,8 +103,15 @@ and unresolved aliases are rejected.
 ./ovlab train profiles
 ./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
 ./ovlab train run --profile openvla-libero10-quic-smoke.yaml
+./ovlab train plan --profile openvla-libero10-quic-hard.yaml
 ./ovlab train plan --profile configs/training/openvla-libero10-lora-smoke.yaml
 ```
+
+`openvla-libero10-quic-hard.yaml` is the longer LIBERO-10 QuiC run: up to 20
+episodes per task, an 80/20 episode split, one frame in eight, 2,000 optimizer
+steps, effective batch size four, and up to 1,400 teacher-forced validation
+batches. It inherits the smoke profile's frozen host action normalization;
+pass `--fit-action-normalization` to fit train-only q01/q99 statistics instead.
 
 Validation does not resolve large assets. Planning verifies local dataset and
 base-checkpoint bytes, negotiates capabilities and evaluates resources, but

@@ -32,6 +32,10 @@ def _sha(path: Path) -> str:
 
 
 def _included(relative: str) -> bool:
+    # Root-level guides are excluded from the Docker build context. Editing one
+    # must not invalidate images that contain exactly the same runtime source.
+    if "/" not in relative and relative.endswith(".md"):
+        return False
     return not relative.startswith(EXCLUDED_PREFIXES) and relative != ".git"
 
 

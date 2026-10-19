@@ -363,6 +363,8 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
     assert not any(row["path"].startswith("configs/") for row in document["files"])
     assert source_manifest["_included"]("code/apps/benchctl/pyproject.toml") is True
     assert source_manifest["_included"]("configs/experiments/new.yaml") is False
+    assert source_manifest["_included"]("RUN.md") is False
+    assert source_manifest["_included"]("code/packages/ovlab-core/README.md") is True
 
 
 def test_production_images_require_runtime_configuration_bundle():
@@ -379,8 +381,10 @@ def test_portable_config_change_does_not_invalidate_image_source_hash(tmp_path):
     (repository / "configs/experiments").mkdir(parents=True)
     source = repository / "code/runtime.py"
     config = repository / "configs/experiments/test.yaml"
+    guide = repository / "RUN.md"
     source.write_text("VALUE = 1\n", encoding="utf-8")
     config.write_text("name: first\n", encoding="utf-8")
+    guide.write_text("Initial guide\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
     subprocess.run(["git", "config", "user.email", "ovlab@example.invalid"], cwd=repository, check=True)
     subprocess.run(["git", "config", "user.name", "OVLAB Test"], cwd=repository, check=True)
@@ -393,10 +397,13 @@ def test_portable_config_change_does_not_invalidate_image_source_hash(tmp_path):
     initial = build_manifest(repository)["source_content_sha256"]
     config.write_text("name: second\n", encoding="utf-8")
     config_only = build_manifest(repository)["source_content_sha256"]
+    guide.write_text("Updated guide\n", encoding="utf-8")
+    guide_only = build_manifest(repository)["source_content_sha256"]
     source.write_text("VALUE = 2\n", encoding="utf-8")
     code_changed = build_manifest(repository)["source_content_sha256"]
 
     assert config_only == initial
+    assert guide_only == initial
     assert code_changed != initial
 
 
