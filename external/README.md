@@ -26,9 +26,8 @@ and its sorted content manifest in `external/compound-peft.manifest.sha256`.
 `quic-peft-vla` is an independent Git repository pinned as a submodule. Its
 source distribution retains its existing Python distribution/import names for
 compatibility. Its tests, CI, license, and standalone installation instructions
-live in [`quic-peft-vla/`](quic-peft-vla/README.md). Its own `PROVENANCE.json`
-records the original source revision and method SHA256; the OpenVLA migration
-also records the method hash in `external/openvla-quic.migration.json`. It
-depends only on Torch and safetensors.
+live in [`quic-peft-vla/`](quic-peft-vla/README.md). Its `PROVENANCE.json`
+records method attribution and license decisions. It depends only on Torch and
+safetensors.
 OpenVLA-QuIC declares it as a versioned dependency; OVLAB's QuIC images install
 this external package before installing the OpenVLA fork.

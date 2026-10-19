@@ -112,14 +112,18 @@ def test_registry_accepts_unpinned_selector_without_hashes():
         validate_registry(document, "test")
 
 
-def test_direct_eval_resolves_unpinned_model_from_local_main(tmp_path):
+@pytest.mark.parametrize("selector", [None, "local/main", "remote/main"])
+def test_direct_eval_revision_scenarios_resolve_to_content_identity(tmp_path, selector):
     root = tmp_path / "project"
     shutil.copytree(REPOSITORY / "configs", root / "configs")
     registry = root / "configs/resources/registry.yaml"
     document = registry.read_text()
     start = document.index("  openvla-7b:\n")
     end = document.index("  openvla-7b-finetuned-libero-10:\n")
-    registry.write_text(document[:start] + "  openvla-7b:\n    repo_id: openvla/openvla-7b\n" + document[end:])
+    entry = "  openvla-7b:\n    repo_id: openvla/openvla-7b\n"
+    if selector is not None:
+        entry += f"    revision: {selector}\n"
+    registry.write_text(document[:start] + entry + document[end:])
     profile = root / "configs/local/test.yaml"
     profile.write_text(
         'schema_version: "0.1.0"\nkind: local_profile\nid: test\n'
@@ -132,7 +136,13 @@ def test_direct_eval_resolves_unpinned_model_from_local_main(tmp_path):
     (repo / "refs").mkdir(parents=True)
     (repo / "refs/main").write_text(revision)
     snapshot = _snapshot(repo / "snapshots" / revision, b"tiny model")
-    with patch.object(checkpointing, "urlopen", side_effect=AssertionError("local/main used network")):
+    remote = patch.object(
+        checkpointing, "urlopen",
+        return_value=io.BytesIO(json.dumps({"sha": revision}).encode()),
+    ) if selector == "remote/main" else patch.object(
+        checkpointing, "urlopen", side_effect=AssertionError("local/main used network"),
+    )
+    with remote:
         resolved = ConfigResolver(root / "configs", repository_root=root).resolve(
             "configs/experiments/libero-vanilla-smoke.yaml", local_profile=profile,
             environment={"OVLAB_GLOBAL_HF_CACHE": str(tmp_path / "cache")},

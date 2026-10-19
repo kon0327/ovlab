@@ -239,26 +239,6 @@ def test_ovlab_provider_discovery_stays_lightweight_and_rejects_unsupported_back
     assert not any(name.split(".")[0] in {"torch", "peft", "quic_petf"} for name in introduced)
 
 
-def test_external_bridge_has_recorded_uncommitted_content_identity():
-    files = sorted((EXTERNAL_PROVIDER_ROOT / "quic_petf").glob("*.py"))
-    manifest = "".join(
-        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
-        f"{path.relative_to(EXTERNAL_PROVIDER_ROOT).as_posix()}\n"
-        for path in files
-    ).encode()
-    digest = hashlib.sha256(manifest).hexdigest()
-    import json
-    provenance = json.loads((REPOSITORY_ROOT / "external/openvla-quic.migration.json").read_text())
-    assert digest == provenance["petf_python_content_sha256"]
-    assert provenance["base_revision"] == "533b1a76ea600f50738cb9369ed47192a216e2af"
-    assert provenance["state"] == "published_submodule_with_historical_patch"
-    # Preserve the historical Gate F evidence rather than relabelling it as
-    # validation of the portable method or current OpenVLA implementation.
-    assert load(PROVENANCE_PATH)["ownership"]["backend_bridge_python_content_sha256"] == (
-        "5068a544cf918bf19bceec6d879d56409eb602ec1c0d2c38f47b398988bc92ba"
-    )
-
-
 def test_peft_and_wc_runtime_fail_with_distinct_typed_errors_before_loading():
     with pytest.raises(QuICPEFTIntegrationIncompleteError) as peft_failure:
         skeleton_descriptor(QuICVariant.PEFT).require_runtime_ready()

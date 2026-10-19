@@ -103,6 +103,18 @@ OVLAB uses the lightweight `ovlab-tester` Conda environment for CPU-only automat
 conda run -n ovlab-tester deploy/scripts/test.sh
 ```
 
+The loose checkpoint revision paths have CPU-only train-plan and eval-config
+fixtures. They cover an omitted revision and explicit `local/main`, downloaded
+`remote/main`, remote planning without downloads, and a registered pinned
+commit. Run just that matrix with:
+
+```bash
+conda run -n ovlab-tester deploy/scripts/test.sh \
+  code/tests/unit/training/test_revision_scenarios.py \
+  code/tests/unit/cli/test_checkpointing.py \
+  code/tests/unit/cli/test_revision_deployment_scenarios.py
+```
+
 GPU and policy-specific smoke tests remain isolated in their corresponding policy environments.
 
 The experimental QuIC integration, portable method, isolated images and
