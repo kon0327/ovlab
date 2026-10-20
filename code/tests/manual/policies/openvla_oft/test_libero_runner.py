@@ -61,7 +61,7 @@ def _profile() -> Path:
 
 def _resolve():
     return ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "configs/experiments/libero10-openvla-oft-rpc-smoke.yaml",
+        "configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml",
         local_profile=_profile(), execution_profile="profiles/libero-bench-egl.yaml",
     )
 

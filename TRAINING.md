@@ -1,5 +1,13 @@
 # Training operations
 
+Training scenarios live in `configs/experiments/training/`. Use
+`ovlab train run TARGET`, `ovlab train inspect RUN_REFERENCE`, and
+`ovlab train verify RUN_REFERENCE`. `train run TARGET --dry-run` resolves the
+training plan without starting a trainer; resource planning may require prepared
+local datasets/checkpoints. The legacy `--run` form for inspect/verify remains
+accepted. Evaluation uses `ovlab eval`; persistent model services use `ovlab deploy`.
+
+
 Detailed dataset-provider, acquisition, local-import and integrity procedures
 are documented separately in [`DATASETS.md`](DATASETS.md). This guide focuses
 on the end-to-end training and checkpoint lifecycle.
@@ -11,7 +19,7 @@ explicit dataset acquisition -> verified preparation -> validated profile
 -> offline trainer -> finalized immutable checkpoint -> explicit deployment handoff
 ```
 
-Training never runs as part of `deploy run`. Benchmark `runs/`, reporting
+Training never runs as part of `eval run`. Benchmark `runs/`, reporting
 `exports/derived/` and other publication outputs remain separate from model data. The host
 model-data root defaults to `../ovlab-data` relative to the repository and may be
 set with `OVLAB_MODEL_DATA_ROOT`.
@@ -99,7 +107,7 @@ training; without it a missing dataset is an actionable error.
 
 ## Profiles and planning
 
-Portable YAML profiles live in `configs/training/` and use
+Portable YAML profiles live in `configs/experiments/training/` and use
 `ovlab.training-profile/v1`. They contain immutable logical model and dataset
 selectors, a seed, bounded hyperparameters, precision, training mode and output
 semantics. Relative `extends` composes a shared base with variant overrides; mappings
@@ -108,10 +116,10 @@ and unresolved aliases are rejected.
 
 ```bash
 ./ovlab train profiles
-./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
+./ovlab train validate --profile configs/experiments/training/openvla-libero10-lora-smoke.yaml
 ./ovlab train run openvla-libero10-quic-smoke.yaml
 ./ovlab train plan --profile openvla-libero10-quic-hard.yaml
-./ovlab train plan --profile configs/training/openvla-libero10-lora-smoke.yaml
+./ovlab train plan --profile configs/experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
 `model.revision` accepts a pinned 40-character commit, `local/main`, or
@@ -151,9 +159,9 @@ inherited action statistics, explicit deterministic episode train/validation
 partition, and adapter-only output:
 
 ```bash
-./ovlab train validate --profile configs/training/openvla-libero10-quic-smoke.yaml
-./ovlab train plan --profile configs/training/openvla-libero10-quic-smoke.yaml
-./ovlab train run configs/training/openvla-libero10-quic-smoke.yaml
+./ovlab train validate --profile configs/experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train plan --profile configs/experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train run configs/experiments/training/openvla-libero10-quic-smoke.yaml
 ./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
 ./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-run
@@ -179,7 +187,7 @@ adapter through reload and inference.
 Teacher-forced validation remains separate from benchmark rollout evaluation.
 
 ```bash
-./ovlab train run configs/training/openvla-libero10-quic-smoke.yaml \
+./ovlab train run configs/experiments/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
 ./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --fit-action-normalization --output /tmp/quic-placement-fitted-run
@@ -207,7 +215,7 @@ Then start a bounded run:
 
 ```bash
 ./ovlab train run \
-  configs/training/openvla-libero10-lora-smoke.yaml
+  configs/experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
 The trainer has one requested GPU, no network, a read-only prepared dataset, a
@@ -234,9 +242,9 @@ including private Safetensors staging files, so host-side verification works.
 Inspect canonical evidence offline:
 
 ```bash
-./ovlab train status --run TRAINING_RUN_ID
-./ovlab train inspect --run TRAINING_RUN_ID
-./ovlab train verify --run TRAINING_RUN_ID
+./ovlab train status TRAINING_RUN_ID
+./ovlab train inspect TRAINING_RUN_ID
+./ovlab train verify TRAINING_RUN_ID
 ./ovlab train report --run TRAINING_RUN_ID
 ./ovlab train report --run TRAINING_RUN_ID --verify
 ./ovlab checkpoint list

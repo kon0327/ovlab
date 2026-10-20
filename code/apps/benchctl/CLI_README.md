@@ -1,11 +1,17 @@
 # OVLAB CLI
 
+`train`, `eval`, and `deploy` share `run TARGET`, `inspect TARGET`, and `verify TARGET`.
+Each `run` supports `--dry-run`. Configuration names use `configs/experiments/training`,
+`configs/experiments/evaluation`, and `configs/deploy`, respectively. `eval` replaces
+the former evaluation behavior of `deploy`. See [model deployment](../../../DEPLOYMENT.md).
+
 `ovlab` is the unified command-line interface for OpenVLABenchmark. It exposes
 the existing configuration, policy-service, runner, artifact, and metric APIs
 through one workflow:
 
 ```text
-Dataset -> Train -> Checkpoint -> Deploy -> Run -> Verify -> Report
+Dataset -> Train -> Checkpoint -> Eval -> Verify -> Report
+                             -> Deploy (persistent model service)
 ```
 
 The CLI is an orchestration layer. It does not implement policy inference,
@@ -48,8 +54,8 @@ Check the host before deploying:
 
 ```bash
 ./ovlab doctor
-./ovlab doctor --experiment configs/experiments/libero10-lora-merged-rpc-smoke.yaml
-./ovlab doctor --experiment configs/experiments/libero10-lora-merged-rpc-smoke.yaml --json
+./ovlab doctor --experiment configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab doctor --experiment configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --json
 ```
 
 `doctor` reads the checkout and Compose environment, probes Docker Compose and
@@ -72,12 +78,12 @@ Then run a complete isolated policy-service plus LIBERO benchmark topology with
 one command:
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
-`TARGET` accepts a path or a YAML filename/name under `configs/experiments`.
-`train run TARGET` uses the same form under `configs/training`.
+`TARGET` accepts a path or a YAML filename/name under `configs/experiments/evaluation`.
+`train run TARGET` uses the same form under `configs/experiments/training`.
 
 The CLI validates the Compose model, passes the same experiment to both
 containers, waits for policy readiness, runs the benchmark, propagates failure,
@@ -128,8 +134,8 @@ compatible with its policy type. Use GLFW only with an interactive display serve
 resolved selection and exact commands without touching Docker:
 
 ```bash
-./ovlab deploy run CONFIG --dry-run
-./ovlab deploy run CONFIG --renderer glfw --dry-run
+./ovlab eval run CONFIG --dry-run
+./ovlab eval run CONFIG --renderer glfw --dry-run
 ```
 
 Inference quantization comes from the experiment's policy component at
@@ -141,8 +147,8 @@ unchanged. QuIC policies require `none`.
 Run the five-task cross-suite Vanilla NF4 experiment with:
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml
 ```
 
 Without `--quantization`, the selected policy component determines inference
@@ -159,7 +165,7 @@ stderr; `--json` stdout therefore remains machine-readable. Use `--offline` to
 prohibit the download path:
 
 ```bash
-./ovlab deploy run CONFIG --offline
+./ovlab eval run CONFIG --offline
 ```
 
 Custom unpublished checkpoints remain outside the repository and are selected
@@ -167,7 +173,7 @@ through a gitignored local profile. Compose uses `deploy/compose/.env` by defaul
 `OVLAB_COMPOSE_ENV_FILE` selects another repository-local environment file:
 
 ```bash
-OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab deploy run CONFIG
+OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab eval run CONFIG
 ```
 
 ## Machine-local native configuration
@@ -203,12 +209,20 @@ ovlab
 │   ├── list [--detail | --json]
 │   └── describe CONFIG [--detail | --json]
 ├── service
-│   ├── serve CONFIG [--socket PATH] [--detail | --json]
-│   └── health --socket PATH [--detail | --json]
+│   ├── serve CONFIG [--socket PATH | --host HOST --port PORT] [--persistent] [--detail | --json]
+│   └── health (--socket PATH | --host HOST --port PORT) [--detail | --json]
 ├── connect CONFIG [--detail | --json]
+├── eval
+│   ├── run TARGET [--renderer egl|glfw] [--quantization none|8bit|4bit] [--offline]
+│   │   [--project-name NAME] [--dry-run] [--detail | --json]
+│   ├── inspect TARGET [--detail | --json]
+│   └── verify TARGET [--detail | --json]
 ├── deploy
-│   └── run TARGET [--renderer egl|glfw] [--quantization none|8bit|4bit] [--offline]
-│       [--project-name NAME] [--dry-run] [--detail | --json]
+│   ├── run TARGET [--profile LOCAL_PROFILE] [--quantization none|8bit|4bit]
+│   │   [--port PORT] [--offline] [--dry-run] [--detail | --json]
+│   ├── inspect TARGET [--detail | --json]
+│   ├── verify TARGET [--detail | --json]
+│   └── stop TARGET [--dry-run] [--detail | --json]
 ├── run TARGET [--profile LOCAL_PROFILE] [--output-root PATH] [--dry-run] [--detail | --json]
 ├── run inspect RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── run verify RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
@@ -239,10 +253,10 @@ ovlab
 │   ├── profiles [--detail | --json]
 │   ├── validate --profile PROFILE [--detail | --json]
 │   ├── plan --profile PROFILE [--detail | --json]
-│   ├── run TARGET [--allow-dataset-download] [--detail | --json]
-│   ├── status --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
-│   ├── inspect --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
-│   ├── verify --run TRAINING_RUN_ID|RUN_HASH [--detail | --json]
+│   ├── run TARGET [--dry-run] [--allow-dataset-download] [--detail | --json]
+│   ├── status TARGET [--detail | --json]
+│   ├── inspect TARGET [--detail | --json]
+│   ├── verify TARGET [--detail | --json]
 │   └── report --run TRAINING_RUN_ID|RUN_HASH [--verify] [--build BUILD_ID] [--detail | --json]
 └── checkpoint
     ├── list [--detail | --json]
@@ -263,7 +277,7 @@ requiring a runnable provider:
 
 ```bash
 ./ovlab config validate \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --mode descriptor
 ```
 
@@ -271,7 +285,7 @@ Runtime validation additionally requires a complete runnable configuration:
 
 ```bash
 ./ovlab config validate \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --mode runtime
 ```
 
@@ -308,7 +322,7 @@ a model or initialize CUDA.
 ## 3. Low-level native policy service
 
 This command is an internal container entrypoint and a developer diagnostic. A
-normal deployment should use `ovlab deploy run` instead. Run one native policy
+normal deployment should use `ovlab eval run` instead. Run one native policy
 service in the foreground:
 
 ```bash
@@ -356,7 +370,7 @@ inference trace. Privileged benchmark signals are not part of the RPC schema.
 
 ## 5. Low-level native runner
 
-`TARGET` accepts a path or a YAML filename/name under `configs/experiments`.
+`TARGET` accepts a path or a YAML filename/name under `configs/experiments/evaluation`.
 `--profile` selects the local machine profile for this run. If omitted, the CLI
 uses `OVLAB_LOCAL_PROFILE` or `configs/local/profile.yaml`.
 
@@ -405,13 +419,13 @@ exact IDs take precedence and ambiguous hashes fail closed. Training runs use
 Read a run summary without changing artifacts:
 
 ```bash
-./ovlab run inspect RUN_PATH
+./ovlab eval inspect RUN_PATH
 ```
 
 Verify trace and artifact integrity:
 
 ```bash
-./ovlab run verify RUN_PATH
+./ovlab eval verify RUN_PATH
 ```
 
 Verification checks required artifacts, final manifest consistency,

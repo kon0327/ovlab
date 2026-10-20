@@ -108,7 +108,7 @@ devices:
   primary_gpu: cuda:0
 ''')
     resolver = ConfigResolver(ROOT / "configs", repository_root=ROOT)
-    experiment = "configs/experiments/libero10-quic-adapter-rpc-smoke.yaml"
+    experiment = "configs/experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml"
     a = resolver.resolve(experiment, local_profile=profile, environment={"OVLAB_QUIC_ADAPTER_PATH": "/adapters/a"})
     b = resolver.resolve(experiment, local_profile=profile, environment={"OVLAB_QUIC_ADAPTER_PATH": "/adapters/b"})
     assert isinstance(a.policy_settings, OpenVlaQuICSettings)

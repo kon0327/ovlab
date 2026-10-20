@@ -1,0 +1,17 @@
+schema_version: ovlab.deployment/v1
+kind: deployment
+id: openvla-libero10
+components:
+  policy: policies/openvla-lora/merged-libero10.yaml
+resources:
+  registry: resources/registry.yaml
+build: true
+runtime:
+  quantization: none
+  gpu: all
+service:
+  host: 127.0.0.1
+  port: 8000
+  container_port: 8000
+  restart: unless-stopped
+  readiness_timeout_s: 900

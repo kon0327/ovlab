@@ -20,8 +20,8 @@ from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 REPOSITORY = Path(__file__).resolve().parents[4]
 OVLAB = REPOSITORY / "ovlab"
 ENV_FILE = "deploy/compose/.env.example"
-LORA = "configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
-OFT = "configs/experiments/libero10-openvla-oft-rpc-smoke.yaml"
+LORA = "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
+OFT = "configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml"
 _PREFLIGHT_IMAGES = ComposeDeployment._preflight_images
 
 
@@ -154,7 +154,7 @@ def test_openvla_egl_run_preflights_starts_and_reaps_one_project(deployment_envi
     assert publish[-6:] == ["--profile", "reporting", "run", "--rm", "--no-deps", "reporting"]
     assert runner.calls[-1]["env"]["OVLAB_REPORT_RUN_ID"] == "simulated-run"
     assert runner.calls[-1]["env"]["OVLAB_REPORT_ENABLED"] == "true"
-    container_experiment = "/opt/ovlab/configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
+    container_experiment = "/opt/ovlab/configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
     assert all(
         call["env"]["OVLAB_EXPERIMENT_CONFIG"] == container_experiment
         for call in runner.calls
@@ -305,7 +305,7 @@ def test_quantization_override_is_validated_and_recorded_in_plan():
     assert (plan.quantization, plan.quantization_source) == ("4bit", "cli")
     with pytest.raises(ValueError, match="QuIC supports dense hosts only"):
         deployment.plan(
-            "configs/experiments/libero10-quic-adapter-rpc-smoke.yaml",
+            "configs/experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml",
             quantization="4bit", env_file=ENV_FILE,
         )
     with pytest.raises(ValueError, match="quantization must be one of"):
@@ -564,14 +564,14 @@ def test_config_bundle_is_minimal_deterministic_and_read_only(tmp_path):
 
     assert first == second
     paths = {item["path"] for item in first.files}
-    assert "experiments/libero10-lora-merged-rpc-smoke.yaml" in paths
+    assert "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml" in paths
     assert "benchmarks/libero/libero10-smoke.yaml" in paths
     assert "benchmarks/libero/libero10.yaml" in paths
     assert "policies/openvla-lora/merged-libero10.yaml" in paths
     assert "interfaces/actions/libero-osc-pose-v1.yaml" in paths
     assert "resources/registry.yaml" in paths
     assert "profiles/libero-bench-egl.yaml" in paths
-    assert "experiments/libero10-openvla-oft-rpc-smoke.yaml" not in paths
+    assert "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml" not in paths
 
     with builder.materialize(first) as root:
         manifest = root / ".ovlab-bundle.json"
@@ -617,7 +617,7 @@ def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
     shutil.copytree(source, destination)
     builder = ConfigBundleBuilder(copied)
     before = builder.build(LORA, "profiles/libero-bench-egl.yaml")
-    experiment = destination / "experiments/libero10-lora-merged-rpc-smoke.yaml"
+    experiment = destination / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
     experiment.write_text(
         experiment.read_text(encoding="utf-8").replace(
             "methodological reference", "methodological reference changed"
@@ -642,7 +642,7 @@ def test_deployment_rejects_non_experiment_configuration():
 def test_public_cli_exposes_compose_dry_run_without_invoking_docker():
     completed = subprocess.run(
         [
-            str(OVLAB), "deploy", "run", LORA,
+            str(OVLAB), "eval", "run", LORA,
             "--renderer", "egl", "--project-name", "ovlab-cli-test",
             "--offline", "--dry-run", "--json",
         ],
@@ -656,14 +656,14 @@ def test_public_cli_exposes_compose_dry_run_without_invoking_docker():
 
     assert completed.returncode == 0 and completed.stderr == ""
     payload = json.loads(completed.stdout)
-    assert payload["command"] == "deploy run"
+    assert payload["command"] == "eval run"
     assert payload["result"]["profile"] == "openvla"
     assert payload["result"]["offline"] is True
     assert payload["result"]["side_effects_performed"] is False
 
 
 def test_public_cli_quantization_override_changes_dry_run_bundle():
-    common = [str(OVLAB), "deploy", "run", "libero10-lora-merged-rpc-smoke", "--dry-run", "--json"]
+    common = [str(OVLAB), "eval", "run", "libero10-lora-merged-rpc-smoke", "--dry-run", "--json"]
     environment = {**os.environ, "OVLAB_COMPOSE_ENV_FILE": ENV_FILE}
     normal = subprocess.run(
         common, cwd=REPOSITORY, env=environment, text=True,
@@ -685,7 +685,7 @@ def test_public_cli_quantization_override_changes_dry_run_bundle():
 def test_public_cli_reads_profile_and_renderer_from_experiment():
     completed = subprocess.run(
         [
-            str(OVLAB), "deploy", "run", OFT,
+            str(OVLAB), "eval", "run", OFT,
             "--project-name", "ovlab-cli-yaml-defaults",
             "--offline", "--dry-run", "--json",
         ],
@@ -710,7 +710,7 @@ def test_deploy_dry_run_needs_only_system_python_and_standard_library():
         [
             "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=/tmp",
             f"OVLAB_ROOT={REPOSITORY}", f"OVLAB_COMPOSE_ENV_FILE={ENV_FILE}",
-            str(OVLAB), "deploy", "run", LORA,
+            str(OVLAB), "eval", "run", LORA,
             "--project-name", "ovlab-stdlib-test",
             "--dry-run", "--json",
         ],

@@ -104,7 +104,7 @@ def _array_references(value):
 
 def test_real_libero_runner_produces_recomputable_immutable_trace() -> None:
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "configs/experiments/libero-mock-smoke.yaml",
+        "configs/experiments/evaluation/libero-mock-smoke.yaml",
         local_profile=_profile(),
         execution_profile="profiles/libero-bench-egl.yaml",
     )

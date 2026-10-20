@@ -1,10 +1,10 @@
 schema_version: ovlab.training-ablation/v1
 id: openvla-quic-placement-smoke
-base_profile: ../training/openvla-libero10-quic-smoke.yaml
+base_profile: ../experiments/training/openvla-libero10-quic-smoke.yaml
 factors:
   - training.peft.placement
   - training.peft.targets
 variants:
-  A1-QP2: ../training/quic/libero10-a1-qp2.yaml
-  A3-QP2: ../training/quic/libero10-a3-qp2.yaml
-  A9-QP2: ../training/quic/libero10-a9-qp2.yaml
+  A1-QP2: ../experiments/training/quic/libero10-a1-qp2.yaml
+  A3-QP2: ../experiments/training/quic/libero10-a3-qp2.yaml
+  A9-QP2: ../experiments/training/quic/libero10-a9-qp2.yaml

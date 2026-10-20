@@ -17,7 +17,7 @@ from ovlab_benchctl.training_profiles import TrainingPlanner, TrainingProfile
 
 
 ROOT = Path(__file__).resolve().parents[4]
-PROFILE_PATH = ROOT / "configs/training/openvla-libero10-quic-smoke.yaml"
+PROFILE_PATH = ROOT / "configs/experiments/training/openvla-libero10-quic-smoke.yaml"
 
 
 def _write_registry(repository: Path, selector: str | None, *, pinned: tuple[str, str] | None = None) -> None:

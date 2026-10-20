@@ -41,7 +41,7 @@ class TrainingDeployment:
     def _profile(self, reference: str | Path) -> tuple[Path, TrainingProfile]:
         from .config_paths import resolve_config_path
 
-        path = resolve_config_path(reference, self.repository_root, "training")
+        path = resolve_config_path(reference, self.repository_root, "experiments/training")
         if not path.is_file():
             raise TrainingRuntimeError(f"training profile does not exist: {path.resolve()}")
         from .training_ablations import load_training_profile

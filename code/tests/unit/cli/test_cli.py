@@ -106,7 +106,7 @@ def test_dataset_version_does_not_trigger_global_cli_version():
     assert imported.show_version is False and imported.version == "1"
 
 
-@pytest.mark.parametrize("command", ("deploy", "train"))
+@pytest.mark.parametrize("command", ("eval", "train"))
 def test_run_requires_yaml_target_and_rejects_old_profile_option(command):
     parser = _parser()
     with pytest.raises(SystemExit, match="2"):
@@ -119,7 +119,7 @@ def test_run_requires_yaml_target_and_rejects_old_profile_option(command):
 @pytest.mark.parametrize("option", ("--env-file", "--local-profile"))
 def test_deploy_run_rejects_removed_host_path_options(option):
     with pytest.raises(SystemExit, match="2"):
-        _parser().parse_args(["deploy", "run", "example", option, "host.yaml"])
+        _parser().parse_args(["eval", "run", "example", option, "host.yaml"])
 
 
 def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
@@ -141,14 +141,14 @@ def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
     )
 
     result, json_mode, render = _dispatch(
-        _parser().parse_args(["run", "configs/experiments/mock-e2e-smoke.yaml"])
+        _parser().parse_args(["run", "configs/experiments/evaluation/mock-e2e-smoke.yaml"])
     )
 
     assert result == {"status": "completed"}
     assert json_mode is False and render is None
     assert events == [
         ("install",),
-        ("run", REPOSITORY / "configs/experiments/mock-e2e-smoke.yaml", None),
+        ("run", REPOSITORY / "configs/experiments/evaluation/mock-e2e-smoke.yaml", None),
         ("restore", {"previous": "handlers"}),
     ]
 
@@ -161,7 +161,7 @@ def test_plain_run_resolves_bare_target_and_forwards_local_profile(monkeypatch):
     monkeypatch.setattr(cli_module, "_application", lambda: Application())
     args = _parser().parse_args(["run", "mock-e2e-smoke", "--profile", "local.yaml", "--dry-run"])
     result, _, _ = _dispatch(args)
-    assert result["config"] == str(REPOSITORY / "configs/experiments/mock-e2e-smoke.yaml")
+    assert result["config"] == str(REPOSITORY / "configs/experiments/evaluation/mock-e2e-smoke.yaml")
     assert result["local_profile"] == "local.yaml"
 
 
@@ -181,7 +181,7 @@ def test_plain_run_requires_target_but_keeps_inspect_and_verify():
     ("service", "serve", "config.yaml"),
     ("service", "health", "--socket", "/tmp/policy.sock"),
     ("connect", "config.yaml"),
-    ("deploy", "run", "config.yaml"),
+    ("eval", "run", "config.yaml"),
     ("run", "config.yaml"),
     ("metrics", "recompute", "/runs/example"),
     ("report", "profiles"),
@@ -665,13 +665,13 @@ def test_dry_run_is_deterministic_and_has_no_filesystem_side_effects(tmp_path):
         'devices:\n  primary_gpu: cuda:0\n', encoding="utf-8",
     )
     env = {"OVLAB_LOCAL_PROFILE": str(profile)}
-    first = _run("run", "configs/experiments/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
-    second = _run("run", "configs/experiments/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
+    first = _run("run", "configs/experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
+    second = _run("run", "configs/experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
     assert first.returncode == second.returncode == 0
     assert first.stdout == second.stdout
     assert json.loads(first.stdout)["result"]["side_effects_performed"] is False
     assert not runs.exists()
-    real = _run("run", "configs/experiments/mock-e2e-smoke.yaml", "--json", environment=env)
+    real = _run("run", "configs/experiments/evaluation/mock-e2e-smoke.yaml", "--json", environment=env)
     assert real.returncode == 3
     assert "production CLI run currently requires LIBERO" in json.loads(real.stdout)["errors"][0]["message"]
     assert not runs.exists()
@@ -706,7 +706,7 @@ def test_run_profile_option_overrides_local_profile_environment(tmp_path):
 def test_resolved_json_is_deterministic_and_not_wrapped_as_python_repr():
     environment = {"OVLAB_LOCAL_PROFILE": str(REPOSITORY / "configs/local/gate-b-showrack.yaml")}
     arguments = (
-        "config", "resolve", "configs/experiments/mock-e2e-smoke.yaml",
+        "config", "resolve", "configs/experiments/evaluation/mock-e2e-smoke.yaml",
         "--mode", "runtime", "--format", "json",
     )
     first = _run(*arguments, environment=environment)
@@ -721,8 +721,8 @@ def test_resolved_json_is_deterministic_and_not_wrapped_as_python_repr():
 def test_output_root_does_not_change_scientific_hash(tmp_path):
     environment = {"OVLAB_LOCAL_PROFILE": str(REPOSITORY / "configs/local/gate-b-showrack.yaml")}
     app = OvlabApplication(REPOSITORY, environment={**os.environ, **environment})
-    first = app.execution_plan("configs/experiments/mock-e2e-smoke.yaml", output_root=tmp_path / "one")
-    second = app.execution_plan("configs/experiments/mock-e2e-smoke.yaml", output_root=tmp_path / "two")
+    first = app.execution_plan("configs/experiments/evaluation/mock-e2e-smoke.yaml", output_root=tmp_path / "one")
+    second = app.execution_plan("configs/experiments/evaluation/mock-e2e-smoke.yaml", output_root=tmp_path / "two")
     assert first["scientific_config_hash"] == second["scientific_config_hash"]
     assert first["output_root"] != second["output_root"]
 
@@ -734,13 +734,13 @@ def test_container_image_tag_does_not_change_scientific_hash():
         "OVLAB_LOCAL_PROFILE": profile,
         "OVLAB_BENCHMARK_IMAGE": "registry.example/ovlab-benchmark:first",
         "OVLAB_IMAGE_REFERENCE": "registry.example/ovlab-benchmark:first",
-    }).execution_plan("configs/experiments/mock-e2e-smoke.yaml")
+    }).execution_plan("configs/experiments/evaluation/mock-e2e-smoke.yaml")
     second = OvlabApplication(REPOSITORY, environment={
         **os.environ,
         "OVLAB_LOCAL_PROFILE": profile,
         "OVLAB_BENCHMARK_IMAGE": "registry.example/ovlab-benchmark:second",
         "OVLAB_IMAGE_REFERENCE": "registry.example/ovlab-benchmark:second",
-    }).execution_plan("configs/experiments/mock-e2e-smoke.yaml")
+    }).execution_plan("configs/experiments/evaluation/mock-e2e-smoke.yaml")
     assert first["scientific_config_hash"] == second["scientific_config_hash"]
 
 
@@ -764,7 +764,7 @@ def test_gate_i_cli_human_and_json_inspection_stay_dependency_light(tmp_path):
     assert payload["result"]["source_revision"] == "a7c9ae18499b6eea8a32f78a9302327b752b1b5f"
 
     validated = _run(
-        "train", "validate", "--profile", "configs/training/openvla-libero10-lora-smoke.yaml", "--json",
+        "train", "validate", "--profile", "configs/experiments/training/openvla-libero10-lora-smoke.yaml", "--json",
         environment=environment,
     )
     result = json.loads(validated.stdout)["result"]
@@ -792,7 +792,7 @@ def test_gate_i_plan_missing_dataset_is_typed_and_never_downloads(tmp_path):
         "OVLAB_AVAILABLE_VRAM_GIB": "32",
     }
     result = _run(
-        "train", "plan", "--profile", "configs/training/openvla-libero10-lora-smoke.yaml", "--json",
+        "train", "plan", "--profile", "configs/experiments/training/openvla-libero10-lora-smoke.yaml", "--json",
         environment=environment,
     )
     assert result.returncode == ExitCode.POLICY_UNAVAILABLE

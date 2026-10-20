@@ -34,7 +34,7 @@ def _plan(root: Path, tmp_path: Path, *, offline: bool):
     env_file = tmp_path / "empty.env"
     env_file.write_text("", encoding="utf-8")
     return SimpleNamespace(
-        experiment="configs/experiments/libero-vanilla-smoke.yaml",
+        experiment="configs/experiments/evaluation/libero-vanilla-smoke.yaml",
         local_profile=None,
         offline=offline,
         env_file=str(env_file),

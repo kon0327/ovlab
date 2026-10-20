@@ -1,0 +1,15 @@
+schema_version: ovlab.deployment/v1
+kind: deployment
+id: openvla-oft-libero10
+components:
+  policy: policies/openvla-oft/libero10-native.yaml
+resources:
+  registry: resources/registry.yaml
+build: true
+runtime:
+  quantization: none
+service:
+  host: 127.0.0.1
+  port: 8001
+  container_port: 8000
+  restart: unless-stopped

@@ -50,7 +50,7 @@ class ConfigBundle:
     """Immutable identity and file closure for one deployment configuration."""
 
     experiment: str
-    execution_profile: str
+    execution_profile: str | None
     files: tuple[dict[str, object], ...]
     sha256: str
     quantization_override: str | None = None
@@ -75,7 +75,9 @@ class ConfigBundle:
             "file_count": len(self.files),
             "container_root": "/opt/ovlab/configs",
             "container_experiment": f"/opt/ovlab/configs/{self.experiment}",
-            "container_execution_profile": f"/opt/ovlab/configs/{self.execution_profile}",
+            "container_execution_profile": (
+                f"/opt/ovlab/configs/{self.execution_profile}" if self.execution_profile else None
+            ),
             "read_only": True,
         }
         if self.quantization_override is not None:
@@ -139,18 +141,24 @@ class ConfigBundleBuilder:
         return self._extends_closure(reference, expected_kind, set())
 
     def build(
-        self, experiment: str, execution_profile: str, *, quantization: str | None = None,
+        self, experiment: str, execution_profile: str | None, *, quantization: str | None = None,
+        kind: str = "experiment",
     ) -> ConfigBundle:
         experiment_reference = experiment.removeprefix("configs/")
-        execution_reference = execution_profile.removeprefix("configs/")
+        execution_reference = execution_profile.removeprefix("configs/") if execution_profile else None
         selected: set[str] = set()
         experiment_document = self._extends_closure(
-            experiment_reference, "experiment", selected
+            experiment_reference, kind, selected
         )
         overlays: dict[str, str] = {}
-        for name, kind in _COMPONENT_KINDS.items():
+        if kind == "deployment" and quantization is not None:
+            deployment_leaf = load(self.config_root / experiment_reference)
+            deployment_leaf.setdefault("runtime", {})["quantization"] = quantization
+            overlays[experiment_reference] = dumps(deployment_leaf)
+        component_kinds = {"policy": "policy"} if kind == "deployment" else _COMPONENT_KINDS
+        for name, component_kind in component_kinds.items():
             reference = experiment_document["components"][name]
-            component = self._extends_closure(reference, kind, selected)
+            component = self._extends_closure(reference, component_kind, selected)
             if name == "policy":
                 if quantization is not None:
                     component["settings"]["runtime"]["quantization"] = quantization
@@ -166,9 +174,8 @@ class ConfigBundleBuilder:
                 )
         registry = experiment_document["resources"]["registry"]
         self._extends_closure(registry, "resource_registry", selected)
-        self._extends_closure(
-            execution_reference, "execution_profile", selected
-        )
+        if execution_reference is not None:
+            self._extends_closure(execution_reference, "execution_profile", selected)
 
         files = tuple(
             {

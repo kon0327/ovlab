@@ -16,6 +16,17 @@ convention. The benchmark's `settings.action.interface_ref` must resolve to the
 same interface, and the resolver compares it with the concrete LIBERO adapter
 contract. Canonical camera names are checked in the same way.
 
+## Scenario directories
+
+- `experiments/training/`: training scenarios selected by `ovlab train run TARGET`.
+- `experiments/evaluation/`: evaluation scenarios selected by `ovlab eval run TARGET`.
+- `deploy/`: policy-only deployment configs selected by `ovlab deploy run TARGET`.
+
+Each accepts a YAML name or path and supports `--dry-run`. Training/evaluation
+`inspect` and `verify` take run references; deployment uses service IDs or config
+names. See [`../DEPLOYMENT.md`](../DEPLOYMENT.md) for deployment schema, image
+building, ports, quantization, readiness, and service lifecycle.
+
 ## LIBERO renderer execution profiles
 
 Renderer selection is declared in the execution-only `deployment` block of a
@@ -75,13 +86,13 @@ OVLAB-managed cache in that order. The policy always sees the selected artifact
 at `/checkpoints/resolved/<checkpoint-id>` and cannot observe its host location.
 
 Model-family policy owners validate their own deployment and artifact contracts.
-QuIC adapter-only training and placement studies live under `training/` and
+QuIC adapter-only training and placement studies live under `experiments/training/` and
 `ablations/`; benchmark experiments continue to select policies and benchmarks
 independently.
 
 ## Training and ablation profiles
 
-`training/` uses `ovlab.training-profile/v1` with the same explicit relative
+`experiments/training/` uses `ovlab.training-profile/v1` with the same explicit relative
 `extends` merge rules. `ablations/` uses `ovlab.training-ablation/v1` and references
 a common training base plus ordinary variant profiles. Declared method factor
 paths may differ; checkpoint/data identities, episode split, normalization, seed,

@@ -362,7 +362,7 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
     assert document["dirty"] is bool(included_status)
     assert not any(row["path"].startswith("configs/") for row in document["files"])
     assert source_manifest["_included"]("code/apps/benchctl/pyproject.toml") is True
-    assert source_manifest["_included"]("configs/experiments/new.yaml") is False
+    assert source_manifest["_included"]("configs/experiments/evaluation/new.yaml") is False
     assert source_manifest["_included"]("RUN.md") is False
     assert source_manifest["_included"]("code/tests/unit/example.py") is False
     assert source_manifest["_included"]("code/packages/ovlab-core/README.md") is True
@@ -379,9 +379,9 @@ def test_production_images_require_runtime_configuration_bundle():
 def test_portable_config_change_does_not_invalidate_image_source_hash(tmp_path):
     repository = tmp_path / "repository"
     (repository / "code").mkdir(parents=True)
-    (repository / "configs/experiments").mkdir(parents=True)
+    (repository / "configs/experiments/evaluation").mkdir(parents=True)
     source = repository / "code/runtime.py"
-    config = repository / "configs/experiments/test.yaml"
+    config = repository / "configs/experiments/evaluation/test.yaml"
     guide = repository / "RUN.md"
     source.write_text("VALUE = 1\n", encoding="utf-8")
     config.write_text("name: first\n", encoding="utf-8")

@@ -148,7 +148,7 @@ def test_non_quic_registry_method_metadata_has_no_qp_fields():
 def test_weight_compression_remains_unavailable_and_peft_has_an_explicit_adapter_configuration():
     experiment_text = "\n".join(
         path.read_text(encoding="utf-8")
-        for path in (CONFIG_ROOT / "experiments").rglob("*.yaml")
+        for path in (CONFIG_ROOT / "experiments/evaluation").rglob("*.yaml")
     )
     assert "quic-wc" not in experiment_text
     policy = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(

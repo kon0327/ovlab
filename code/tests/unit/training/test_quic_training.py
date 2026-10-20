@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def profile():
-    value = deepcopy(load_training_profile(ROOT / "configs/training/openvla-libero10-lora-smoke.yaml").document)
+    value = deepcopy(load_training_profile(ROOT / "configs/experiments/training/openvla-libero10-lora-smoke.yaml").document)
     value["trainer"]["implementation"] = "openvla-quic"
     value["dataset"]["partition"] = {"seed": 42, "validation_fraction": .2, "action_normalization": "host"}
     value["training"].update(validation_batches=2, normalization={"unnorm_key": "libero_10"})

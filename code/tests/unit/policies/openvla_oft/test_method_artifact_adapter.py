@@ -38,7 +38,7 @@ def test_recorded_oft_source_commit_matches_the_pinned_submodule_gitlink():
 
 def _resolved():
     return ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "configs/experiments/libero10-openvla-oft-rpc-smoke.yaml",
+        "configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml",
         local_profile=REPOSITORY / "configs/local/gate-b-showrack.yaml",
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},

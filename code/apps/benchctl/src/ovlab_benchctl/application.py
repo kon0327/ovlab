@@ -220,7 +220,7 @@ class OvlabApplication:
         from .training_composition import load_training_profile
         from .config_paths import resolve_config_path
 
-        path = resolve_config_path(reference, self.repository_root, "training")
+        path = resolve_config_path(reference, self.repository_root, "experiments/training")
         if not path.is_file():
             raise ConfigReferenceError(f"training profile does not exist: {path.resolve()}")
         return path.resolve(), load_training_profile(path, config_root=self.config_root)
@@ -475,16 +475,22 @@ class OvlabApplication:
         result["runtime_versions"] = runtime
         return result
 
-    def serve(self, config: str | Path, *, socket_path: str | Path | None = None, adapter_factory=None) -> dict[str, object]:
+    def serve(self, config: str | Path, *, socket_path: str | Path | None = None, adapter_factory=None,
+              host: str = "127.0.0.1", port: int | None = None, persistent: bool = False) -> dict[str, object]:
         path = self._config_path(config)
         if load(path).get("kind") == "quic_policy_descriptor":
             self._quic_descriptor(path, runtime=True)
             raise AssertionError("runtime-ready QuIC descriptor did not produce an experiment")
-        resolved = self._resolved_experiment(path)
+        if load(path).get("kind") == "deployment":
+            from .model_deployment import resolve_policy_service
+            resolved = resolve_policy_service(self, path)
+        else:
+            resolved = self._resolved_experiment(path)
         adapter = (adapter_factory or self._policy_adapter)(resolved.policy_settings)
         socket = Path(socket_path) if socket_path is not None else self.default_socket(path)
-        socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(socket.parent, 0o700)
+        if port is None:
+            socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(socket.parent, 0o700)
         from ovlab_core.contracts import RunContext, RunId
         from ovlab_remote_policy.service import PolicyService
         startup_context = RunContext(
@@ -498,15 +504,19 @@ class OvlabApplication:
             adapter,
             identity_provider=self._identity_provider,
             startup_context=startup_context,
+            listen_address=(host, port) if port is not None else None,
+            persistent=persistent,
         ).serve()
-        return {"socket": str(socket), "closed": True}
+        return {"socket": str(socket) if port is None else None, "host": host if port else None,
+                "port": port, "closed": True}
 
     @staticmethod
-    def service_health(socket_path: str | Path) -> dict[str, object]:
-        from ovlab_remote_policy import UnixPolicyClient
+    def service_health(socket_path: str | Path | None = None, *, host="127.0.0.1", port=None) -> dict[str, object]:
+        from ovlab_remote_policy import TcpPolicyClient, UnixPolicyClient
         from ovlab_remote_policy.errors import RemotePolicyServiceError
 
-        client = UnixPolicyClient(socket_path, request_timeout_s=5.0)
+        client = (TcpPolicyClient(host, port, request_timeout_s=5.0) if port is not None
+                  else UnixPolicyClient(socket_path, request_timeout_s=5.0))
         try:
             client.connect()
             result = client.health()
@@ -856,7 +866,7 @@ class OvlabApplication:
     def train_profiles(self):
         from .training_composition import load_training_profile
         profiles = []
-        for path in sorted((self.config_root / "training").rglob("*.yaml")):
+        for path in sorted((self.config_root / "experiments/training").rglob("*.yaml")):
             try:
                 profile = load_training_profile(path, config_root=self.config_root)
             except Exception as exc:

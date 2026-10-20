@@ -4,7 +4,7 @@ QuIC role images, pinned requirements, adapter mounts, and console progress
 are documented in [QUIC.md](QUIC.md).
 
 This directory contains the production Dockerfiles for the isolated OVLAB
-runtime. The public `ovlab deploy run` command owns the Compose lifecycle; users
+runtime. The public `ovlab eval run` command owns the Compose lifecycle; users
 do not need to activate Conda or start containers separately. The Dockerfiles
 are not intended to collapse the benchmark and policy service into one
 container.
@@ -140,8 +140,8 @@ to `runs`, creates it if necessary, and mounts it read-only into the benchmark.
 Preview the resolved orchestration without starting containers:
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --profile openvla \
   --renderer egl \
   --dry-run
@@ -172,8 +172,8 @@ and compatibility; they do not affect scientific configuration hashes.
 EGL is the supported backend for headless and automated LIBERO execution:
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --profile openvla \
   --renderer egl
 ```
@@ -181,8 +181,8 @@ EGL is the supported backend for headless and automated LIBERO execution:
 Run OpenVLA-OFT separately:
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-openvla-oft-rpc-smoke.yaml \
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
   --profile oft \
   --renderer egl
 ```
@@ -196,8 +196,8 @@ at its pinned revision by the host orchestrator before policy startup. For a
 strictly offline run, require an already verified artifact:
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-openvla-oft-rpc-smoke.yaml \
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
   --profile oft \
   --renderer egl \
   --offline
@@ -209,8 +209,8 @@ GLFW requires a live X11 or Wayland display such as WSLg. It is not a truly
 headless backend; hiding a window does not remove the display-server dependency.
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml \
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --profile openvla \
   --renderer glfw
 ```
@@ -240,7 +240,7 @@ image through the `export` Compose profile.
 
 ## Shutdown and verification
 
-`ovlab deploy run` always executes project-scoped Compose teardown, including
+`ovlab eval run` always executes project-scoped Compose teardown, including
 its private RPC volume, on success, failure or interruption. Canonical bind-
 mounted run artifacts are not removed.
 

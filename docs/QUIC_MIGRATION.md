@@ -60,7 +60,7 @@ defaults. Training profiles now accept bounded relative `extends`; mappings
 deep-merge and sequences replace their parent, just like experiment components.
 
 ```bash
-./ovlab train validate --profile configs/training/openvla-libero10-quic-smoke.yaml
+./ovlab train validate --profile configs/experiments/training/openvla-libero10-quic-smoke.yaml
 ./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
 ./ovlab train ablate plan --suite configs/ablations/openvla-quic-placement-smoke.yaml
 ./ovlab train ablate materialize \
@@ -111,7 +111,7 @@ statistics; use the new train-only fitting option for a vanilla host. Importing
 an arbitrary historical normalization sidecar remains unsupported.
 
 ```bash
-./ovlab train run configs/training/openvla-libero10-quic-smoke.yaml \
+./ovlab train run configs/experiments/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
 ./ovlab train ablate run \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \

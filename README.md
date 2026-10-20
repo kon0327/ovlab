@@ -49,18 +49,23 @@ Use the unified CLI directly from a checkout without installing packages:
 ```bash
 ./ovlab --help
 ./ovlab doctor
-./ovlab doctor --experiment configs/experiments/libero10-lora-merged-rpc-smoke.yaml
-./ovlab deploy run libero10-lora-merged-rpc-smoke
-./ovlab deploy run libero10-lora-merged-rpc-smoke --quantization 4bit
+./ovlab doctor --experiment configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab eval run libero10-lora-merged-rpc-smoke
+./ovlab eval run libero10-lora-merged-rpc-smoke --quantization 4bit
 ./ovlab train run openvla-libero10-lora-smoke
+./ovlab train run openvla-libero10-lora-smoke --dry-run
+./ovlab deploy run openvla-libero10 --dry-run
+./ovlab deploy run openvla-libero10
+./ovlab deploy inspect openvla-libero10
+./ovlab deploy verify openvla-libero10
 ./ovlab config validate CONFIG --mode descriptor
 ./ovlab policy list
 ./ovlab connect CONFIG
 ./ovlab run CONFIG --dry-run
 ./ovlab run EXPERIMENT --dry-run
 ./ovlab run EXPERIMENT --profile configs/local/profile.yaml --dry-run
-./ovlab run inspect RUN_PATH_OR_ID_OR_HASH
-./ovlab run verify RUN_PATH_OR_ID_OR_HASH
+./ovlab eval inspect RUN_PATH_OR_ID_OR_HASH
+./ovlab eval verify RUN_PATH_OR_ID_OR_HASH
 ./ovlab metrics recompute RUN_PATH_OR_ID_OR_HASH
 ./ovlab report publish --run RUN_ID_OR_HASH --profile libero-task-default
 ./ovlab report generate --run RUN_ID_OR_HASH --profile libero-task-default
@@ -70,7 +75,7 @@ Use the unified CLI directly from a checkout without installing packages:
 ./ovlab data list
 ./ovlab data archive --run RUN_ID
 ./ovlab dataset resolve --benchmark libero --suite libero_10
-./ovlab train validate --profile configs/training/openvla-libero10-lora-smoke.yaml
+./ovlab train validate --profile configs/experiments/training/openvla-libero10-lora-smoke.yaml
 ./ovlab train report --run TRAINING_RUN_ID
 ./ovlab checkpoint list
 ```
@@ -81,12 +86,18 @@ the CLI accepts either the complete ID or that hash; training run selectors
 use the same rule within their separate namespace. Exact IDs take precedence,
 and an ambiguous hash is rejected.
 
-`ovlab deploy run` is the normal operator workflow. It launches the selected
+`ovlab eval run` is the normal evaluation workflow. It launches the selected
 policy service and the LIBERO runner as separate Compose containers, waits for
 readiness, propagates the benchmark result, and cleans up the private deployment
 resources. It then starts the dedicated reporting image with canonical `runs/`
 mounted read-only and publishes all generated outputs below `exports/`. It needs
 Docker and system Python 3, not an activated Conda environment.
+
+`train run`, `eval run`, and `deploy run` select YAML by name or path from
+`configs/experiments/training`, `configs/experiments/evaluation`, and `configs/deploy`.
+Each supports `--dry-run`; `inspect TARGET` and `verify TARGET` inspect their runs
+or services. `deploy run` builds and retains only the model service, with optional
+RPC ports and quantization; see [model deployment](DEPLOYMENT.md).
 
 Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile when resolving a
 machine-local checkpoint path. Installing `ovlab-benchctl` exposes the same command as the

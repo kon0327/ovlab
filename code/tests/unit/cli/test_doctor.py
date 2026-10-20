@@ -11,7 +11,7 @@ from ovlab_benchctl.doctor import Doctor
 
 
 ROOT = Path(__file__).resolve().parents[4]
-EXPERIMENT = "configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
+EXPERIMENT = "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
 
 
 def _docker(command, **kwargs):

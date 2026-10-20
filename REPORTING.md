@@ -69,7 +69,7 @@ with the completed canonical run path and cannot change its status or contents.
 Use the normal deployment command; no separate reporting command is required:
 
 ```bash
-./ovlab deploy run configs/experiments/EXPERIMENT.yaml
+./ovlab eval run configs/experiments/evaluation/EXPERIMENT.yaml
 ```
 
 Reporting configuration affects only derived identity; it does not affect
@@ -594,7 +594,7 @@ Confirm that the run ID is a direct child of `OVLAB_RUNS_ROOT` and that the
 directory contains its canonical manifests and `integrity.json`:
 
 ```bash
-./ovlab run verify "$OVLAB_RUNS_ROOT/$RUN_ID"
+./ovlab eval verify "$OVLAB_RUNS_ROOT/$RUN_ID"
 ```
 
 The machine-readable error code is `source_unavailable` and the process exits
@@ -629,7 +629,7 @@ canonical `video.json`, then run `ovlab report verify` for the affected build.
 
 Before sharing a result:
 
-1. run `ovlab run verify` on every canonical source run;
+1. run `ovlab eval verify` on every canonical source run;
 2. regenerate the report from its profile or the export from its template and selection;
 3. retain the derived report build ID where applicable;
 4. run `ovlab report verify` with that build ID or `ovlab export verify` with the export kind and name;

@@ -16,15 +16,14 @@ def resolve_config_path(reference: str | Path, repository_root: Path, section: s
     if direct.is_file():
         return direct
 
-    # Only a bare filename gets the section default. Explicit relative paths
-    # retain their old repository-root-relative meaning.
-    if path.name != str(path):
+    # Paths explicitly rooted at configs/ retain their repository-relative meaning.
+    if path.parts and path.parts[0] == "configs":
         return direct
     names = [path]
     if not path.suffix:
         names.append(path.with_suffix(".yaml"))
     for name in names:
         candidate = (root / "configs" / section / name).resolve()
-        if candidate.parent == (root / "configs" / section).resolve() and candidate.is_file():
+        if candidate.is_relative_to((root / "configs" / section).resolve()) and candidate.is_file():
             return candidate
     return direct

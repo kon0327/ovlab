@@ -2,9 +2,10 @@
 
 This directory packages the accepted OVLAB runtime boundaries without changing
 the host Conda environments. Production containers expose only the `ovlab` CLI.
-They communicate through a versioned AF_UNIX socket in `/run/ovlab`; no TCP
-port, host networking, Docker socket, privileged mode, or source-tree bind is
-used.
+Evaluation containers communicate through a private AF_UNIX socket in `/run/ovlab`.
+Persistent model deployments use the same RPC protocol over a configured TCP port.
+See [`../DEPLOYMENT.md`](../DEPLOYMENT.md) for the `deploy` lifecycle and configuration;
+`eval` runs the benchmark and reporting workflow described below.
 
 For a command-oriented build and launch guide, see
 [`docker/README.md`](docker/README.md).
@@ -27,7 +28,7 @@ BF16 compute, FP16 storage and double quantization. Applying either mode to a
 published fine-tuned artifact is inference-time quantization; it is not
 evidence that the model or adapter was trained with QLoRA.
 
-`ovlab deploy run TARGET --quantization 4bit` selects inference quantization
+`ovlab eval run TARGET --quantization 4bit` selects inference quantization
 for one deployment. The CLI writes the override into its temporary, hashed
 configuration bundle; repository policy files stay unchanged.
 
@@ -157,7 +158,7 @@ checkpoints:
 Point the policy's `checkpoint_id` and `processor_id` at the chosen resource.
 The existing pinned registry entries continue to use their declared hashes.
 
-Before Compose starts, `ovlab deploy run` searches for the snapshot in this order:
+Before Compose starts, `ovlab eval run` searches for the snapshot in this order:
 
 1. `${OVLAB_GLOBAL_HF_CACHE}`, defaulting to `~/.cache/huggingface`;
 2. `resources.checkpoints.<id>.local_path` in an explicitly selected gitignored
@@ -179,13 +180,13 @@ filename, byte progress, completion, and verification stages on stderr.
 Use strict offline resolution when downloads are forbidden:
 
 ```bash
-./ovlab deploy run EXPERIMENT --offline
+./ovlab eval run EXPERIMENT --offline
 ```
 
 For a custom checkpoint, set the local profile environment variable:
 
 ```bash
-OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab deploy run EXPERIMENT
+OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab eval run EXPERIMENT
 ```
 
 The policy always receives `/checkpoints/resolved/<checkpoint-id>`. The host
@@ -224,8 +225,8 @@ Normal operation uses the repository launcher. It requires Docker and system
 Python 3, not an activated Conda environment:
 
 ```bash
-./ovlab deploy run \
-  configs/experiments/libero10-lora-merged-rpc-smoke.yaml
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
 The CLI passes the selected experiment to both runtime services, performs checkpoint

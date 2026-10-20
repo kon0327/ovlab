@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -37,6 +38,8 @@ class PolicyService:
         *,
         identity_provider: Callable[[object], Mapping[str, object]],
         startup_context: RunContext | None = None,
+        listen_address: tuple[str, int] | None = None,
+        persistent: bool = False,
     ) -> None:
         if not isinstance(adapter, PolicyAdapter):
             raise TypeError("adapter must be a PolicyAdapter")
@@ -48,33 +51,68 @@ class PolicyService:
         if startup_context is not None and not isinstance(startup_context, RunContext):
             raise TypeError("startup_context must be a RunContext or None")
         self.startup_context = startup_context
+        self.listen_address = listen_address
+        self.persistent = persistent
         self._seen_requests: set[str] = set()
         self._seen_steps: set[str] = set()
         self._episode_id: str | None = None
+        self._episode_context = None
+        self._session_lock = threading.Lock()
+        self._session_owner = None
+        self._shutdown = threading.Event()
 
     def serve(self) -> None:
-        if self.socket_path.exists():
+        if self.listen_address is None and self.socket_path.exists():
             raise RuntimeError(f"socket path already exists: {self.socket_path}")
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server = socket.socket(socket.AF_INET if self.listen_address else socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             # Provider initialization precedes socket creation.  Existence of the
             # socket is therefore a readiness signal, never merely liveness.
             if self.startup_context is not None:
                 self.adapter.initialize(self.startup_context)
-            server.bind(str(self.socket_path))
-            os.chmod(self.socket_path, 0o600)
+            if self.listen_address:
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.bind(self.listen_address)
+            else:
+                server.bind(str(self.socket_path))
+                os.chmod(self.socket_path, 0o600)
             server.listen(1)
+            if self.listen_address:
+                server.settimeout(0.5)
             should_close = False
-            while not should_close:
-                connection, _ = server.accept()
-                with connection:
-                    should_close = self._serve_connection(connection)
+            while not should_close and not self._shutdown.is_set():
+                try:
+                    connection, _ = server.accept()
+                except socket.timeout:
+                    continue
+                if self.listen_address:
+                    threading.Thread(target=self._serve_tcp_session, args=(connection,), daemon=True).start()
+                else:
+                    with connection:
+                        should_close = self._serve_connection(connection)
+                    if self.persistent:
+                        self._release_session()
         finally:
             try:
-                self.adapter.close()
+                with self._session_lock:
+                    self.adapter.close()
             finally:
                 server.close()
-                self.socket_path.unlink(missing_ok=True)
+                if self.listen_address is None:
+                    self.socket_path.unlink(missing_ok=True)
+
+    def _serve_tcp_session(self, connection):
+        try:
+            with connection:
+                should_close = self._serve_connection(connection)
+            if should_close and not self.persistent:
+                self._shutdown.set()
+        finally:
+            with self._session_lock:
+                if self._session_owner is connection:
+                    if self.persistent:
+                        self._release_session()
+                    self._session_owner = None
 
     def _serve_connection(self, connection: socket.socket) -> bool:
         while True:
@@ -95,7 +133,16 @@ class PolicyService:
                 continue
             self._seen_requests.add(request_id)
             try:
-                response, should_close = self._dispatch(request["operation"], request["payload"])
+                if self.listen_address and request["operation"] != "health":
+                    with self._session_lock:
+                        if self._session_owner is not None and self._session_owner is not connection:
+                            raise RuntimeError("model has an active client session")
+                        self._session_owner = connection
+                        response, should_close = self._dispatch(request["operation"], request["payload"])
+                        if self.persistent and request["operation"] == "close":
+                            self._session_owner = None
+                else:
+                    response, should_close = self._dispatch(request["operation"], request["payload"])
             except Exception as exc:
                 code = "protocol_error" if isinstance(exc, RemotePolicyProtocolError) else "service_error"
                 send_frame(connection, make_error(request_id, code, str(exc)))
@@ -143,6 +190,7 @@ class PolicyService:
             context = episode_context_from_wire(payload["episode_context"])
             self.adapter.reset_episode(context)
             self._episode_id = str(context.episode_id)
+            self._episode_context = context
             self._seen_steps.clear()
             return {"episode_id": self._episode_id}, False
         if operation == "predict":
@@ -166,10 +214,23 @@ class PolicyService:
             self.adapter.end_episode(context)
             episode_id = self._episode_id
             self._episode_id = None
+            self._episode_context = None
             self._seen_steps.clear()
             return {"episode_id": episode_id}, False
         if operation == "close":
             require_exact_keys(payload, required=set(), where="close payload")
-            self.adapter.close()
-            return {"closed": True}, True
+            if not self.persistent:
+                self.adapter.close()
+            else:
+                self._release_session()
+            self._episode_id = None
+            self._seen_steps.clear()
+            return {"closed": True}, not self.persistent
         raise AssertionError(f"unhandled operation {operation}")
+
+    def _release_session(self):
+        if self._episode_context is not None:
+            self.adapter.end_episode(self._episode_context)
+        self._episode_context = None
+        self._episode_id = None
+        self._seen_steps.clear()

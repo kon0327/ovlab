@@ -102,41 +102,69 @@ def _parser() -> argparse.ArgumentParser:
 
     service = commands.add_parser("service", help="run an isolated policy service")
     service_commands = service.add_subparsers(dest="service_command", required=True)
-    serve = service_commands.add_parser("serve", help="serve one policy over a foreground AF_UNIX socket")
+    serve = service_commands.add_parser("serve", help="serve one policy over an AF_UNIX socket or TCP port")
     serve.add_argument("config")
     serve.add_argument("--socket")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int)
+    serve.add_argument("--persistent", action="store_true", help="keep the model ready between client sessions")
     _output_options(serve)
     health = service_commands.add_parser("health", help="probe protocol readiness without model inference")
-    health.add_argument("--socket", required=True)
+    transport = health.add_mutually_exclusive_group(required=True)
+    transport.add_argument("--socket")
+    transport.add_argument("--port", type=int)
+    health.add_argument("--host", default="127.0.0.1")
     _output_options(health)
 
     connect = commands.add_parser("connect", help="probe policy handshake and capability compatibility")
     connect.add_argument("config")
     _output_options(connect)
 
-    deploy = commands.add_parser("deploy", help="orchestrate isolated OVLAB containers")
-    deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
-    deploy_run = deploy_commands.add_parser("run", help="run one experiment through Docker Compose")
-    deploy_run.add_argument("target", help="experiment YAML in configs/experiments")
-    deploy_run.add_argument(
+    evaluation = commands.add_parser("eval", help="run, inspect, and verify evaluation experiments")
+    eval_commands = evaluation.add_subparsers(dest="eval_command", required=True)
+    eval_run = eval_commands.add_parser("run", help="run one experiment through Docker Compose")
+    eval_run.add_argument("target", help="evaluation YAML name/path in configs/experiments/evaluation")
+    eval_run.add_argument(
         "--renderer", choices=("egl", "glfw"),
         help="override deployment.renderer from the experiment",
     )
-    deploy_run.add_argument(
+    eval_run.add_argument(
         "--quantization", choices=("none", "8bit", "4bit"),
         help="override inference quantization from the experiment policy",
     )
-    deploy_run.add_argument(
+    eval_run.add_argument(
         "--offline",
         action="store_true",
         help="reject a missing checkpoint instead of downloading a pinned or remote/main revision",
     )
-    deploy_run.add_argument("--project-name")
-    deploy_run.add_argument("--dry-run", action="store_true")
+    eval_run.add_argument("--project-name")
+    eval_run.add_argument("--dry-run", action="store_true")
+    _output_options(eval_run)
+
+    for operation in ("inspect", "verify"):
+        command = eval_commands.add_parser(operation, help=f"{operation} a canonical evaluation run")
+        command.add_argument("target", help="evaluation run path, ID, or hash")
+        _output_options(command)
+
+    deploy = commands.add_parser("deploy", help="build and run persistent model services")
+    deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
+    deploy_run = deploy_commands.add_parser("run", help="build a policy image and start a model service")
+    deploy_run.add_argument("target", help="deployment YAML name/path in configs/deploy")
+    deploy_run.add_argument("--profile", help="local checkpoint profile (overrides OVLAB_LOCAL_PROFILE)")
+    deploy_run.add_argument("--quantization", choices=("none", "8bit", "4bit"))
+    deploy_run.add_argument("--port", type=int, help="override the published model RPC port")
+    deploy_run.add_argument("--offline", action="store_true", help="resolve checkpoints without downloading")
+    deploy_run.add_argument("--dry-run", action="store_true", help="show the plan without building or starting containers")
     _output_options(deploy_run)
+    for operation in ("inspect", "verify", "stop"):
+        command = deploy_commands.add_parser(operation, help=f"{operation} a deployed model service")
+        command.add_argument("target", help="deployment ID or YAML name/path")
+        if operation == "stop":
+            command.add_argument("--dry-run", action="store_true")
+        _output_options(command)
 
     run = commands.add_parser("run", help="execute, inspect, or verify a run")
-    run.add_argument("target", nargs="?", help="experiment YAML in configs/experiments, or 'inspect'/'verify'")
+    run.add_argument("target", nargs="?", help="evaluation YAML in configs/experiments/evaluation, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH, RUN_ID, or RUN_HASH for inspect or verify")
     run.add_argument(
         "--profile", help="local machine YAML (overrides OVLAB_LOCAL_PROFILE and configs/local/profile.yaml)",
@@ -305,8 +333,9 @@ def _parser() -> argparse.ArgumentParser:
     train_plan.add_argument("--profile", required=True)
     _output_options(train_plan)
     train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
-    train_run.add_argument("target", help="training YAML in configs/training")
+    train_run.add_argument("target", help="training YAML name/path in configs/experiments/training")
     train_run.add_argument("--allow-dataset-download", action="store_true")
+    train_run.add_argument("--dry-run", action="store_true", help="resolve the training plan without starting a trainer")
     for command in (train_validate, train_plan, train_run):
         command.add_argument("--fit-action-normalization", action="store_true", help="fit frozen action q01/q99 from training episodes only (requires dataset.partition)")
     _output_options(train_run)
@@ -321,10 +350,8 @@ def _parser() -> argparse.ArgumentParser:
         _output_options(command)
     for command_name in ("status", "inspect", "verify"):
         command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
-        command.add_argument(
-            "--run", dest="run_id", required=True,
-            help="training run ID or displayed run hash",
-        )
+        command.add_argument("target", nargs="?", help="training run path, ID, or hash")
+        command.add_argument("--run", dest="run_id", help="alias for positional TARGET")
         _output_options(command)
     train_report = train_commands.add_parser(
         "report", help="generate or verify an offline system-performance report",
@@ -362,7 +389,7 @@ def _application():
 def _command_name(args) -> str:
     parts = [args.command]
     for name in (
-        "config_command", "policy_command", "service_command", "deploy_command",
+        "config_command", "policy_command", "service_command", "eval_command", "deploy_command",
         "metrics_command", "report_command", "export_command",
         "data_command", "dataset_command", "train_command", "ablate_command", "checkpoint_command",
     ):
@@ -503,6 +530,16 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("execution hash", ("execution_config_hash",)),
     ),
     "deploy run": (
+        ("deployment", ("deployment_id",)), ("status", ("status",)),
+        ("image", ("image",)), ("host", ("host",)), ("port", ("port",)),
+        ("quantization", ("quantization",)), ("side effects", ("side_effects_performed",)),
+    ),
+    "deploy inspect": (("deployment", ("deployment_id",)), ("state", ("state",)), ("ports", ("ports",))),
+    "deploy verify": (("deployment", ("deployment_id",)), ("verified", ("verified",))),
+    "deploy stop": (("deployment", ("deployment_id",)), ("status", ("status",))),
+    "eval inspect": (("run", ("run_id",)), ("status", ("status",))),
+    "eval verify": (("integrity", ("integrity",)), ("run", ("run_id",))),
+    "eval run": (
         ("status", ("status",)), ("deployment", ("deployment",)),
         ("experiment", ("experiment",)), ("profile", ("profile",)),
         ("renderer", ("renderer",)), ("quantization", ("quantization",)),
@@ -865,16 +902,26 @@ def _dispatch(args):
         return result, args.json, None
     if args.command == "service":
         if args.service_command == "health":
-            return _application().service_health(args.socket), args.json, None
+            options = {"host": args.host, "port": args.port} if args.port is not None else {}
+            return _application().service_health(args.socket, **options), args.json, None
         previous = _install_interrupt_handlers()
         try:
-            result = _application().serve(args.config, socket_path=args.socket)
+            if args.socket and args.port is not None:
+                raise CliUsageError("service serve accepts either --socket or --port")
+            if args.port is not None and not 1 <= args.port <= 65535:
+                raise CliUsageError("service port must be in 1..65535")
+            options = {"host": args.host, "port": args.port, "persistent": args.persistent} if args.port is not None or args.persistent else {}
+            result = _application().serve(args.config, socket_path=args.socket, **options)
         finally:
             _restore_handlers(previous)
         return result, args.json, None
     if args.command == "connect":
         return _application().connect(args.config), args.json, None
-    if args.command == "deploy":
+    if args.command == "eval":
+        if args.eval_command in {"inspect", "verify"}:
+            app = _application()
+            result = app.inspect(args.target) if args.eval_command == "inspect" else app.verify(args.target)
+            return result, args.json, None
         from .deployment import ComposeDeployment
         deployment = ComposeDeployment(_repository_root())
         plan = deployment.plan(
@@ -890,6 +937,24 @@ def _dispatch(args):
         finally:
             _restore_handlers(previous)
         return result, args.json, None
+    if args.command == "deploy":
+        from .model_deployment import ModelDeployment
+        deployment = ModelDeployment(_repository_root())
+        if args.deploy_command == "run":
+            plan = deployment.plan(args.target, quantization=args.quantization, port=args.port,
+                                   offline=args.offline, local_profile=args.profile)
+            previous = _install_interrupt_handlers()
+            try:
+                result = deployment.run(plan, dry_run=args.dry_run)
+            finally:
+                _restore_handlers(previous)
+        elif args.deploy_command == "inspect":
+            result = deployment.inspect(args.target)
+        elif args.deploy_command == "verify":
+            result = deployment.verify(args.target)
+        else:
+            result = deployment.stop(args.target, dry_run=args.dry_run)
+        return result, args.json, None
     if args.command == "run":
         app = _application()
         if args.target in {"inspect", "verify"}:
@@ -904,7 +969,7 @@ def _dispatch(args):
             if args.target is None:
                 raise CliUsageError("run requires an experiment YAML TARGET")
             from .config_paths import resolve_config_path
-            config = resolve_config_path(args.target, _repository_root(), "experiments")
+            config = resolve_config_path(args.target, _repository_root(), "experiments/evaluation")
             profile_options = {"local_profile": args.profile} if args.profile is not None else {}
             if args.dry_run:
                 result = app.execution_plan(config, output_root=args.output_root, **profile_options)
@@ -1019,23 +1084,30 @@ def _dispatch(args):
         if args.train_command == "plan":
             return app.train_plan(args.profile, fit_action_normalization=args.fit_action_normalization), args.json, None
         if args.train_command == "run":
+            if args.dry_run:
+                plan = app.train_plan(args.target, fit_action_normalization=args.fit_action_normalization)
+                return {**plan, "side_effects_performed": False}, args.json, None
             from .training_deployment import TrainingDeployment
             return TrainingDeployment(_repository_root()).run(
                 args.target, allow_dataset_download=args.allow_dataset_download,
                 fit_action_normalization=args.fit_action_normalization,
                 interactive_progress=sys.stderr.isatty(),
             ), args.json, None
-        if args.train_command == "status":
-            return app.train_status(args.run_id), args.json, None
-        if args.train_command == "inspect":
-            return app.train_inspect(args.run_id), args.json, None
+        if args.train_command in {"status", "inspect", "verify"}:
+            if args.target is not None and args.run_id is not None:
+                raise CliUsageError("use TARGET or --run, not both")
+            reference = args.target or args.run_id
+            if reference is None:
+                raise CliUsageError(f"train {args.train_command} requires a run TARGET")
+            method = {"status": app.train_status, "inspect": app.train_inspect, "verify": app.train_verify}[args.train_command]
+            return method(reference), args.json, None
         if args.train_command == "report":
             if args.build is not None and not args.verify:
                 raise CliUsageError("train report --build requires --verify")
             return app.train_report(
                 args.run_id, verify=args.verify, build_id=args.build,
             ), args.json, None
-        return app.train_verify(args.run_id), args.json, None
+        raise AssertionError("unhandled training command")
     if args.command == "checkpoint":
         app = _application()
         if args.checkpoint_command == "list":

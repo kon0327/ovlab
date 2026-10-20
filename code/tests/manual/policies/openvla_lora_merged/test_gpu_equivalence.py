@@ -34,7 +34,7 @@ def _settings():
     if not profile:
         raise RuntimeError("D3 requires OVLAB_LOCAL_PROFILE")
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "configs/experiments/libero10-lora-merged-rpc-smoke.yaml",
+        "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml",
         local_profile=Path(profile).resolve(),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},

@@ -14,11 +14,11 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def _lora():
-    return load(ROOT / "configs/training/openvla-libero10-lora-smoke.yaml")
+    return load(ROOT / "configs/experiments/training/openvla-libero10-lora-smoke.yaml")
 
 
 def _full():
-    return load(ROOT / "configs/training/openvla-full-reference.yaml")
+    return load(ROOT / "configs/experiments/training/openvla-full-reference.yaml")
 
 
 def test_lora_and_full_profiles_are_strict_and_deterministic():

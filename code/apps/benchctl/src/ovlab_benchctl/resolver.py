@@ -91,8 +91,9 @@ class ConfigResolver:
             chain = " -> ".join(str(item) for item in stack + (path,))
             raise ConfigReferenceError(f"extends cycle detected: {chain}")
         raw = load(path)
-        if raw.get("schema_version") != SCHEMA_VERSION:
-            raise ConfigSchemaError(f"{path}.schema_version must equal {SCHEMA_VERSION!r}")
+        expected_version = "ovlab.deployment/v1" if expected_kind == "deployment" else SCHEMA_VERSION
+        if raw.get("schema_version") != expected_version:
+            raise ConfigSchemaError(f"{path}.schema_version must equal {expected_version!r}")
         if raw.get("kind") != expected_kind:
             raise ConfigSchemaError(f"{path}.kind must equal {expected_kind!r}")
         reference = raw.get("extends")
@@ -204,7 +205,7 @@ class ConfigResolver:
                     if not snapshot.is_dir() and local is not None and local.name == revision:
                         snapshot = local
                     if not snapshot.is_dir():
-                        raise ConfigSchemaError(f"checkpoint {resource_id}@{revision} selected by {selector} is not cached; use deploy run to resolve it")
+                        raise ConfigSchemaError(f"checkpoint {resource_id}@{revision} selected by {selector} is not cached; use eval run or deploy run to resolve it")
                     identity = checkpoint_spec_from_snapshot(resource_id, entry["repo_id"], revision, snapshot)
                     aggregate = identity.expected_sha256
                     local_checkpoint_paths[resource_id] = snapshot.resolve()

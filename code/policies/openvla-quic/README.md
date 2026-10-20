@@ -38,14 +38,14 @@ it to match a separate migration snapshot.
 ## Training and serving
 
 Use the existing OVLAB training profile and adapter-only finalization workflow;
-`configs/training/openvla-libero10-quic-smoke.yaml` is a short functional example.
+`configs/experiments/training/openvla-libero10-quic-smoke.yaml` is a short functional example.
 It uses an explicitly identified dense host and episode-level train/validation
 splits. `training.peft` selects placement, profile and explicit target selectors.
 Only adapter parameters enter the optimizer; validation is teacher-forced
 masked action-token CE and token accuracy, separate from rollout success.
 
 `configs/policies/openvla-quic/adapter-libero10.yaml` and
-`configs/experiments/libero10-quic-adapter-rpc-smoke.yaml` demonstrate serving.
+`configs/experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml` demonstrate serving.
 Set `settings.quic.adapter_path` to the finalized directory containing
 `adapter.json` and `adapter.safetensors`; replace both zero SHA256 placeholders
 with the hashes of those files. The zero values deliberately cannot load a real

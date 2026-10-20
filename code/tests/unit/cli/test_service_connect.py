@@ -46,7 +46,7 @@ def test_foreground_service_uses_test_only_factory_and_cleans_socket(tmp_path):
     socket = tmp_path / "service.sock"
     thread = threading.Thread(
         target=lambda: app.serve(
-            "configs/experiments/mock-e2e-smoke.yaml",
+            "configs/experiments/evaluation/mock-e2e-smoke.yaml",
             socket_path=socket,
             adapter_factory=lambda _settings: MockPolicy(),
         )
@@ -76,7 +76,7 @@ def test_health_is_ready_only_after_initialization_and_does_not_consume_service(
     app = OvlabApplication(REPOSITORY, environment={**os.environ, "OVLAB_LOCAL_PROFILE": str(profile)})
     thread = threading.Thread(
         target=lambda: app.serve(
-            "configs/experiments/mock-e2e-smoke.yaml",
+            "configs/experiments/evaluation/mock-e2e-smoke.yaml",
             socket_path=socket,
             adapter_factory=lambda _settings: ReadinessPolicy(),
         )
@@ -103,7 +103,7 @@ def test_service_factory_failure_occurs_before_socket_readiness(tmp_path):
     socket = tmp_path / "never-ready.sock"
     try:
         app.serve(
-            "configs/experiments/mock-e2e-smoke.yaml",
+            "configs/experiments/evaluation/mock-e2e-smoke.yaml",
             socket_path=socket,
             adapter_factory=lambda _settings: (_ for _ in ()).throw(RuntimeError("provider init failed")),
         )
@@ -123,7 +123,7 @@ def test_service_refuses_and_preserves_unrelated_socket(tmp_path):
     try:
         try:
             app.serve(
-                "configs/experiments/mock-e2e-smoke.yaml",
+                "configs/experiments/evaluation/mock-e2e-smoke.yaml",
                 socket_path=socket,
                 adapter_factory=lambda _settings: MockPolicy(),
             )
@@ -213,7 +213,7 @@ def _connect_case(tmp_path, compatible):
         "MUJOCO_GL": "egl",
         "MUJOCO_EGL_DEVICE_ID": "0",
     })
-    config = "configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
+    config = "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
     resolved = app.resolve(config, mode="runtime")
     adapter = _HandshakeOnlyPolicy(_policy_capabilities(resolved, compatible=compatible))
     socket = app.default_socket(config)

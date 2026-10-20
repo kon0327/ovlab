@@ -306,7 +306,7 @@ sequenceDiagram
     participant S as runs/
     participant O as Reporting service
 
-    U->>C: deploy run experiment.yaml
+    U->>C: eval run experiment.yaml
     C->>R: validate experiment, profile and renderer
     R-->>C: minimal config bundle identity
     C->>C: prepare host roots and verify image contracts/source manifests
@@ -720,6 +720,6 @@ repair source evidence while rendering.
 | Metrics | `code/packages/ovlab-metrics/src/ovlab_metrics/` |
 | Reporting and exports | `code/apps/runner/src/ovlab_runner/derived.py`, `exports.py` |
 | Runtime topology | `deploy/compose/compose.yaml` |
-| Portable experiments | `configs/experiments/` |
+| Portable experiments | `configs/experiments/evaluation/` |
 | Resource identities | `configs/resources/registry.yaml` |
 | External source pins | `.gitmodules` and root Git submodule gitlinks |

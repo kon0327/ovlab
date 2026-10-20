@@ -1,7 +1,7 @@
 """Versioned local RPC transport for OVLAB policy adapters."""
 
 from ovlab_remote_policy.adapter import RemotePolicyAdapter
-from ovlab_remote_policy.client import UnixPolicyClient
+from ovlab_remote_policy.client import TcpPolicyClient, UnixPolicyClient
 from ovlab_remote_policy.errors import (
     RemotePolicyError,
     RemotePolicyProtocolError,
@@ -20,5 +20,5 @@ __all__ = [
     "RemotePolicyServiceError",
     "RemotePolicyTimeoutError",
     "UnixPolicyClient",
+    "TcpPolicyClient",
 ]
-

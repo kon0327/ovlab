@@ -30,7 +30,7 @@ checkpoint ID and the portable registry identity. It checks the default global
 Hugging Face cache, an optional local-profile override, and OVLAB-managed
 storage, verifies declared file sizes and SHA-256 values, and exposes only the
 resolved snapshot to the policy container. Missing artifacts are downloaded at
-their pinned revision unless `ovlab deploy run --offline` is used. This path uses
+their pinned revision unless `ovlab eval run --offline` is used. This path uses
 the Python standard library and does not require a host Conda environment.
 
 Docker deployment also constructs a deterministic minimal configuration bundle
@@ -57,13 +57,13 @@ The intended workflow is Config -> Connect -> Run -> Inspect:
 ```bash
 export OVLAB_LOCAL_PROFILE=configs/local/profile.yaml
 
-./ovlab config validate configs/experiments/libero10-lora-merged-rpc-smoke.yaml --mode runtime
-./ovlab policy describe configs/experiments/libero10-lora-merged-rpc-smoke.yaml
-./ovlab service serve configs/experiments/libero10-lora-merged-rpc-smoke.yaml
-./ovlab connect configs/experiments/libero10-lora-merged-rpc-smoke.yaml
-./ovlab run configs/experiments/libero10-lora-merged-rpc-smoke.yaml --dry-run
-./ovlab run inspect RUN_PATH
-./ovlab run verify RUN_PATH
+./ovlab config validate configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --mode runtime
+./ovlab policy describe configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab service serve configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab connect configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab run configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --dry-run
+./ovlab eval inspect RUN_PATH
+./ovlab eval verify RUN_PATH
 ./ovlab metrics recompute RUN_PATH
 ```
 

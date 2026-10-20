@@ -154,3 +154,21 @@ class UnixPolicyClient:
             error = response["error"]
             raise RemotePolicyServiceError(f"{error['code']}: {error['message']}")
         return response["payload"], finished - started
+
+
+class TcpPolicyClient(UnixPolicyClient):
+    """The same ordered OVLAB RPC protocol over a published deployment port."""
+
+    def __init__(self, host: str, port: int, *, request_timeout_s: float = 60.0) -> None:
+        super().__init__("tcp", request_timeout_s=request_timeout_s)
+        if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError("a TCP host and port in 1..65535 are required")
+        self.address = (host, port)
+
+    def connect(self) -> None:
+        if self._socket is not None:
+            raise RemotePolicyError("policy client is already connected")
+        try:
+            self._socket = socket.create_connection(self.address, self.request_timeout_s)
+        except socket.timeout as exc:
+            raise RemotePolicyTimeoutError(f"timed out connecting to {self.address}") from exc

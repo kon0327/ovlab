@@ -707,7 +707,56 @@ def validate_quic_policy_descriptor(doc, path):
             raise ConfigSchemaError(f"{path}.semantics misclassifies QuIC-WC")
 
 
+def validate_deployment(doc, path):
+    import re
+    mapping(doc, path, required=("schema_version", "kind", "id", "components", "resources"),
+            optional=("image", "build", "runtime", "service", "input"))
+    enum(doc["schema_version"], ("ovlab.deployment/v1",), f"{path}.schema_version")
+    enum(doc["kind"], ("deployment",), f"{path}.kind")
+    non_empty_string(doc["id"], f"{path}.id")
+    if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", doc["id"]) is None:
+        raise ConfigSchemaError(f"{path}.id must be a lowercase container-safe identifier")
+    for section, key in (("components", "policy"), ("resources", "registry")):
+        values = mapping(doc[section], f"{path}.{section}", required=(key,))
+        non_empty_string(values[key], f"{path}.{section}.{key}")
+    if "image" in doc:
+        non_empty_string(doc["image"], f"{path}.image")
+        if any(char.isspace() for char in doc["image"]) or doc["image"].startswith("-"):
+            raise ConfigSchemaError(f"{path}.image must be a Docker image reference")
+    if "build" in doc:
+        exact_type(doc["build"], bool, f"{path}.build")
+    runtime = mapping(doc.get("runtime", {}), f"{path}.runtime", optional=("quantization", "gpu"))
+    if "quantization" in runtime:
+        enum(runtime["quantization"], ("none", "8bit", "4bit"), f"{path}.runtime.quantization")
+    if "gpu" in runtime:
+        non_empty_string(runtime["gpu"], f"{path}.runtime.gpu")
+    service = mapping(doc.get("service", {}), f"{path}.service",
+                      optional=("host", "port", "container_port", "restart", "readiness_timeout_s"))
+    if "host" in service:
+        import ipaddress
+        exact_type(service["host"], str, f"{path}.service.host")
+        try:
+            if ipaddress.ip_address(service["host"]).version != 4:
+                raise ValueError("IPv4 required")
+        except (ValueError, TypeError) as exc:
+            raise ConfigSchemaError(f"{path}.service.host must be an IPv4 address") from exc
+    for key in ("port", "container_port", "readiness_timeout_s"):
+        if key not in service or (key == "port" and service[key] is None):
+            continue
+        exact_type(service[key], int, f"{path}.service.{key}")
+        if not 1 <= service[key] <= (65535 if key != "readiness_timeout_s" else 86400):
+            raise ConfigSchemaError(f"{path}.service.{key} is out of range")
+    if "restart" in service:
+        enum(service["restart"], ("no", "on-failure", "always", "unless-stopped"), f"{path}.service.restart")
+    inputs = mapping(doc.get("input", {}), f"{path}.input", optional=("height", "width"))
+    for key, value in inputs.items():
+        exact_type(value, int, f"{path}.input.{key}")
+        if value <= 0:
+            raise ConfigSchemaError(f"{path}.input.{key} must be positive")
+
+
 VALIDATORS = {
+    "deployment": validate_deployment,
     "experiment": validate_experiment, "benchmark": validate_benchmark, "policy": validate_policy,
     "action_interface": validate_action_interface, "metric_set": validate_metric_set, "protocol": validate_protocol,
     "resource_registry": validate_registry, "local_profile": validate_local_profile,

@@ -101,7 +101,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     assert os.environ.get("CONDA_DEFAULT_ENV") == "openvla-oft"
     assert "ovlab_openvla_oft" not in sys.modules
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "configs/experiments/libero10-lora-merged-rpc-smoke.yaml",
+        "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml",
         local_profile=_profile(),
         execution_profile="profiles/libero-bench-egl.yaml",
     )

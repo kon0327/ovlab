@@ -40,7 +40,7 @@ python deploy/scripts/render_requirements_lock.py \
   deploy/locks/quic-openvla.pylock.toml deploy/locks/quic-openvla.requirements.txt
 ```
 
-Use the existing `ovlab deploy run` command with an experiment declaring
+Use the existing `ovlab eval run` command with an experiment declaring
 `deployment: {profile: quic, renderer: egl}` and policy type `openvla_quic`.
 The composed policy's `settings.quic.adapter_path` selects the adapter
 directory; a relative path is interpreted from the OVLAB repository root.

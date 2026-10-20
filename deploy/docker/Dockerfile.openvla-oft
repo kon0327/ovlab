@@ -33,6 +33,7 @@ LABEL org.opencontainers.image.title="OVLAB OpenVLA-OFT policy service" \
       org.opencontainers.image.description="Offline OpenVLA-OFT service with its distinct dependency closure; no LIBERO" \
       io.github.ovlab.role="policy-openvla-oft" \
       io.github.ovlab.build-target="production" \
+      io.github.ovlab.service.transport="tcp-persistent-v1" \
       io.github.ovlab.deployment.contract="resolved-checkpoint-quantization-config-bundle-v2" \
       io.github.ovlab.python.version="3.10.20" \
       io.github.ovlab.cuda.version="12.1" \

@@ -201,12 +201,12 @@ class ComposeDeployment:
         from .config_paths import resolve_config_path
 
         experiment_path = self._inside_repository(
-            resolve_config_path(experiment, self.repository_root, "experiments"),
+            resolve_config_path(experiment, self.repository_root, "experiments/evaluation"),
             kind="experiment configuration",
         )
         config_root = self.repository_root / "configs"
-        if not experiment_path.is_relative_to(config_root / "experiments"):
-            raise ValueError("Docker deployment requires an experiment below configs/experiments/")
+        if not experiment_path.is_relative_to(config_root / "experiments/evaluation"):
+            raise ValueError("Docker deployment requires an experiment below configs/experiments/evaluation/")
         experiment_reference = str(experiment_path.relative_to(self.repository_root))
 
         resolver = ConfigBundleBuilder(self.repository_root)

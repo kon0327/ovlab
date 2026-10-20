@@ -1,26 +1,33 @@
 # Running Evaluations
 
 OVLAB separates the portable evaluation experiment from machine-specific run
-settings. A file in `configs/experiments/` defines the benchmark, policy, and
+settings. A file in `configs/experiments/evaluation/` defines the benchmark, policy, and
 metrics. A local profile provides paths to datasets, checkpoints, and outputs,
 as well as device selection. These profiles serve different purposes.
 
+## Evaluation lifecycle
+
+`eval run TARGET` selects a YAML from `configs/experiments/evaluation`. After a run,
+use `eval inspect RUN_ID_OR_HASH` or `eval verify RUN_ID_OR_HASH`. All evaluation
+run examples accept explicit YAML paths as well as short names. `deploy run` now
+starts a persistent model service described in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
 ## Recommended Docker Workflow
 
-For a normal evaluation, use `deploy run`. Pass the experiment as a positional
+For a normal evaluation, use `eval run`. Pass the experiment as a positional
 argument; this workflow does not require `configs/local/profile.yaml`. If you
 do not have a local Compose environment file yet, copy the template once and
 set the data paths:
 
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
-./ovlab deploy run \
-  configs/experiments/libero10-lora-4bit-three-per-task.yaml --dry-run
-./ovlab deploy run \
-  configs/experiments/libero10-lora-4bit-three-per-task.yaml
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --dry-run
+./ovlab eval run \
+  configs/experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
 ```
 
-`--dry-run` displays and validates the plan without starting Docker. `deploy
+`--dry-run` displays and validates the plan without starting Docker. `eval
 run` starts the policy service and LIBERO runner in separate containers. It
 gets local paths and output locations from `deploy/compose/.env` and the
 container definitions.
@@ -32,7 +39,7 @@ experiment YAML.
 
 `ovlab run` uses the low-level native execution path. You can provide the
 evaluation YAML by its short name; the CLI looks for it in
-`configs/experiments/`:
+`configs/experiments/evaluation/`:
 
 ```bash
 ./ovlab run libero10-lora-4bit-three-per-task --dry-run
@@ -78,7 +85,7 @@ dependencies; the Docker workflow is usually simpler for operator runs.
 `ovlab run` accepts both explicit paths and short YAML names:
 
 ```bash
-./ovlab run configs/experiments/libero10-lora-4bit-three-per-task.yaml
+./ovlab run configs/experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
 ./ovlab run libero10-lora-4bit-three-per-task
 ```
 
@@ -86,8 +93,8 @@ After a run, list and inspect the results with:
 
 ```bash
 ./ovlab data list --kind runs
-./ovlab run inspect RUN_ID_OR_HASH
-./ovlab run verify RUN_ID_OR_HASH
+./ovlab eval inspect RUN_ID_OR_HASH
+./ovlab eval verify RUN_ID_OR_HASH
 ```
 
 For details about containers and their configuration, see

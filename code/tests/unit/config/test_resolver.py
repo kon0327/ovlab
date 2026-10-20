@@ -19,7 +19,7 @@ from ovlab_benchctl.schema import validate
 
 REPOSITORY = Path(__file__).resolve().parents[4]
 CONFIGS = REPOSITORY / "configs"
-EXPERIMENT = "configs/experiments/libero-spatial-vanilla.yaml"
+EXPERIMENT = "configs/experiments/evaluation/libero-spatial-vanilla.yaml"
 
 
 def profile(path, *, suffix="a", device="cuda:0"):
@@ -88,25 +88,25 @@ def test_every_versioned_component_is_schema_valid():
         "profiles/libero-playground-glfw.yaml": "execution_profile",
         "artifacts/filesystem.yaml": "artifact_store",
         "resources/registry.yaml": "resource_registry",
-        "experiments/libero-spatial-vanilla.yaml": "experiment",
-        "experiments/mock-e2e-smoke.yaml": "experiment",
-        "experiments/mock-e2e-reporting-disabled.yaml": "experiment",
-        "experiments/libero-mock-smoke.yaml": "experiment",
-        "experiments/libero-vanilla-smoke.yaml": "experiment",
-        "experiments/libero10-vanilla-rpc-smoke.yaml": "experiment",
-        "experiments/libero10-lora-merged-rpc-smoke.yaml": "experiment",
-        "experiments/libero10-lora-merged-4bit-rpc-smoke.yaml": "experiment",
-        "experiments/libero10-lora-merged-4bit-five-episodes.yaml": "experiment",
-        "experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml": "experiment",
-        "experiments/libero10-openvla-vanilla-4bit-rpc-smoke.yaml": "experiment",
-        "experiments/libero10-openvla-oft-rpc-episode.yaml": "experiment",
-        "experiments/libero10-openvla-oft-rpc-five-episodes.yaml": "experiment",
-        "experiments/libero10-lora-full-three-per-task.yaml": "experiment",
-        "experiments/libero10-lora-8bit-three-per-task.yaml": "experiment",
-        "experiments/libero10-lora-4bit-three-per-task.yaml": "experiment",
-        "experiments/libero10-oft-full-three-per-task.yaml": "experiment",
-        "experiments/libero10-oft-8bit-three-per-task.yaml": "experiment",
-        "experiments/libero10-oft-4bit-three-per-task.yaml": "experiment",
+        "experiments/evaluation/libero-spatial-vanilla.yaml": "experiment",
+        "experiments/evaluation/mock-e2e-smoke.yaml": "experiment",
+        "experiments/evaluation/mock-e2e-reporting-disabled.yaml": "experiment",
+        "experiments/evaluation/libero-mock-smoke.yaml": "experiment",
+        "experiments/evaluation/libero-vanilla-smoke.yaml": "experiment",
+        "experiments/evaluation/libero10-vanilla-rpc-smoke.yaml": "experiment",
+        "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml": "experiment",
+        "experiments/evaluation/libero10-lora-merged-4bit-rpc-smoke.yaml": "experiment",
+        "experiments/evaluation/libero10-lora-merged-4bit-five-episodes.yaml": "experiment",
+        "experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml": "experiment",
+        "experiments/evaluation/libero10-openvla-vanilla-4bit-rpc-smoke.yaml": "experiment",
+        "experiments/evaluation/libero10-openvla-oft-rpc-episode.yaml": "experiment",
+        "experiments/evaluation/libero10-openvla-oft-rpc-five-episodes.yaml": "experiment",
+        "experiments/evaluation/libero10-lora-full-three-per-task.yaml": "experiment",
+        "experiments/evaluation/libero10-lora-8bit-three-per-task.yaml": "experiment",
+        "experiments/evaluation/libero10-lora-4bit-three-per-task.yaml": "experiment",
+        "experiments/evaluation/libero10-oft-full-three-per-task.yaml": "experiment",
+        "experiments/evaluation/libero10-oft-8bit-three-per-task.yaml": "experiment",
+        "experiments/evaluation/libero10-oft-4bit-three-per-task.yaml": "experiment",
     }
     for reference, kind in components.items():
         document = resolver().load_component(reference, kind)
@@ -126,7 +126,7 @@ def test_every_libero_protocol_records_all_episode_video_frames_by_default():
 
 def test_oft_full_episode_keeps_one_rollout_and_the_native_chunk_protocol(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/libero10-openvla-oft-rpc-episode.yaml",
+        "configs/experiments/evaluation/libero10-openvla-oft-rpc-episode.yaml",
         local_profile=profile(tmp_path),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},
@@ -141,7 +141,7 @@ def test_oft_full_episode_keeps_one_rollout_and_the_native_chunk_protocol(tmp_pa
 
 def test_oft_five_episode_experiment_selects_five_distinct_tasks(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/libero10-openvla-oft-rpc-five-episodes.yaml",
+        "configs/experiments/evaluation/libero10-openvla-oft-rpc-five-episodes.yaml",
         local_profile=profile(tmp_path),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},
@@ -155,7 +155,7 @@ def test_oft_five_episode_experiment_selects_five_distinct_tasks(tmp_path):
 
 def test_vanilla_4bit_five_episode_experiment_is_cross_suite_and_complete(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/libero10-openvla-vanilla-4bit-five-episodes.yaml",
+        "configs/experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml",
         local_profile=profile(tmp_path),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},
@@ -175,7 +175,7 @@ def test_vanilla_4bit_five_episode_experiment_is_cross_suite_and_complete(tmp_pa
 
 def test_merged_lora_4bit_preserves_training_and_artifact_identity(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/libero10-lora-merged-4bit-rpc-smoke.yaml",
+        "configs/experiments/evaluation/libero10-lora-merged-4bit-rpc-smoke.yaml",
         local_profile=profile(tmp_path),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},
@@ -191,7 +191,7 @@ def test_merged_lora_4bit_preserves_training_and_artifact_identity(tmp_path):
 
 def test_merged_lora_4bit_five_episode_experiment_uses_standard_observations(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/libero10-lora-merged-4bit-five-episodes.yaml",
+        "configs/experiments/evaluation/libero10-lora-merged-4bit-five-episodes.yaml",
         local_profile=profile(tmp_path),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},
@@ -207,7 +207,7 @@ def test_merged_lora_4bit_five_episode_experiment_uses_standard_observations(tmp
 
 def test_runtime_quantization_changes_scientific_hash(tmp_path):
     root = copied_configs(tmp_path)
-    experiment = root / "experiments/libero10-lora-merged-rpc-smoke.yaml"
+    experiment = root / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
     selected_profile = profile(tmp_path, suffix="same-machine")
     configured = ConfigResolver(root, repository_root=tmp_path)
     full = configured.resolve(experiment, local_profile=selected_profile, environment={})
@@ -239,7 +239,7 @@ def test_three_per_task_deploy_experiments_cover_all_libero10_tasks(
     tmp_path, method, mode, expected_quantization, expected_action_mode
 ):
     resolved = resolver().resolve(
-        f"configs/experiments/libero10-{method}-{mode}-three-per-task.yaml",
+        f"configs/experiments/evaluation/libero10-{method}-{mode}-three-per-task.yaml",
         local_profile=profile(tmp_path, suffix=f"{method}-{mode}"),
         environment={},
     )
@@ -285,20 +285,20 @@ def test_resolver_constructs_owner_settings_and_verified_interfaces(tmp_path):
 
 def test_mock_smoke_resolves_to_typed_runtime_settings(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/mock-e2e-smoke.yaml", local_profile=profile(tmp_path)
+        "configs/experiments/evaluation/mock-e2e-smoke.yaml", local_profile=profile(tmp_path)
     )
     assert isinstance(resolved.benchmark_settings, MockBenchmarkSettings)
     assert isinstance(resolved.policy_settings, MockPolicySettings)
     assert resolved.benchmark_settings.terminal_outcomes == ("success", "time_limit")
     assert resolved.policy_settings.horizon == 1
     assert resolved.scientific_config_hash == resolver().resolve(
-        "configs/experiments/mock-e2e-smoke.yaml", local_profile=profile(tmp_path, suffix="b")
+        "configs/experiments/evaluation/mock-e2e-smoke.yaml", local_profile=profile(tmp_path, suffix="b")
     ).scientific_config_hash
 
 
 def test_rpc_smoke_is_aligned_to_libero10_merged_lora_method(tmp_path):
     resolved = resolver().resolve(
-        "configs/experiments/libero10-lora-merged-rpc-smoke.yaml",
+        "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml",
         local_profile=profile(tmp_path),
         execution_profile="profiles/libero-bench-egl.yaml",
         environment={},
@@ -323,7 +323,7 @@ def test_rpc_smoke_is_aligned_to_libero10_merged_lora_method(tmp_path):
 
 def test_merged_lora_policy_rejects_cross_suite_acceptance(tmp_path):
     root = copied_configs(tmp_path)
-    experiment = root / "experiments/libero10-lora-merged-rpc-smoke.yaml"
+    experiment = root / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
     experiment.write_text(
         experiment.read_text().replace(
             "benchmarks/libero/libero10-smoke.yaml", "benchmarks/libero/spatial-smoke.yaml"
@@ -342,7 +342,7 @@ def test_merged_weights_cannot_be_configured_as_vanilla(tmp_path):
     policy.write_text(policy.read_text().replace("openvla_lora_merged", "openvla_vanilla"), encoding="utf-8")
     with pytest.raises(ConfigCompatibilityError, match="cannot be classified.*Vanilla"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
-            root / "experiments/libero10-lora-merged-rpc-smoke.yaml",
+            root / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml",
             local_profile=profile(tmp_path),
             environment={},
         )
@@ -380,7 +380,7 @@ def test_merged_lora_registry_rejects_non_digest_checkpoint_identity(tmp_path):
 
 def test_method_identity_changes_scientific_hash_without_machine_path_leakage(tmp_path):
     baseline = resolver().resolve(
-        "configs/experiments/libero10-lora-merged-rpc-smoke.yaml",
+        "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml",
         local_profile=profile(tmp_path),
         environment={},
     )
@@ -391,7 +391,7 @@ def test_method_identity_changes_scientific_hash_without_machine_path_leakage(tm
         encoding="utf-8",
     )
     changed = ConfigResolver(root, repository_root=tmp_path).resolve(
-        root / "experiments/libero10-lora-merged-rpc-smoke.yaml",
+        root / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml",
         local_profile=profile(tmp_path, suffix="b"),
         environment={},
     )
@@ -428,7 +428,7 @@ def test_checkpoint_local_path_is_execution_only_and_preserves_registry_identity
             + f"    {resource_id}:\n      local_path: {location}\n",
             encoding="utf-8",
         )
-    experiment = "configs/experiments/libero10-lora-merged-rpc-smoke.yaml"
+    experiment = "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
 
     first = resolver().resolve(experiment, local_profile=first_profile, environment={})
     second = resolver().resolve(experiment, local_profile=second_profile, environment={})
@@ -471,7 +471,7 @@ def test_renderer_profiles_are_execution_only_and_preserve_scientific_contracts(
 
 def test_experiment_renderer_default_is_execution_only_and_cli_profile_can_override_it(tmp_path):
     root = copied_configs(tmp_path)
-    experiment = root / "experiments/libero-spatial-vanilla.yaml"
+    experiment = root / "experiments/evaluation/libero-spatial-vanilla.yaml"
     selected_profile = profile(tmp_path, suffix="deployment-default")
     selected_resolver = ConfigResolver(root, repository_root=tmp_path)
 
@@ -500,7 +500,7 @@ def test_experiment_renderer_default_is_execution_only_and_cli_profile_can_overr
 
 def test_experiment_rejects_deployment_profile_incompatible_with_policy(tmp_path):
     root = copied_configs(tmp_path)
-    experiment = root / "experiments/libero10-openvla-oft-rpc-smoke.yaml"
+    experiment = root / "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml"
     experiment.write_text(
         experiment.read_text(encoding="utf-8").replace("profile: oft", "profile: openvla"),
         encoding="utf-8",
@@ -523,7 +523,7 @@ def test_unsupported_renderer_backend_is_rejected_without_native_imports(tmp_pat
     before = {name for name in sys.modules if name == "mujoco" or name == "robosuite" or name.startswith("libero.libero")}
     with pytest.raises(ConfigSchemaError, match="egl, glfw"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
-            root / "experiments/libero-spatial-vanilla.yaml",
+            root / "experiments/evaluation/libero-spatial-vanilla.yaml",
             local_profile=profile(tmp_path),
             execution_profile="profiles/libero-bench-egl.yaml",
             environment={},
@@ -561,7 +561,7 @@ def test_unknown_key_is_rejected_after_composition(tmp_path):
 
 def test_component_reference_traversal_is_rejected(tmp_path):
     root = copied_configs(tmp_path)
-    experiment = root / "experiments/libero-spatial-vanilla.yaml"
+    experiment = root / "experiments/evaluation/libero-spatial-vanilla.yaml"
     experiment.write_text(experiment.read_text().replace("benchmarks/libero/spatial.yaml", "../outside.yaml"), encoding="utf-8")
     with pytest.raises(ConfigReferenceError, match="escapes"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
@@ -582,7 +582,7 @@ def test_cross_component_camera_mismatch_is_rejected(tmp_path):
     policy.write_text(policy.read_text().replace("camera.primary.rgb", "camera.wrist.rgb", 1), encoding="utf-8")
     with pytest.raises(ConfigCompatibilityError, match="camera"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
-            root / "experiments/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path))
+            root / "experiments/evaluation/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path))
 
 
 def test_cross_component_action_convention_mismatch_is_rejected(tmp_path):
@@ -591,7 +591,7 @@ def test_cross_component_action_convention_mismatch_is_rejected(tmp_path):
     interface.write_text(interface.read_text().replace("closed_positive", "open_positive"), encoding="utf-8")
     with pytest.raises(ConfigCompatibilityError, match="ActionSpec"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
-            root / "experiments/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path))
+            root / "experiments/evaluation/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path))
 
 
 def test_policy_action_interface_must_match_benchmark(tmp_path):
@@ -606,17 +606,17 @@ def test_policy_action_interface_must_match_benchmark(tmp_path):
     )
     with pytest.raises(ConfigCompatibilityError, match="benchmark action interface differs"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
-            root / "experiments/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path)
+            root / "experiments/evaluation/libero-spatial-vanilla.yaml", local_profile=profile(tmp_path)
         )
 
 
 def test_reporting_configuration_changes_only_derived_identity(tmp_path):
     local = profile(tmp_path, suffix="reporting")
     enabled = resolver().resolve(
-        "configs/experiments/mock-e2e-smoke.yaml", local_profile=local
+        "configs/experiments/evaluation/mock-e2e-smoke.yaml", local_profile=local
     )
     disabled = resolver().resolve(
-        "configs/experiments/mock-e2e-reporting-disabled.yaml",
+        "configs/experiments/evaluation/mock-e2e-reporting-disabled.yaml",
         local_profile=local,
     )
     assert enabled.scientific_config_hash == disabled.scientific_config_hash

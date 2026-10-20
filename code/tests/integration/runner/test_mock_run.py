@@ -201,10 +201,10 @@ def test_filesystem_run_round_trip_includes_trace_metrics_and_final_manifest(tmp
 
 def test_gate_a_configured_run_is_immutable_offline_reproducible_and_deterministic(tmp_path) -> None:
     resolved = ConfigResolver(CONFIGS, repository_root=REPOSITORY).resolve(
-        "configs/experiments/mock-e2e-smoke.yaml", local_profile=_profile(tmp_path)
+        "configs/experiments/evaluation/mock-e2e-smoke.yaml", local_profile=_profile(tmp_path)
     )
     repeated_resolution = ConfigResolver(CONFIGS, repository_root=REPOSITORY).resolve(
-        "configs/experiments/mock-e2e-smoke.yaml", local_profile=_profile(tmp_path)
+        "configs/experiments/evaluation/mock-e2e-smoke.yaml", local_profile=_profile(tmp_path)
     )
     assert resolved.scientific_config_hash == repeated_resolution.scientific_config_hash
     assert resolved.execution_config_hash == repeated_resolution.execution_config_hash
