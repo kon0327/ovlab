@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 class TinyDenseHost(nn.Module):
-    def __init__(self):
+    def __init__(self, target_kind="Linear"):
         super().__init__()
-        self.projection = nn.Linear(4, 8)
+        self.projection = nn.Conv2d(3, 8, 2, stride=2) if target_kind == "Conv2d" else nn.Linear(4, 8)
         self.norm_stats = {"fixture": {"action": {"q01": [-1.] * 7, "q99": [1.] * 7}}}
 
     @property
@@ -52,7 +52,8 @@ class Processor:
 
 
 @pytest.mark.parametrize("normalization_mode", ("host", "train-q99"))
-def test_dense_provider_load_predict_close_and_host_integrity(tmp_path, monkeypatch, normalization_mode):
+@pytest.mark.parametrize("target_kind", ("Linear", "Conv2d"))
+def test_dense_provider_load_predict_close_and_host_integrity(tmp_path, monkeypatch, normalization_mode, target_kind):
     monkeypatch.syspath_prepend(str(ROOT / "external/openvla-quic"))
     from quic_petf import host as backend
     from ovlab_openvla_quic.runtime import create_provider
@@ -60,10 +61,10 @@ def test_dense_provider_load_predict_close_and_host_integrity(tmp_path, monkeypa
     checkpoint = tmp_path / "host"
     checkpoint.mkdir()
     (checkpoint / "config.json").write_text(json.dumps({"model_type": "openvla"}))
-    save_file({"projection.weight": torch.ones(8, 4)}, str(checkpoint / "model.safetensors"))
+    model = TinyDenseHost(target_kind)
+    save_file({"projection.weight": model.projection.weight.detach().clone()}, str(checkpoint / "model.safetensors"))
     host = {"checkpoint": str(checkpoint), "checkpoint_id": "tiny-dense-fixture", "revision": "a" * 40,
             "adaptation_state": "none", "unnorm_key": "fixture", "dtype": "float32", "device": "cpu"}
-    model = TinyDenseHost()
     original = copy.deepcopy(model)
     stats = copy.deepcopy(model.norm_stats["fixture"]["action"])
     if normalization_mode == "train-q99":
@@ -88,6 +89,9 @@ def test_dense_provider_load_predict_close_and_host_integrity(tmp_path, monkeypa
         input_image_shape=(2, 2, 3), device="cpu", model_dtype="float32", action_codec="openvla-to-libero-v1",
     )
     descriptor = descriptor_from_settings(settings)
+    assert descriptor.placement.entries[0].original_shape == tuple(original.projection.weight.shape)
+    assert descriptor.placement.entries[0].tensor_role == (
+        "dense_conv2d_output" if target_kind == "Conv2d" else "dense_linear_output")
     provider = create_provider(variant="quic-peft", method_descriptor=descriptor.as_metadata())
     request = {"method_descriptor": descriptor.canonical_dict(), "scientific_identity_hash": descriptor.scientific_hash}
     def load_tiny_host(config):

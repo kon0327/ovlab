@@ -1,0 +1,9 @@
+extends: libero10-smoke.yaml
+id: openvla-quic-lora-coverage-libero-object-smoke
+
+dataset:
+  ref: libero/libero_object
+
+training:
+  normalization:
+    unnorm_key: libero_object

@@ -59,7 +59,7 @@ def test_invalid_quic_contract_fails_before_runtime_import(mutate, match):
         TrainingProfile.from_document(value)
 
 
-def staged(tmp_path, *, fitted=False, names=("linear",)):
+def staged(tmp_path, *, fitted=False, names=("linear",), convolution=False):
     scientific = {"training": profile()["training"], "dataset": {"dataset_id": "dataset-fixture"},
         "base_checkpoint": {"resource_id": "base", "revision": "a" * 40, "aggregate_sha256": "b" * 64},
         "output": {"output_kind": "adapter"}}
@@ -73,6 +73,12 @@ def staged(tmp_path, *, fitted=False, names=("linear",)):
     config = {"base_size": 2, "block_count": 1, "orders": [1], "share_across_blocks": False,
         "orthogonal": True, "orientation": "output", "construction_dtype": "float32"}
     manifest = [{"name": name, "config": deepcopy(config)} for name in names]
+    if convolution:
+        for entry in manifest:
+            entry.update(module_type="Conv2d", in_features=3, out_features=32,
+                         in_channels=3, out_channels=32, kernel_size=[14, 14],
+                         stride=[14, 14], padding=[0, 0], dilation=[1, 1],
+                         groups=1, padding_mode="zeros", bias=True)
     (context.root / "target-manifest.json").write_text(json.dumps({"targets": manifest}))
     normalization = {"unnorm_key": "libero_10", "action_statistics": {"q01": [-1] * 7, "q99": [1] * 7},
         "mode": "train-q99" if fitted else "host"}
@@ -80,7 +86,7 @@ def staged(tmp_path, *, fitted=False, names=("linear",)):
     host_identity = {"checkpoint_sha256": "c" * 64}
     if fitted:
         host_identity["normalization_contract_sha256"] = normalization["sha256"]
-    binding = {"format_version": 1, "host_identity": host_identity, "manifest": manifest}
+    binding = {"format_version": 2 if convolution else 1, "host_identity": host_identity, "manifest": manifest}
     digest = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     header = json.dumps({"__metadata__": {"quic_binding_sha256": digest}, **{
         f"{name}.adapter.entries": {"dtype": "F32", "shape": [1, 1], "data_offsets": [4*i, 4*(i+1)]}
@@ -114,6 +120,28 @@ def test_quic_bundle_publishes_with_its_own_loader_and_verifies(tmp_path):
     assert result["checkpoint"]["expected_loader"] == "ovlab-openvla-quic"
     assert result["checkpoint"]["merge_status"] == "unmerged"
     assert CheckpointBundleStore(tmp_path).verify(result["checkpoint_id"])["status"] == "verified"
+
+
+def test_conv_bundle_finalizes_with_complete_geometry_and_version_two(tmp_path):
+    context, weights, _ = staged(tmp_path, names=("vision_backbone.patch_embed.proj",), convolution=True)
+    payload, _ = validate_staged_adapter(weights, context.plan["scientific"], run_root=context.root)
+    assert payload["format_version"] == 2
+    assert payload["manifest"][0]["kernel_size"] == [14, 14]
+    result = CheckpointBundleStore(tmp_path).finalize(context)
+    assert CheckpointBundleStore(tmp_path).verify(result["checkpoint_id"])["status"] == "verified"
+
+
+@pytest.mark.parametrize("mutation", [{"groups": 2}, {"kernel_size": [14]},
+                                     {"stride": [0, 14]}, {"padding_mode": "unknown"}])
+def test_finalizer_rejects_invalid_conv_geometry_without_importing_torch(mutation):
+    from ovlab_benchctl.training_quic import _validate_target_geometry
+    entry = {"module_type": "Conv2d", "in_features": 3, "out_features": 32,
+             "in_channels": 3, "out_channels": 32, "kernel_size": [14, 14],
+             "stride": [14, 14], "padding": [0, 0], "dilation": [1, 1],
+             "groups": 1, "padding_mode": "zeros", "config": {"block_count": 8}}
+    entry.update(mutation)
+    with pytest.raises(CheckpointBundleError, match="Conv2d target geometry"):
+        _validate_target_geometry(entry, 2)
 
 
 @pytest.mark.parametrize("tamper", [None, "changed", "missing", "duplicate"])

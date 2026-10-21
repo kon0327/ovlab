@@ -212,8 +212,15 @@ wiring, not policy quality. Paired standalone/provider traces and benchmark
 rollouts remain unverified. The source's earlier A1/A3/A9 results remain
 source-project evidence.
 
-This integration supports dense ordinary Linear targets and adapter-only
-artifacts. Quantized training/hosts, active LoRA modules, OpenVLA-OFT hosts,
+This integration supports dense ordinary Linear and Conv2d targets and
+adapter-only artifacts. The
+[LoRA coverage experiment](QUIC_LORA_COVERAGE.md) supplies staged smoke and
+deep recipes for LIBERO-10, Object, Spatial and Goal. Its full-coverage recipe
+has passed configuration validation; the GPU smoke and deep training require
+a CUDA runtime and rebuilt training/finalizer images. Earlier CUDA evidence
+above covers the earlier bounded target recipes.
+
+Quantized training/hosts, active LoRA modules, OpenVLA-OFT hosts,
 resume and full merged model export remain unsupported. The layer merge
 primitive is available in the portable package but is not a published merged
 checkpoint workflow. Original adapters retain their original host/source

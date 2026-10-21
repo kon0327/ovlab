@@ -74,7 +74,7 @@ def validate_quic_settings(value: Mapping[str, object]) -> None:
         raise TrainingProfileError("targets must be a nonempty list of explicit selectors")
     for target in targets:
         target = _mapping(target, "target")
-        _keys(target, {"names", "pattern", "region", "layers", "profile", "adapter"}, set(), "target")
+        _keys(target, {"names", "pattern", "region", "layers", "profile", "adapter", "policy_active_only"}, set(), "target")
         if ("names" in target) == ("pattern" in target):
             raise TrainingProfileError("target requires exactly one of names or pattern")
         if "names" in target:
@@ -95,10 +95,45 @@ def validate_quic_settings(value: Mapping[str, object]) -> None:
         if "layers" in target and (not isinstance(target["layers"], list) or not target["layers"]
                 or any(type(i) is not int or i < 0 for i in target["layers"])):
             raise TrainingProfileError("target.layers must contain nonnegative layer indices")
+        if "policy_active_only" in target and type(target["policy_active_only"]) is not bool:
+            raise TrainingProfileError("target.policy_active_only must be boolean")
         if "profile" in target:
             adapter({"profile": target["profile"]})
         if "adapter" in target:
             adapter(target["adapter"])
+
+
+def _validate_target_geometry(entry, version):
+    """Validate Conv2d metadata without importing the tensor implementation."""
+    from .training_errors import CheckpointBundleError
+    kind = entry.get("module_type", "Linear")
+    if kind == "Linear":
+        return  # Legacy linear records retain their original v1 schema.
+    if kind != "Conv2d" or version != 2:
+        raise CheckpointBundleError("Unsupported QuIC target type or artifact version")
+    try:
+        inputs, outputs, groups = entry["in_channels"], entry["out_channels"], entry["groups"]
+        if (any(type(value) is not int or value <= 0 for value in (inputs, outputs, groups))
+                or inputs % groups or outputs % groups
+                or inputs != entry["in_features"] or outputs != entry["out_features"]
+                or entry["config"]["block_count"] % groups):
+            raise ValueError("invalid channel/group geometry")
+        for key in ("kernel_size", "stride", "dilation"):
+            pair = entry[key]
+            if (not isinstance(pair, list) or len(pair) != 2
+                    or any(type(value) is not int or value <= 0 for value in pair)):
+                raise ValueError(f"invalid {key}")
+        padding = entry["padding"]
+        if isinstance(padding, str):
+            if padding not in {"same", "valid"}:
+                raise ValueError("invalid padding")
+        elif (not isinstance(padding, list) or len(padding) != 2
+              or any(type(value) is not int or value < 0 for value in padding)):
+            raise ValueError("invalid padding")
+        if entry["padding_mode"] not in {"zeros", "reflect", "replicate", "circular"}:
+            raise ValueError("invalid padding mode")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CheckpointBundleError("Invalid QuIC Conv2d target geometry") from exc
 
 
 def validate_staged_adapter(weights, scientific, *, run_root=None):
@@ -111,7 +146,7 @@ def validate_staged_adapter(weights, scientific, *, run_root=None):
     if not payload_path.is_file() or not tensors_path.is_file() or len(list(weights.iterdir())) != 2:
         raise CheckpointBundleError("QuIC bundle requires adapter.json and adapter.safetensors only")
     payload = json.loads(payload_path.read_text())
-    if payload.get("format_version") != 1 or payload.get("tensor_sha256") != sha256_file(tensors_path):
+    if payload.get("format_version") not in {1, 2} or payload.get("tensor_sha256") != sha256_file(tensors_path):
         raise CheckpointBundleError("QuIC artifact format or tensor digest mismatch")
     metadata = payload.get("metadata", {})
     if metadata.get("base_checkpoint") != scientific["base_checkpoint"]:
@@ -169,6 +204,7 @@ def validate_staged_adapter(weights, scientific, *, run_root=None):
     tensors = inspect_safetensors(tensors_path)
     expected = {}
     for entry in payload["manifest"]:
+        _validate_target_geometry(entry, payload["format_version"])
         name, cfg = entry["name"], entry["config"]
         n, count = cfg["base_size"], 1 if cfg["share_across_blocks"] else cfg["block_count"]
         shape = [count, n * (n - 1) // 2] if cfg["orthogonal"] else [count, n, n]
@@ -270,9 +306,9 @@ def execute(plan, context):
     import numpy as np
     import torch
     from torch.utils.data import DataLoader
-    from .quic_experiments import resolve_targets
-    from quic_petf.host import checkpoint_identity, layer_inventory, load_host
-    from quic_petf_vla import adapter_parameters, inject, save_adapter, load_adapter, disabled_adapters, QuICLinear
+    from .quic_experiments import resolve_targets, target_coverage
+    from quic_petf.host import checkpoint_identity, layer_inventory, load_host, enable_gradient_checkpointing
+    from quic_petf_vla import adapter_parameters, inject, save_adapter, load_adapter, disabled_adapters, QuICLinear, QuICConv2d
     from prismatic.models.backbones.llm.prompting import PurePromptBuilder
     from prismatic.util.data_utils import PaddedCollatorForActionPrediction
     from prismatic.vla.action_tokenizer import ActionTokenizer
@@ -310,7 +346,9 @@ def execute(plan, context):
                     for entry in selection for cfg in [targets[entry["name"]].resolve(entry["out_features"])])
     if predicted > settings.get("max_trainable_parameters", float("inf")):
         raise TrainingRuntimeError("QuIC trainable parameter budget exceeded before loading host weights")
-    atomic_json(context.root / "target-selection.json", {"targets": selection, "trainable_parameters": predicted}, mode=0o644)
+    coverage = target_coverage(inventory, settings, targets, num_layers)
+    atomic_json(context.root / "target-selection.json", {
+        "targets": selection, "trainable_parameters": predicted, "coverage": coverage}, mode=0o644)
     data_root = Path(os.environ.get("OVLAB_TRAINING_DATA_ROOT", "/datasets/resolved"))
     dataset_name = os.environ.get("OVLAB_TRAINING_DATASET_NAME")
     if not dataset_name or not data_root.is_dir():
@@ -384,7 +422,7 @@ def execute(plan, context):
     if {id(p) for p in model.parameters() if p.requires_grad} != {id(p) for p in params}:
         raise TrainingRuntimeError("QuIC optimizer selection contains non-adapter parameters")
     if training["gradient_checkpointing"]:
-        model.language_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        atomic_json(context.root / "gradient-checkpointing.json", enable_gradient_checkpointing(model), mode=0o644)
     counts = parameter_inventory(model.named_parameters(), adapter_markers=(".adapter.",))
     initial = [p.detach().cpu().clone() for p in params]
     validation_args = dict(device=device, dtype=dtype, max_batches=training["validation_batches"])
@@ -420,8 +458,12 @@ def execute(plan, context):
                 losses.append(float(loss.detach()))
                 (loss / training["gradient_accumulation_steps"]).backward()
                 del output, batch, loss
-            if any(p.grad is None or not torch.isfinite(p.grad).all() for p in params):
-                raise TrainingRuntimeError("QuIC adapter gradient missing/nonfinite; target may bypass policy output")
+            gradient_issues = [f"{name}: {'missing' if p.grad is None else 'nonfinite'}"
+                               for name, p in model.named_parameters() if p.requires_grad
+                               and (p.grad is None or not torch.isfinite(p.grad).all())]
+            if gradient_issues:
+                details = "; ".join(gradient_issues[:12])
+                raise TrainingRuntimeError(f"QuIC adapter gradient missing/nonfinite ({len(gradient_issues)}): {details}")
             grad_norm = torch.nn.utils.clip_grad_norm_(params, 1.0)
             optimizer.step()
             torch.cuda.synchronize()
@@ -467,7 +509,7 @@ def execute(plan, context):
     # host; this checks real safetensors reload, without holding a second 7B model.
     del optimizer, params
     for name, module in list(model.named_modules()):
-        if isinstance(module, QuICLinear):
+        if isinstance(module, (QuICLinear, QuICConv2d)):
             parent_name, _, child = name.rpartition(".")
             setattr(model.get_submodule(parent_name) if parent_name else model, child, module.base_layer)
     load_adapter(model, weights, host_identity)

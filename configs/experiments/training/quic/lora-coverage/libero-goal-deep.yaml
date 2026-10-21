@@ -1,0 +1,9 @@
+extends: libero10-deep.yaml
+id: openvla-quic-lora-coverage-libero-goal-deep
+
+dataset:
+  ref: libero/libero_goal
+
+training:
+  normalization:
+    unnorm_key: libero_goal

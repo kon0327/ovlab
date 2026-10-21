@@ -61,6 +61,58 @@ def adapter_config(spec):
     return AdapterConfig(**values)
 
 
+def _selector_matches(lookup, selector, num_layers, last_n):
+    if not isinstance(selector, dict):
+        raise ValueError("Every target must be a selector object")
+    if ("names" in selector) == ("pattern" in selector):
+        raise ValueError("Specify exactly one of names or pattern per selector")
+    if "names" in selector:
+        matches = selector["names"]
+        if not isinstance(matches, list) or not matches:
+            raise ValueError("names must be a nonempty list")
+        missing = set(matches) - lookup.keys()
+        if missing:
+            raise ValueError(f"Unknown target module(s): {sorted(missing)}")
+    else:
+        rx = re.compile(selector["pattern"])
+        matches = [name for name in lookup if rx.fullmatch(name)]
+    if selector.get("region"):
+        matches = [name for name in matches if region(name, num_layers, last_n) == selector["region"]]
+    if "layers" in selector:
+        if not isinstance(selector["layers"], list) or any(type(i) is not int or i < 0 for i in selector["layers"]):
+            raise ValueError("layers must contain nonnegative integer indices")
+        layer_ids = set(selector["layers"])
+        matches = [name for name in matches if (match := re.search(r"(?:layers|blocks)\.(\d+)\.", name))
+                   and int(match[1]) in layer_ids]
+    if not matches:
+        raise ValueError(f"Selector matches no layers: {selector}")
+    return matches
+
+
+def target_coverage(inventory, config, targets, num_layers):
+    """Record every matched path, including explicitly excluded inactive modules."""
+    lookup = {entry["name"]: entry for entry in inventory}
+    last_n = config.get("placement", {}).get("action_proximal_last_n", 4)
+    matched = set()
+    for selector in config["targets"]:
+        matched.update(_selector_matches(lookup, selector, num_layers, last_n))
+    active = {name for name in matched if lookup[name].get("used_in_policy", True)}
+    selected = set(targets)
+    excluded_inactive = matched - active - selected
+    return {"selectors": copy.deepcopy(config["targets"]),
+            "matched_module_count": len(matched), "selected_module_count": len(selected),
+            "active_matched_module_count": len(active),
+            "uncovered_active_module_count": len(active - selected),
+            "active_coverage_fraction": len(active & selected) / len(active) if active else None,
+            "matched_coverage_fraction": len(matched & selected) / len(matched) if matched else None,
+            "matched_modules": [copy.deepcopy(lookup[name]) for name in sorted(matched)],
+            "selected_modules": sorted(selected),
+            "uncovered_active_modules": sorted(active - selected),
+            "excluded_inactive_count": len(excluded_inactive),
+            "excluded_inactive_fraction": len(excluded_inactive) / len(matched) if matched else None,
+            "excluded_inactive_modules": [copy.deepcopy(lookup[name]) for name in sorted(excluded_inactive)]}
+
+
 def resolve_targets(inventory, config, num_layers):
     """Select once by full path; reject missing matches, overlaps and invalid placements."""
     place = config.get("placement", {})
@@ -76,30 +128,13 @@ def resolve_targets(inventory, config, num_layers):
     selected = {}
     manifest = []
     for selector in config["targets"]:
-        if not isinstance(selector, dict):
-            raise ValueError("Every target must be a selector object")
-        if ("names" in selector) == ("pattern" in selector):
-            raise ValueError("Specify exactly one of names or pattern per selector")
-        if "names" in selector:
-            matches = selector["names"]
-            if not isinstance(matches, list) or not matches:
-                raise ValueError("names must be a nonempty list")
-            missing = set(matches) - lookup.keys()
-            if missing:
-                raise ValueError(f"Unknown linear layer(s): {sorted(missing)}")
-        else:
-            rx = re.compile(selector["pattern"])
-            matches = [n for n in lookup if rx.fullmatch(n)]
-        if selector.get("region"):
-            matches = [n for n in matches if region(n, num_layers, last_n) == selector["region"]]
-        if "layers" in selector:
-            if not isinstance(selector["layers"], list) or any(type(i) is not int or i < 0 for i in selector["layers"]):
-                raise ValueError("layers must contain nonnegative integer indices")
-            layer_ids = set(selector["layers"])
-            matches = [n for n in matches if (m := re.search(r"(?:layers|blocks)\.(\d+)\.", n))
-                       and int(m[1]) in layer_ids]
+        matches = _selector_matches(lookup, selector, num_layers, last_n)
+        if type(selector.get("policy_active_only", False)) is not bool:
+            raise ValueError("policy_active_only must be boolean")
+        if selector.get("policy_active_only", False):
+            matches = [name for name in matches if lookup[name].get("used_in_policy", True)]
         if not matches:
-            raise ValueError(f"Selector matches no layers: {selector}")
+            raise ValueError(f"Selector matches no policy-active layers: {selector}")
         spec = dict(config.get("adapter", {}))
         profile_override = selector.get("profile", selector.get("adapter", {}).get("profile"))
         if profile_override is not None and profile_override != spec.get("profile", "custom"):
@@ -114,6 +149,8 @@ def resolve_targets(inventory, config, num_layers):
                 raise ValueError(f"Overlapping selectors for {name}")
             if not lookup[name].get("used_in_policy", True):
                 raise ValueError(f"Layer does not contribute to policy outputs: {name}")
+            if not lookup[name].get("supported", True):
+                raise ValueError(f"Unsupported QuIC target type {lookup[name]['type']}: {name}")
             reg = region(name, num_layers, last_n)
             if reg == "action" and not place.get("allow_action_proximal", False):
                 raise ValueError(f"Protected action-proximal layer {name}; declare allow_action_proximal: true")
@@ -135,6 +172,8 @@ def resolve_targets(inventory, config, num_layers):
                     raise ValueError(f"Contradictory block_size/block_count at {name}")
                 layer_spec["block_count"] = count
             cfg = adapter_config(layer_spec)
+            if lookup[name].get("module_type") == "Conv2d" and cfg.block_count % lookup[name]["groups"]:
+                raise ValueError(f"Conv2d block_count must be divisible by groups: {name}")
             resolved = cfg.resolve(lookup[name]["out_features"])
             selected[name] = cfg
             manifest.append(dict(lookup[name], region=reg, profile=profile, resolved=resolved.to_dict()))

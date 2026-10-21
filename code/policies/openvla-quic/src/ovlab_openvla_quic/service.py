@@ -38,6 +38,36 @@ def _sha_file(path):
     return digest.hexdigest()
 
 
+def _placement_entry(entry, format_version):
+    module_type = entry.get("module_type", "Linear")
+    if module_type == "Conv2d":
+        if format_version != 2:
+            raise QuICDescriptorError("Conv2d targets require QuIC artifact format 2")
+        try:
+            inputs, outputs, groups = entry["in_channels"], entry["out_channels"], entry["groups"]
+            kernel = entry["kernel_size"]
+            if (any(type(value) is not int or value <= 0 for value in (inputs, outputs, groups))
+                    or inputs % groups or outputs % groups
+                    or not isinstance(kernel, list) or len(kernel) != 2
+                    or any(type(value) is not int or value <= 0 for value in kernel)
+                    or inputs != entry["in_features"] or outputs != entry["out_features"]):
+                raise ValueError("invalid channel or kernel geometry")
+            shape = (outputs, inputs // groups, *kernel)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise QuICDescriptorError("invalid QuIC Conv2d target geometry") from exc
+        role = "dense_conv2d_output"
+    elif module_type == "Linear":
+        shape = (entry["out_features"], entry["in_features"])
+        role = "dense_linear_output"
+    else:
+        raise QuICDescriptorError(f"unsupported QuIC artifact module type: {module_type}")
+    return QuICPlacementEntry(
+        component_family=entry["name"].split(".")[0], selector=entry["name"],
+        layer_indices=(), tensor_role=role, original_shape=shape, protected=False,
+        rationale="explicit adapter artifact target; no automatic target expansion",
+    )
+
+
 def descriptor_from_settings(settings: OpenVlaQuICSettings):
     """Bind an OVLAB adapter artifact to explicit resources and policy interfaces."""
     if not isinstance(settings, OpenVlaQuICSettings):
@@ -47,7 +77,7 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
     if _sha_file(payload_path) != settings.adapter_manifest_sha256:
         raise QuICDescriptorError("QuIC adapter manifest differs from configured SHA256")
     payload = json.loads(payload_path.read_text())
-    if payload.get("format_version") != 1 or not payload.get("manifest"):
+    if payload.get("format_version") not in {1, 2} or not payload.get("manifest"):
         raise QuICDescriptorError("unsupported or empty QuIC adapter artifact")
     identity = payload["host_identity"]
     if identity.get("family") != "openvla_token":
@@ -86,12 +116,7 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
         "minimum_horizon": 1, "maximum_horizon": 1,
         "dynamic_instructions": True, "deterministic_reset": True,
     }
-    entries = tuple(QuICPlacementEntry(
-        component_family=entry["name"].split(".")[0], selector=entry["name"],
-        layer_indices=(), tensor_role="dense_linear_output",
-        original_shape=(entry["out_features"], entry["in_features"]), protected=False,
-        rationale="explicit adapter artifact target; no automatic target expansion",
-    ) for entry in payload["manifest"])
+    entries = tuple(_placement_entry(entry, payload["format_version"]) for entry in payload["manifest"])
     configs = [entry["config"] for entry in payload["manifest"]]
     config_hash = hashlib.sha256(json.dumps(configs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     profile_name = metadata.get("peft", {}).get("adapter", {}).get("profile", "custom")
@@ -114,7 +139,7 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
         provider=QuICProviderSpec(source_commit="533b1a76ea600f50738cb9369ed47192a216e2af"),
         implementation_status=QuICImplementationStatus.IMPLEMENTED,
         profile=QuICProfileDefinition(profile, "quic-peft-vla/0.1.0", config_hash),
-        placement=QuICPlacementManifest("available", "quic-adapter-v1", entries),
+        placement=QuICPlacementManifest("available", f"quic-adapter-v{payload['format_version']}", entries),
         source_import_status="present", generic_compound_backend_status="portable_determinant_backend",
         openvla_integration_status="implemented",
         source_identity={"availability": "available", "package": "quic-peft-vla", "version": "0.1.0",

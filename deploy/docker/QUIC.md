@@ -4,7 +4,7 @@ Build the dedicated serving and training roles from the repository root:
 
 ```bash
 git submodule update --init external/openvla-quic external/quic-peft-vla
-bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic
+bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic dataset
 ```
 
 The images are `ovlab-policy-openvla-quic:local` and
@@ -13,6 +13,12 @@ The images are `ovlab-policy-openvla-quic:local` and
 `external/openvla-quic`. Neither image installs LIBERO, Robosuite, MuJoCo, or
 OpenGL. OVLAB's benchmark image owns rollout environments and communicates
 with the policy over the existing AF_UNIX service contract.
+
+The dataset image also owns strict checkpoint finalization. Rebuild it with
+the training image when using the Linear/Conv2d QuIC manifest extension; an
+older finalizer does not accept the new convolutional layer metadata. The
+[LoRA coverage experiment](../../docs/QUIC_LORA_COVERAGE.md) uses this extension
+for vision patch projections.
 
 Both roles use `deploy/locks/quic-openvla.pylock.toml` and its generated,
 hashed requirements. This closure adapts OVLAB's reviewed training runtime:

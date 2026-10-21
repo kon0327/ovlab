@@ -1,0 +1,9 @@
+extends: libero10-deep.yaml
+id: openvla-quic-lora-coverage-libero-spatial-deep
+
+dataset:
+  ref: libero/libero_spatial
+
+training:
+  normalization:
+    unnorm_key: libero_spatial

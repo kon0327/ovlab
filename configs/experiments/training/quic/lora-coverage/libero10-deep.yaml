@@ -1,0 +1,15 @@
+extends: libero10-smoke.yaml
+id: openvla-quic-lora-coverage-libero10-deep
+
+dataset:
+  partition:
+    # Use every source episode and every frame after the 95/5 episode split.
+    max_episodes_per_group: null
+    frame_stride: 1
+    max_frames_per_episode: null
+
+training:
+  # 50k optimizer updates x 4 physical examples x 4 accumulation = 800k examples.
+  max_steps: 50000
+  # Validation is finite; this upper bound covers the complete held-out split.
+  validation_batches: 1000000

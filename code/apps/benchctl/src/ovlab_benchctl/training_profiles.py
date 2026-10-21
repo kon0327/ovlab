@@ -400,7 +400,7 @@ class TrainingPlanner:
             scientific["dataset"]["partition"] = profile.document["dataset"]["partition"]
             scientific["trainer_contract"]["validation"] = "held-out whole-episode SHA256 partition; teacher-forced action-token diagnostics"
         if training.get("peft", {}).get("method") == "quic":
-            scientific["parameter_selection"]["trainable"] = "QuIC adapter parameters on explicit resolved dense Linear targets"
+            scientific["parameter_selection"]["trainable"] = "QuIC adapter parameters on explicit resolved dense Linear/Conv2d targets"
             scientific["trainer_contract"]["action_semantics"]["normalization"] = (
                 "q01/q99 fitted only on selected training frames, frozen for validation/inference"
                 if profile.document["dataset"]["partition"].get("action_normalization", "host") == "train-q99"

@@ -109,3 +109,11 @@ new immutable plan plus profiles. `train ablate run` executes those profiles
 through the normal isolated training/checkpoint/report lifecycle. See
 [`../docs/ABLATIONS.md`](../docs/ABLATIONS.md) for the episode partition contract
 and source-project migration audit.
+
+The [`quic/lora-coverage`](experiments/training/quic/lora-coverage/)
+profiles select the active dense linear and convolutional modules matching the
+explicit LoRA suffix list, including the vision patch projections and `lm_head`.
+They provide smoke and 50,000-update recipes for LIBERO-10, Object, Spatial and
+Goal with a 5% whole-episode validation split and physical batch size 4. The
+[coverage experiment guide](../docs/QUIC_LORA_COVERAGE.md) explains the staged
+launcher, inactive vision exclusions, resource budget and recorded evidence.

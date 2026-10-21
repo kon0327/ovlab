@@ -89,8 +89,12 @@ backward, identity and exact save/reload on an actual GPU. These checks do not
 validate 7B OpenVLA training, provider-to-standalone rollout parity or benchmark
 quality; descriptor validation flags remain false until such evidence exists.
 
-Supported: materialized plain `nn.Linear`, output orientation, adapter-only
-artifacts, unadapted or identified dense merged hosts. Unsupported: active LoRA,
+Supported: materialized plain `nn.Linear` and `nn.Conv2d`, output orientation,
+adapter-only artifacts, unadapted or identified dense merged hosts. Conv2d
+transforms output channels at each spatial position; grouped convolutions require
+`block_count` divisible by `groups`. Mixed artifacts preserve convolution
+geometry in format v2, while linear-only format v1 artifacts remain supported.
+Unsupported: active LoRA,
 quantized/specialized linears, OpenVLA-OFT, resumable training and full merged
 checkpoint export. In-memory `merge_adapters` is not whole-model compression.
 QP1–QP4 and `custom` carry resolved configuration hashes; QP0 remains solely the
