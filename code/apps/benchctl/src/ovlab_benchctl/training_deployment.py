@@ -19,6 +19,7 @@ from .training_profiles import TrainingProfile, TrainingPlanner
 from .training_runs import TrainingRunStore
 from .training_identity import atomic_json, identity
 from .versioning import repository_revision
+from .wandb_tracking import track_run
 
 
 class TrainingDeployment:
@@ -266,6 +267,7 @@ class TrainingDeployment:
         finalized = self.runner(finalizer, check=False, stdout=sys.stderr)
         if finalized.returncode != 0:
             raise TrainingRuntimeError(f"checkpoint finalizer failed; staged training evidence remains at {context.root}")
+        tracking = track_run("train", context.root, self.environment)
         exports_root = Path(
             self.environment.get("OVLAB_EXPORTS_ROOT", self.model_data_root / "exports")
         ).expanduser().resolve()
@@ -307,4 +309,4 @@ class TrainingDeployment:
             report_result = json.loads(published.stdout).get("result")
         except (json.JSONDecodeError, AttributeError) as exc:
             raise TrainingRuntimeError("training report returned an invalid JSON result") from exc
-        return {**inspected, "performance_report": report_result}
+        return {**inspected, "performance_report": report_result, **({"wandb": tracking} if tracking else {})}

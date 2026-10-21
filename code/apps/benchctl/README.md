@@ -51,6 +51,9 @@ Gate G exposes the composition root as one `ovlab` command. An installed
 `ovlab-benchctl` package provides the `ovlab` console script. From a source
 checkout, `./ovlab` is the installation-independent invocation and assembles
 the repository's existing src-layout packages without installing anything.
+For a managed host CLI environment with the `ovlab` command on PATH, run
+`source ./install-ovlab-env.sh` from the repository root; see
+[`ENVIRONMENT.md`](../../../ENVIRONMENT.md).
 
 The intended workflow is Config -> Connect -> Run -> Inspect:
 

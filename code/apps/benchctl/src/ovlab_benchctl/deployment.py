@@ -19,6 +19,7 @@ from .strict_yaml import load
 from .config_bundle import ConfigBundleBuilder
 from .errors import ConfigSchemaError
 from .image_metadata import IMAGE_CONTRACT_LABEL
+from .wandb_tracking import track_run
 
 
 class ComposeDeploymentError(RuntimeError):
@@ -674,6 +675,7 @@ class ComposeDeployment:
                     f"observed {len(new_runs)} new run directories"
                 )
             run_path = Path(new_runs[0])
+            tracking = track_run("eval", run_path, self.environment)
             exports_root = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (run_path.parent.parent / "exports")
             derived_root = exports_root / "derived"
             postprocess_environment = {
@@ -718,4 +720,6 @@ class ComposeDeployment:
             "config_bundle": bundle.summary(),
             "side_effects_performed": True,
         }
+        if tracking:
+            result["wandb"] = tracking
         return result

@@ -100,3 +100,22 @@ After a run, list and inspect the results with:
 For details about containers and their configuration, see
 [`deploy/README.md`](deploy/README.md) and the
 [`OVLAB CLI guide`](code/apps/benchctl/CLI_README.md).
+
+## Weights & Biases tracking
+
+Set `OVLAB_WANDB_PROJECT` (or `WANDB_PROJECT`) to mirror completed `eval run` or direct `run`
+evaluations to W&B. The W&B SDK installs automatically as a dependency of
+`ovlab-benchctl` through the [host CLI environment](ENVIRONMENT.md);
+authenticate with `wandb login` or `WANDB_API_KEY`.
+`OVLAB_WANDB_ENTITY` is optional, and standard
+W&B settings such as `WANDB_MODE=offline` apply.
+
+```bash
+OVLAB_WANDB_PROJECT=ovlab ./ovlab eval run configs/experiments/evaluation/libero-mock-smoke.yaml
+```
+
+The mirror records numeric episode metrics, per-task metrics, averages across
+tasks, the resolved plan and final manifest. It runs on the host after the
+isolated evaluation completes. The `wandb` field in the
+CLI result contains the sync status and URL; W&B errors leave the canonical
+evaluation result unchanged.

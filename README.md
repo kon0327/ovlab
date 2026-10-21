@@ -44,7 +44,18 @@ publication exports are documented in the [`Data management guide`](DATA_MANAGEM
 
 ## Command line
 
-Use the unified CLI directly from a checkout without installing packages:
+Install the host CLI in its own environment first. The installer prefers Conda
+and uses `venv` when Conda is unavailable; see [Environment setup](ENVIRONMENT.md).
+
+```bash
+source ./install-ovlab-env.sh
+ovlab --help
+```
+
+The installer activates the environment in the current Bash session. Conda
+users can later run `conda activate ovlab-env`. Use the unified CLI there, or
+call `./ovlab` from a checkout. The launcher selects the installed host
+environment when available:
 
 ```bash
 ./ovlab --help
@@ -91,7 +102,7 @@ policy service and the LIBERO runner as separate Compose containers, waits for
 readiness, propagates the benchmark result, and cleans up the private deployment
 resources. It then starts the dedicated reporting image with canonical `runs/`
 mounted read-only and publishes all generated outputs below `exports/`. It needs
-Docker and system Python 3, not an activated Conda environment.
+Docker and the host CLI environment.
 
 `train run`, `eval run`, and `deploy run` select YAML by name or path from
 `configs/experiments/training`, `configs/experiments/evaluation`, and `configs/deploy`.

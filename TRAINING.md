@@ -301,3 +301,24 @@ remain readable, the run becomes `interrupted`, partial checkpoints stay in
 `staging-checkpoints/`, and no registry checkpoint is published. Retry dataset
 acquisition explicitly after inspecting its `.staging` evidence. OVLAB removes
 only containers it owns; it never uses global Docker prune operations.
+
+## Weights & Biases tracking
+
+W&B tracking is optional at runtime, and the W&B SDK installs automatically as
+a dependency of `ovlab-benchctl` through the [host CLI environment](ENVIRONMENT.md).
+Authenticate with `wandb login` or
+`WANDB_API_KEY`, then set `OVLAB_WANDB_PROJECT` (or the standard
+`WANDB_PROJECT`) before running
+training. `OVLAB_WANDB_ENTITY` selects a team; standard W&B settings such as
+`WANDB_MODE=offline` also apply. For example:
+
+```bash
+OVLAB_WANDB_PROJECT=ovlab ./ovlab train run openvla-lora-libero10-smoke
+```
+
+The host uploads the training plan, result and manifest as a small W&B artifact,
+logs optimizer-step loss, learning rate, accuracy and performance measurements,
+and records the checkpoint ID. Upload occurs after isolated checkpoint
+finalization. It does not upload model weights. If W&B fails, the
+CLI reports the tracking error separately; the canonical training result is
+unchanged. The `wandb` field in the CLI result contains the sync status and URL.

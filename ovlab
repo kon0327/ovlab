@@ -10,7 +10,26 @@ for source_path in code/packages/*/src code/policies/*/src code/apps/*/src exter
 done
 joined_paths="$(IFS=:; echo "${source_paths[*]}")"
 export PYTHONPATH="$joined_paths${PYTHONPATH:+:$PYTHONPATH}"
-python_executable="${OVLAB_PYTHON:-python3}"
+if [[ -n "${OVLAB_PYTHON:-}" ]]; then
+    python_executable="$OVLAB_PYTHON"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+    python_executable="$VIRTUAL_ENV/bin/python"
+elif [[ "${CONDA_DEFAULT_ENV:-}" == "ovlab-env" && -x "${CONDA_PREFIX:-}/bin/python" ]]; then
+    python_executable="$CONDA_PREFIX/bin/python"
+elif command -v conda >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    named_conda_prefix="$(conda env list --json 2>/dev/null | python3 -c 'import json, os, sys; data = json.load(sys.stdin); matches = [path for path in data.get("envs", []) if data.get("envs_details", {}).get(path, {}).get("name", os.path.basename(path)) == "ovlab-env"]; print(matches[0] if len(matches) == 1 else "")' 2>/dev/null)" || named_conda_prefix=""
+    if [[ -x "$named_conda_prefix/bin/python" ]]; then
+        python_executable="$named_conda_prefix/bin/python"
+    elif [[ -f "$repository_root/.ovlab-env/pyvenv.cfg" && -x "$repository_root/.ovlab-env/bin/python" ]]; then
+        python_executable="$repository_root/.ovlab-env/bin/python"
+    else
+        python_executable=python3
+    fi
+elif [[ -f "$repository_root/.ovlab-env/pyvenv.cfg" && -x "$repository_root/.ovlab-env/bin/python" ]]; then
+    python_executable="$repository_root/.ovlab-env/bin/python"
+else
+    python_executable=python3
+fi
 if ! command -v "$python_executable" >/dev/null 2>&1; then
     echo "OVLAB requires Python 3 for its host-side CLI launcher." >&2
     exit 127

@@ -979,6 +979,10 @@ def _dispatch(args):
                     result = app.run(config, output_root=args.output_root, **profile_options)
                 finally:
                     _restore_handlers(previous)
+                from .wandb_tracking import track_run
+                tracking = track_run("eval", result["run_path"]) if "run_path" in result else None
+                if tracking:
+                    result["wandb"] = tracking
         return result, args.json, None
     if args.command == "metrics":
         return _application().recompute_metrics(args.run_path), args.json, None

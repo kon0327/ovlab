@@ -10,6 +10,7 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.ovlab-env/
 venv/
 env/
 ENV/
