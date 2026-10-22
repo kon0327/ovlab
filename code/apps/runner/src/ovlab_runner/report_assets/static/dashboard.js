@@ -12,12 +12,13 @@
   const settings = data.hyperparameters.training || {};
   const flowCard = (title, body) => {const e = node("div", null, "card"); e.append(node("h3", title), node("p", body)); return e;};
   const evidence = data.evidence;
+  const chunkTrain = train && evidence?.objective === "masked_l1";
   $("flow-content").append(
-    flowCard("Input", train ? `${fmt(data.counts.dataset_records)} dataset records → ${fmt(data.counts.examples_seen)} examples seen. Image tensors + prompt tokens + attention mask + supervised action-token labels.` : `${fmt(data.counts.observations)} observations: camera images, instruction, proprioception. ${fmt(data.counts.predictions)} policy calls.`),
+    flowCard("Input", train ? `${fmt(data.counts.dataset_records)} dataset records → ${fmt(data.counts.examples_seen)} examples seen. Image tensors + prompt tokens + attention mask + ${chunkTrain ? "continuous future actions and a validity mask" : "supervised action-token labels"}.` : `${fmt(data.counts.observations)} observations: camera images, instruction, proprioception. ${fmt(data.counts.predictions)} policy calls.`),
     node("div", "→", "arrow"),
     flowCard("Model", train ? `Microbatch: ${fmt(settings.per_device_batch_size)} records. Accumulation: ${fmt(settings.gradient_accumulation_steps)} microbatches per optimizer step. Precision: ${fmt(settings.precision)}.` : "One observation per canonical policy call. Internal tokenization and tensor batching are available only if captured in policy metadata."),
     node("div", "→", "arrow"),
-    flowCard("Output", train ? `${fmt(data.counts.optimizer_steps)} optimizer steps → next-token logits and loss → checkpoint. See the captured batch and first record below.` : `${fmt(data.counts.predictions)} prediction chunks → ${fmt(data.counts.predicted_actions)} predicted actions → ${fmt(data.counts.executed_actions)} applied actions. Predicted and applied commands remain separate.`)
+    flowCard("Output", train ? `${fmt(data.counts.optimizer_steps)} optimizer steps → ${chunkTrain ? "continuous action chunks and masked L1 loss" : "next-token logits and loss"} → checkpoint. See the captured batch and first record below.` : `${fmt(data.counts.predictions)} prediction chunks → ${fmt(data.counts.predicted_actions)} predicted actions → ${fmt(data.counts.executed_actions)} applied actions. Predicted and applied commands remain separate.`)
   );
   const detail = (title, value) => {
     const e = node("div", null, "card"); e.append(node("h3", title));
@@ -112,7 +113,8 @@
   if (train) {
     const rows = data.metrics, series = key => rows.map((row,i) => [row.global_step ?? row.optimizer_step ?? i+1, row[key] ?? null]);
     chart("Training loss · recorded microbatch",series("training_loss"),"Optimizer step","loss");
-    chart("Supervised action-token accuracy",series("action_token_accuracy"),"Optimizer step","fraction");
+    if (chunkTrain) chart("Valid action steps",series("valid_action_steps"),"Optimizer step","steps");
+    else chart("Supervised action-token accuracy",series("action_token_accuracy"),"Optimizer step","fraction");
     chart("Optimizer step duration",series("step_duration_ms"),"Optimizer step","ms");
     chart("GPU allocator memory",series("gpu_memory_allocated_bytes").map(([x,y])=>[x,y==null?null:y/1048576]),"Optimizer step","MiB");
     $("outcome").append(node("p", "Robot task success: unavailable in a training-only run. Evaluation is reported in the corresponding eval dashboard.", "notes"));

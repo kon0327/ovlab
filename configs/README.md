@@ -117,3 +117,7 @@ They provide smoke and 50,000-update recipes for LIBERO-10, Object, Spatial and
 Goal with a 5% whole-episode validation split and physical batch size 4. The
 [coverage experiment guide](../docs/QUIC_LORA_COVERAGE.md) explains the staged
 launcher, inactive vision exclusions, resource budget and recorded evidence.
+
+OpenVLA QuIC action-chunk ablations under `experiments/training/quic/action-chunks/`
+include the token baseline with the head disabled plus H=1 and H=8 chunk-head
+smokes. See [action chunk contracts](../docs/QUIC_ACTION_CHUNKS.md).

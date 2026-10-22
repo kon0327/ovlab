@@ -129,6 +129,7 @@ def make_partitioned_datasets(
     data_root: Path, dataset_name: str, partition: Mapping, batch_transform, *,
     resize_resolution=(224, 224), source_identity: Mapping | None = None,
     manifest_path: Path | None = None, action_statistics: Mapping | None = None,
+    action_chunk_horizon: int | None = None,
 ):
     """Return ``(repeating_train, finite_validation, manifest)`` in training image.
 
@@ -146,6 +147,8 @@ def make_partitioned_datasets(
     from prismatic.vla.datasets.rlds.oxe.configs import OXE_DATASET_CONFIGS
     from prismatic.vla.datasets.rlds.oxe.transforms import OXE_STANDARDIZATION_TRANSFORMS
 
+    if action_chunk_horizon is not None and (type(action_chunk_horizon) is not int or not 1 <= action_chunk_horizon <= 256):
+        raise TrainingRuntimeError("action_chunk_horizon must be in 1..256")
     config = validate_partition(dict(partition))
     tf.config.set_visible_devices([], "GPU")
     if dataset_name not in OXE_DATASET_CONFIGS or dataset_name not in OXE_STANDARDIZATION_TRANSFORMS:
@@ -184,6 +187,10 @@ def make_partitioned_datasets(
     source.update(tfds_name=dataset_name, source_split="train", source_metadata_sha256=sha256_file(Path(builder.data_dir) / "dataset_info.json"), standardizer_sha256=hashlib.sha256(inspect.getsource(standardize).encode()).hexdigest())
     manifest = build_episode_manifest(catalog, config, source_identity=source)
     manifest["preprocessing"] = {"resize_resolution": list(resize_resolution), "resize": "tf-lanczos3-antialias-round-clip-uint8", "primary_image_key": image_key, "standardization": "complete trajectory before frame sampling", "split_unit": "whole TFDS record"}
+    if action_chunk_horizon is not None:
+        manifest["preprocessing"]["action_chunks"] = {"horizon": action_chunk_horizon,
+            "stride": "adjacent original control steps before frame sampling", "tail": "zero padding with validity mask",
+            "instruction_boundary": "truncate and mask"}
     selected = {row["id"]: row for row in manifest["episodes"]}
     def raw_frames(split, *, images):
         for episode in episodes():
@@ -194,6 +201,9 @@ def make_partitioned_datasets(
             whole, first = trajectory(episode)
             if whole is None:
                 raise TrainingRuntimeError(f"source episode became empty after cataloguing: {record_id}")
+            future_actions = np.asarray(whole["action"].numpy(), dtype=np.float32) if images and action_chunk_horizon else None
+            instructions = ([_text(value) for value in whole["language_instruction"]]
+                            if future_actions is not None and "language_instruction" in whole else None)
             yielded = 0
             for index in range(int(tf.shape(whole["action"])[0])):
                 if index % config.get("frame_stride", 1):
@@ -213,7 +223,11 @@ def make_partitioned_datasets(
                     image = tf.image.resize(image, resize_resolution, method="lanczos3", antialias=True)
                     image = tf.cast(tf.clip_by_value(tf.round(image), 0, 255), tf.uint8).numpy()
                 yielded += 1
-                yield image, action, instruction
+                valid = None
+                if future_actions is not None:
+                    from quic_petf.action_heads import action_window
+                    action, valid = action_window(future_actions, index, action_chunk_horizon, instructions)
+                yield image, action, instruction, valid
             if yielded != row["frames"]:
                 raise TrainingRuntimeError(f"source episode changed after cataloguing: {record_id}")
     normalization = config.get("action_normalization", "host")
@@ -222,7 +236,7 @@ def make_partitioned_datasets(
             raise TrainingRuntimeError("host action normalization requires explicit frozen action_statistics")
         statistics = {key: np.asarray(value) for key, value in action_statistics.items() if key in {"q01", "q99", "mask", "min", "max"}}
     else:
-        actions = np.stack([action for _, action, _ in raw_frames("train", images=False)])
+        actions = np.stack([action for _, action, _, _ in raw_frames("train", images=False)])
         dimension = actions.shape[-1]
         mask = np.ones(dimension, dtype=bool)
         # OXE EEF actions leave their final gripper value unnormalized.
@@ -258,13 +272,17 @@ def make_partitioned_datasets(
             if get_worker_info() is not None:
                 raise TrainingRuntimeError("partitioned TFDS loading requires DataLoader num_workers=0")
             while True:
-                for image, action, instruction in raw_frames(self.split, images=True):
-                    if action.shape != low.shape:
+                for image, action, instruction, valid in raw_frames(self.split, images=True):
+                    if action.shape != ((action_chunk_horizon, len(low)) if valid is not None else low.shape):
                         raise TrainingRuntimeError("action dimension differs from frozen normalization statistics")
                     normalized = np.where(mask, np.clip(2 * (action - low) / (high - low + 1e-8) - 1, -1, 1), action)
                     if "min" in statistics and "max" in statistics:
                         normalized = np.where(statistics["min"] == statistics["max"], 0, normalized)
-                    yield batch_transform({"dataset_name": dataset_name, "action": normalized.astype(np.float32)[None], "observation": {"image_primary": image[None]}, "task": {"language_instruction": instruction.encode()}})
+                    frame = {"dataset_name": dataset_name, "action": normalized.astype(np.float32)[None] if valid is None else np.where(valid[:, None], normalized, 0).astype(np.float32),
+                             "observation": {"image_primary": image[None]}, "task": {"language_instruction": instruction.encode()}}
+                    if valid is not None:
+                        frame["action_mask"] = valid
+                    yield batch_transform(frame)
                 if self.split == "validation":
                     return
     return PartitionDataset("train"), PartitionDataset("validation"), manifest

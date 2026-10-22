@@ -82,7 +82,15 @@ class TrainingProfile:
             raise TrainingProfileError("trainer must select openvla-reference or openvla-quic")
 
         model = _mapping(document["model"], "model")
-        _keys(model, {"base_checkpoint", "revision", "processor", "adaptation_state"}, {"base_checkpoint", "processor"}, "model")
+        _keys(model, {"base_checkpoint", "revision", "processor", "adaptation_state", "action_head"}, {"base_checkpoint", "processor"}, "model")
+        head = model.get("action_head")
+        if head is not None:
+            head = _mapping(head, "model.action_head")
+            _keys(head, {"type", "horizon", "hidden_dim"}, {"type", "horizon", "hidden_dim"}, "model.action_head")
+            if head["type"] != "mlp_chunk":
+                raise TrainingProfileError("model.action_head.type must be mlp_chunk")
+            _integer(head["horizon"], "model.action_head.horizon", 1, 256)
+            _integer(head["hidden_dim"], "model.action_head.hidden_dim", 1, 16384)
         if model.get("adaptation_state", "none") not in {"none", "merged"}:
             raise TrainingProfileError("model.adaptation_state must be none or merged; active adapters are unsupported")
         if not isinstance(model["base_checkpoint"], str) or not model["base_checkpoint"]:
@@ -173,6 +181,8 @@ class TrainingProfile:
                 _number(peft["dropout"], "training.peft.dropout", 0.0, 1.0)
 
         is_quic = mode == "peft" and training.get("peft", {}).get("method") == "quic"
+        if head is not None and not is_quic:
+            raise TrainingProfileError("Optional action_head currently requires openvla-quic training")
         if not is_quic and trainer["implementation"] != "openvla-reference":
             raise TrainingProfileError("openvla-quic trainer requires method: quic")
         if not is_quic and "normalization" in training:
@@ -407,6 +417,15 @@ class TrainingPlanner:
                 else "frozen host action statistics selected by training.normalization.unnorm_key"
             )
             scientific["trainer_contract"]["predict_stop_token"] = False
+        head = profile.document["model"].get("action_head")
+        if head is not None:
+            scientific["model_variant"] = {"action_head": head}
+            scientific["parameter_selection"]["trainable"] += " plus full action head"
+            contract = scientific["trainer_contract"]
+            contract["dataset_mapping"]["action"] = "original adjacent future actions; episode/instruction boundary mask"
+            contract["action_semantics"].update(training_representation="continuous normalized actions", horizon=head["horizon"])
+            contract["objective"] = "masked normalized L1 over valid steps and seven coordinates"
+            contract["validation"] = "held-out whole episodes; masked normalized chunk L1"
         scientific_id = identity("training-plan", scientific, 32)
         execution = {
             "scientific_training_id": scientific_id,

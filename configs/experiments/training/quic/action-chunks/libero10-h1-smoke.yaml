@@ -1,0 +1,79 @@
+schema_version: ovlab.training-profile/v1
+id: openvla-quic-action-chunks-libero10-h1-smoke
+
+trainer:
+  id: openvla
+  implementation: openvla-quic
+
+# Optional continuous readout on the same immutable vanilla host.
+model:
+  base_checkpoint: openvla-7b
+  revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
+  processor: inherited
+  adaptation_state: none
+  action_head:
+    type: mlp_chunk
+    horizon: 1
+    hidden_dim: 512
+
+dataset:
+  ref: libero/libero_10
+  preparation: openvla-rlds
+  split: train
+  partition:
+    seed: 42
+    validation_fraction: 0.05
+    # Twenty episodes/task gives one held-out episode (5%) when available.
+    max_episodes_per_group: 20
+    frame_stride: 8
+    max_frames_per_episode: 4
+    action_normalization: train-q99
+
+training:
+  mode: peft
+  peft:
+    method: quic
+    placement:
+      id: custom
+      action_proximal_last_n: 4
+      allow_action_proximal: true
+    adapter:
+      profile: QP2
+      operation: determinant
+      orders: [1, 2]
+      block_count: 8
+      base_size: largest_feasible
+      share_across_blocks: false
+      orthogonal: true
+      construction_dtype: float32
+      orientation: output
+    targets:
+      # Full-path regex with PEFT-style exact leaf-name/suffix semantics.
+      # Includes both dense Linear and Conv2d (vision patch_embed.proj).
+      - pattern: '(?:.*\.)?(?:up_proj|fc2|q|down_proj|q_proj|k_proj|lm_head|o_proj|kv|fc1|gate_proj|fc3|proj|v_proj|qkv)'
+        # Exclude unused vision modules and vocabulary lm_head; preserve audit.
+        policy_active_only: true
+    max_trainable_parameters: 10000000
+  seed: 7
+  max_steps: 3
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0001
+  precision: bf16
+  gradient_checkpointing: true
+  quantization: none
+  validation_batches: 4
+  normalization:
+    unnorm_key: libero_10
+
+checkpointing:
+  save_strategy: final
+  save_optimizer_state: false
+  output_kind: adapter
+
+resources:
+  accelerator: cuda
+  gpu_count: 1
+  # Target the 24-GiB card; the smoke enforces the measured allocation budget.
+  max_vram_gib: 24
+  network: disabled

@@ -101,3 +101,11 @@ QP1–QP4 and `custom` carry resolved configuration hashes; QP0 remains solely t
 legacy no-transformation descriptor. Shared labels do not make QuIC equivalent
 to OpenVLA-OFT (Optimized Fine-Tuning). C1's orthogonal connection is to
 Orthogonal Fine-Tuning.
+
+## Optional action chunk variant
+
+The implemented provider also loads continuous MLP chunk heads from complete
+QuIC policy bundles. The artifact supplies the head configuration and weights;
+capabilities advertise its actual horizon and predictions contain `[H,7]` actions.
+The codec converts every gripper coordinate. Existing token artifacts retain
+horizon 1. See [configuration, training and artifact contracts](../../../docs/QUIC_ACTION_CHUNKS.md).

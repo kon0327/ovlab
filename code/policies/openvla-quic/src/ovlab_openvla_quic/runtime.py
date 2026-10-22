@@ -72,8 +72,11 @@ class QuICPETFProvider:
             raise ValueError("adapter manifest changed after capability negotiation")
         if _sha_file(directory / "adapter.safetensors") != artifact["tensor_sha256"]:
             raise ValueError("adapter tensors changed after capability negotiation")
+        if artifact.get("action_head_tensor_sha256") is not None:
+            if _sha_file(directory / "action_head.safetensors") != artifact["action_head_tensor_sha256"]:
+                raise ValueError("action head tensors changed after capability negotiation")
         from quic_petf.host import OpenVLAQuICPolicy, checkpoint_identity, load_host
-        from quic_petf_vla import load_adapter
+        from quic_petf.action_heads import load_policy_adapter
 
         host = expected["base_model_identity"]["host"]
         identity = checkpoint_identity(host)
@@ -87,7 +90,7 @@ class QuICPETFProvider:
             actual_stats = model.norm_stats[host["unnorm_key"]]["action"]
             if actual_stats != normalization.get("action_statistics"):
                 raise ValueError("host action normalization differs from adapter contract")
-            actual_manifest = load_adapter(model, directory, identity)
+            actual_manifest = load_policy_adapter(model, directory, identity)
             if actual_manifest != expected["parameterization"]["manifest"]:
                 raise ValueError("resolved QuIC targets differ from descriptor")
             model.eval()
@@ -138,22 +141,25 @@ class QuICPETFProvider:
             torch.cuda.synchronize(self.model.device)
         duration = time.perf_counter_ns() - start
         spec = declaration["action_spec"]
-        if action.shape != (spec["dimension"],) or not np.isfinite(action).all():
+        if action.ndim == 1:
+            action = action[None, :]
+        if (action.shape != (declaration["maximum_horizon"], spec["dimension"])
+                or not np.isfinite(action).all()):
             raise ValueError("model returned an invalid decoded action")
         transform = capability.get("action_transform", {"kind": "identity"})
         if transform["kind"] == "threshold":
             index = transform["index"]
-            value = float(action[index])
-            if not transform["minimum"] <= value <= transform["maximum"]:
+            value = action[:, index]
+            if np.any(value < transform["minimum"]) or np.any(value > transform["maximum"]):
                 raise ValueError("decoded action coordinate violates source range")
-            action[index] = (transform["below"] if value < transform["threshold"]
-                             else transform["above"] if value > transform["threshold"] else transform["equal"])
+            action[:, index] = np.where(value < transform["threshold"], transform["below"],
+                                       np.where(value > transform["threshold"], transform["above"], transform["equal"]))
         elif transform["kind"] != "identity":
             raise ValueError("unsupported explicit action transformation")
         if spec["minimum"] is not None and (np.any(action < spec["minimum"]) or np.any(action > spec["maximum"])):
             raise ValueError("decoded action violates target interface bounds")
-        return {"actions": action[None, :], "inference_duration_ns": duration,
-                "metadata": {"artifact_form": "adapter_only", "greedy": True}}
+        return {"actions": action, "inference_duration_ns": duration,
+                "metadata": {"artifact_form": "adapter_only", "greedy": True, "generated_horizon": action.shape[0]}}
 
     def load_counts(self):
         return dict(self._counts)

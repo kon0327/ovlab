@@ -26,6 +26,31 @@ def action_token_counts(output, labels, action_token_begin_idx):
     return int(((predicted == targets) & mask).sum().item()), int(mask.sum().item())
 
 
+def capture_chunk_data_flow(batch, output, tokenizer, *, dataset_records, pixel_dtype, optimizer):
+    keys = ("input_ids", "attention_mask", "pixel_values", "actions", "action_mask")
+    first = {key: tensor_preview(batch[key][0]) for key in keys}
+    ids = batch["input_ids"][0][batch["attention_mask"][0].bool()]
+    first["decoded_prompt"] = tokenizer.decode(ids[:512].tolist())
+    first["pixel_values"] = tensor_preview(batch["pixel_values"][0].to(dtype=pixel_dtype))
+    return {
+        "schema_version": "ovlab.training-data-flow/v1", "microbatch_index": 0,
+        "objective": "masked_l1", "dataset_records": int(dataset_records),
+        "dataset_count_semantics": "selected observation start positions; future targets use original control steps",
+        "batch_size": int(batch["input_ids"].shape[0]),
+        "input_batch": {**{key: tensor_descriptor(batch[key]) for key in keys},
+                        "pixel_values": {**tensor_descriptor(batch["pixel_values"]), "dtype": str(pixel_dtype)}},
+        "input_record": first,
+        "output_batch": {"actions": tensor_descriptor(output.actions), "loss": float(output.loss.detach()),
+                         "valid_action_steps": int(batch["action_mask"].sum())},
+        "output_record": {"actions": tensor_preview(output.actions[0]),
+                          "targets": tensor_preview(batch["actions"][0]),
+                          "valid_steps": tensor_preview(batch["action_mask"][0]),
+                          "source": "first sample; normalized continuous chunk, padded future steps excluded from loss"},
+        "optimizer": {key: value for key, value in optimizer.defaults.items()
+                      if value is None or isinstance(value, (bool, str, int, float, tuple))},
+    }
+
+
 def capture_data_flow(batch, output, tokenizer, *, dataset_records, pixel_dtype, optimizer):
     first = {key: tensor_preview(batch[key][0]) for key in ("input_ids", "attention_mask", "labels", "pixel_values")}
     first["pixel_values"] = tensor_preview(batch["pixel_values"][0].to(dtype=pixel_dtype))

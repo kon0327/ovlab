@@ -143,12 +143,55 @@ def validate_staged_adapter(weights, scientific, *, run_root=None):
     from .training_runs import inspect_safetensors, _safetensors_header
 
     payload_path, tensors_path = weights / "adapter.json", weights / "adapter.safetensors"
-    if not payload_path.is_file() or not tensors_path.is_file() or len(list(weights.iterdir())) != 2:
-        raise CheckpointBundleError("QuIC bundle requires adapter.json and adapter.safetensors only")
+    head_spec = scientific.get("profile", {}).get("model", {}).get("action_head")
+    expected_files = {"adapter.json", "adapter.safetensors"}
+    if head_spec is not None:
+        expected_files.add("action_head.safetensors")
+    if {p.name for p in weights.iterdir()} != expected_files or any(not (weights / name).is_file() for name in expected_files):
+        raise CheckpointBundleError("QuIC bundle files differ from the planned model variant")
     payload = json.loads(payload_path.read_text())
     if payload.get("format_version") not in {1, 2} or payload.get("tensor_sha256") != sha256_file(tensors_path):
         raise CheckpointBundleError("QuIC artifact format or tensor digest mismatch")
     metadata = payload.get("metadata", {})
+    head_tensors = []
+    head_record = metadata.get("action_head")
+    if payload.get("host_identity", {}).get("action_head") != head_spec:
+        raise CheckpointBundleError("Action head host identity differs from the planned model variant")
+    if head_spec is None:
+        if head_record is not None:
+            raise CheckpointBundleError("Token adapter cannot contain an action head")
+    else:
+        if (not isinstance(head_record, dict) or set(head_record) != {"config", "tensor_sha256"}
+                or head_record["config"] != head_spec
+                or sha256_file(weights / "action_head.safetensors") != head_record["tensor_sha256"]):
+            raise CheckpointBundleError("Action head configuration or tensor SHA256 mismatch")
+        head_path = weights / "action_head.safetensors"
+        head_header, _ = _safetensors_header(head_path)
+        binding = {"host_identity": payload["host_identity"], "action_head": head_spec}
+        digest = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        if head_header.get("__metadata__", {}).get("action_head_binding_sha256") != digest:
+            raise CheckpointBundleError("Action head tensor binding mismatch")
+        head_tensors = inspect_safetensors(head_path)
+        rows = {item["name"]: item for item in head_tensors}
+        hidden, outputs = head_spec["hidden_dim"], head_spec["horizon"] * 7
+        # Recover the decoder width from the readout, cross-check it against
+        # ordinary Llama projection targets when such targets are present.
+        first = rows.get("input.weight", {}).get("shape", [])
+        width = first[1] if len(first) == 2 else 0
+        expected_head = {"input.weight": [hidden, width], "input.bias": [hidden],
+                         "output.weight": [outputs, hidden], "output.bias": [outputs]}
+        expected_dtype = "F32"  # The small readout and its AdamW state stay FP32.
+        if (width <= 0 or set(rows) != set(expected_head) or any(
+                rows[name]["shape"] != shape or rows[name]["dtype"] != expected_dtype
+                for name, shape in expected_head.items())):
+            raise CheckpointBundleError("Action head tensor inventory, shape or dtype mismatch")
+        for entry in payload.get("manifest", []):
+            name = entry["name"]
+            if name == "language_model.lm_head" or name.startswith("action_head."):
+                raise CheckpointBundleError("Chunk policy targets an inactive or fully trained head")
+            if name.startswith("language_model.model.layers.") and name.endswith((".q_proj", ".up_proj", ".gate_proj")):
+                if entry["in_features"] != width:
+                    raise CheckpointBundleError("Action head width differs from the decoder")
     if metadata.get("base_checkpoint") != scientific["base_checkpoint"]:
         raise CheckpointBundleError("QuIC adapter base checkpoint does not match its plan")
     if metadata.get("peft") != scientific["training"]["peft"]:
@@ -217,12 +260,13 @@ def validate_staged_adapter(weights, scientific, *, run_root=None):
     for item in tensors:
         if (item["shape"], item["dtype"]) != expected[item["name"]]:
             raise CheckpointBundleError("QuIC tensor shape or dtype differs from manifest")
-    return payload, tensors
+    return payload, tensors + [{**item, "name": "action_head." + item["name"], "file": "action_head.safetensors"}
+                               for item in head_tensors]
 
 
 def _move_batch(batch, device, dtype):
     return {key: batch[key].to(device=device, dtype=dtype if key == "pixel_values" else None)
-            for key in ("input_ids", "attention_mask", "pixel_values", "labels")}
+            for key in ("input_ids", "attention_mask", "pixel_values", "labels", "actions", "action_mask") if key in batch}
 
 
 def checked_action_transform(transform, tokenizer, action_tokenizer, *, action_dimension=7):
@@ -259,6 +303,9 @@ def _validation(model, loader, action_tokenizer, *, device, dtype, max_batches, 
     import torch.nn.functional as F
     from ovlab_core.progress import ConsoleProgress
 
+    if getattr(model, "action_head", None) is not None:
+        from quic_petf.action_heads import validate_chunks
+        return validate_chunks(model, loader, device=device, dtype=dtype, max_batches=max_batches, description=description)
     model.eval()
     total_loss = correct = tokens = invalid = batches = 0
     absolute_error = 0.0
@@ -307,8 +354,8 @@ def execute(plan, context):
     import torch
     from torch.utils.data import DataLoader
     from .quic_experiments import resolve_targets, target_coverage
-    from quic_petf.host import checkpoint_identity, layer_inventory, load_host, enable_gradient_checkpointing
-    from quic_petf_vla import adapter_parameters, inject, save_adapter, load_adapter, disabled_adapters, QuICLinear, QuICConv2d
+    from quic_petf.host import checkpoint_identity, layer_inventory, load_host, enable_gradient_checkpointing, text_hidden_size
+    from quic_petf_vla import adapter_parameters, disabled_adapters, QuICLinear, QuICConv2d
     from prismatic.models.backbones.llm.prompting import PurePromptBuilder
     from prismatic.util.data_utils import PaddedCollatorForActionPrediction
     from prismatic.vla.action_tokenizer import ActionTokenizer
@@ -316,7 +363,7 @@ def execute(plan, context):
     from ovlab_core.progress import ConsoleProgress
     from ovlab_openvla_common import parameter_inventory, cuda_allocator_snapshot, performance_sample, estimated_training_compute
     from .training_data import make_partitioned_datasets
-    from .training_evidence import action_token_counts, capture_data_flow
+    from .training_evidence import action_token_counts, capture_data_flow, capture_chunk_data_flow
     from .training_identity import atomic_json
     from .training_runs import TrainingRunStore, TRAINING_RESULT_SCHEMA, _utc_now
     from .training_errors import TrainingRuntimeError
@@ -339,16 +386,25 @@ def execute(plan, context):
             "adaptation_state": profile["model"].get("adaptation_state", "none"), "family": "openvla_token", "device": str(device),
             "dtype": "bfloat16" if dtype == torch.bfloat16 else "float32",
             "unnorm_key": training["normalization"]["unnorm_key"], "prompt_style": "modern", "center_crop": False}
+    head_spec = profile["model"].get("action_head")
+    if head_spec is not None:
+        host["action_head"] = head_spec
+    chunk_kwargs = {"action_chunk_horizon": head_spec["horizon"]} if head_spec is not None else {}
     inventory, num_layers = layer_inventory(host)
     targets, selection = resolve_targets(inventory, settings, num_layers)
     predicted = sum((1 if cfg.share_across_blocks else cfg.block_count)
                     * (cfg.base_size * (cfg.base_size - 1) // 2 if cfg.orthogonal else cfg.base_size**2)
                     for entry in selection for cfg in [targets[entry["name"]].resolve(entry["out_features"])])
-    if predicted > settings.get("max_trainable_parameters", float("inf")):
+    head_parameters = 0
+    if head_spec is not None:
+        width = text_hidden_size(inventory)
+        head_parameters = (width + 1) * head_spec["hidden_dim"] + (head_spec["hidden_dim"] + 1) * head_spec["horizon"] * 7
+    if predicted + head_parameters > settings.get("max_trainable_parameters", float("inf")):
         raise TrainingRuntimeError("QuIC trainable parameter budget exceeded before loading host weights")
     coverage = target_coverage(inventory, settings, targets, num_layers)
     atomic_json(context.root / "target-selection.json", {
-        "targets": selection, "trainable_parameters": predicted, "coverage": coverage}, mode=0o644)
+        "targets": selection, "trainable_parameters": predicted + head_parameters, "coverage": coverage,
+        "action_head_parameter_count": head_parameters}, mode=0o644)
     data_root = Path(os.environ.get("OVLAB_TRAINING_DATA_ROOT", "/datasets/resolved"))
     dataset_name = os.environ.get("OVLAB_TRAINING_DATASET_NAME")
     if not dataset_name or not data_root.is_dir():
@@ -366,7 +422,7 @@ def execute(plan, context):
         train_ds, validation_ds, partition = make_partitioned_datasets(data_root, dataset_name,
             profile["dataset"]["partition"], lambda frame: transform_holder["transform"](frame),
             resize_resolution=resize, source_identity=scientific["dataset"],
-            manifest_path=context.root / "data-partition.json")
+            manifest_path=context.root / "data-partition.json", **chunk_kwargs)
         stats = partition["normalization"]["statistics"]
         normalization = {"unnorm_key": host["unnorm_key"], "action_statistics": stats, "mode": mode}
         normalization["sha256"] = hashlib.sha256(json.dumps(normalization, sort_keys=True, allow_nan=False).encode()).hexdigest()
@@ -381,10 +437,14 @@ def execute(plan, context):
     model, processor, runtime = load_host(host, training=True)
     atomic_json(context.root / "quic-runtime.json", {"host_identity": host_identity, "runtime": runtime}, mode=0o644)
     action_tokenizer = ActionTokenizer(processor.tokenizer)
-    transform = RLDSBatchTransform(action_tokenizer, processor.tokenizer,
-        image_transform=processor.image_processor.apply_transform, prompt_builder_fn=PurePromptBuilder,
-        predict_stop_token=False)
-    transform = checked_action_transform(transform, processor.tokenizer, action_tokenizer)
+    if head_spec is None:
+        transform = RLDSBatchTransform(action_tokenizer, processor.tokenizer,
+            image_transform=processor.image_processor.apply_transform, prompt_builder_fn=PurePromptBuilder,
+            predict_stop_token=False)
+        transform = checked_action_transform(transform, processor.tokenizer, action_tokenizer)
+    else:
+        from quic_petf.action_heads import ChunkBatchTransform
+        transform = ChunkBatchTransform(processor, head_spec["horizon"])
     transform_holder["transform"] = transform
     if mode == "host":
         stats = model.norm_stats[host["unnorm_key"]]["action"]
@@ -394,10 +454,13 @@ def execute(plan, context):
         resize = (image_size, image_size) if isinstance(image_size, int) else tuple(image_size)
         train_ds, validation_ds, partition = make_partitioned_datasets(data_root, dataset_name,
             profile["dataset"]["partition"], transform, resize_resolution=resize,
-            source_identity=scientific["dataset"], manifest_path=context.root / "data-partition.json", action_statistics=stats)
+            source_identity=scientific["dataset"], manifest_path=context.root / "data-partition.json", action_statistics=stats, **chunk_kwargs)
     atomic_json(context.root / "normalization.json", normalization, mode=0o644)
     collator = PaddedCollatorForActionPrediction(processor.tokenizer.model_max_length,
                                                 processor.tokenizer.pad_token_id, padding_side="right")
+    if head_spec is not None:
+        from quic_petf.action_heads import chunk_collator
+        collator = chunk_collator(processor)
     batch_size = training["per_device_batch_size"]
     loader = DataLoader(train_ds, batch_size=batch_size, num_workers=0, collate_fn=collator)
     val_loader = DataLoader(validation_ds, batch_size=batch_size, num_workers=0, collate_fn=collator)
@@ -407,20 +470,23 @@ def execute(plan, context):
         model.eval()
         with torch.inference_mode():
             output = model(**reference_batch, use_cache=False)
+            if head_spec is not None:
+                return output.actions.float().cpu()
             labels = reference_batch["labels"]
             return output.logits[:, -labels.shape[1]:-1][labels[:, 1:] != -100].float().cpu()
 
     original = reference()
-    manifest = inject(model, targets)
+    manifest = model.enable_quic(targets)
     identity_logits = reference()
     identity_error = float((identity_logits - original).abs().max())
     if not torch.equal(identity_logits, original):
         raise TrainingRuntimeError(f"QuIC identity logit parity failed: maximum error {identity_error}")
     del original, identity_logits
     atomic_json(context.root / "target-manifest.json", {"targets": manifest}, mode=0o644)
-    params = adapter_parameters(model)
+    params = model.adaptation_parameters()
+    adapter_tensor_count = len(adapter_parameters(model))
     if {id(p) for p in model.parameters() if p.requires_grad} != {id(p) for p in params}:
-        raise TrainingRuntimeError("QuIC optimizer selection contains non-adapter parameters")
+        raise TrainingRuntimeError("QuIC optimizer selection differs from adapters plus optional action head")
     if training["gradient_checkpointing"]:
         atomic_json(context.root / "gradient-checkpointing.json", enable_gradient_checkpointing(model), mode=0o644)
     counts = parameter_inventory(model.named_parameters(), adapter_markers=(".adapter.",))
@@ -440,19 +506,28 @@ def execute(plan, context):
             started = time.perf_counter_ns()
             before = cuda_allocator_snapshot(torch, device)
             losses, tokens, examples, correct, target_count = [], 0, 0, 0, 0
+            valid_action_steps = 0
             for microbatch in range(training["gradient_accumulation_steps"]):
                 raw = next(iterator)
                 batch = _move_batch(raw, device, dtype)
                 output = model(**batch, use_cache=False)
                 loss = output.loss
                 if loss is None or not torch.isfinite(loss):
-                    raise TrainingRuntimeError("QuIC action-token loss is nonfinite or missing")
+                    raise TrainingRuntimeError("QuIC training loss is nonfinite or missing")
                 if step == 1 and microbatch == 0:
-                    atomic_json(context.root / "data-flow.json", capture_data_flow(raw, output,
-                        processor.tokenizer, dataset_records=len(train_ds), pixel_dtype=dtype, optimizer=optimizer), mode=0o644)
-                ok, n = action_token_counts(output, batch["labels"], action_tokenizer.action_token_begin_idx)
+                    if head_spec is None:
+                        flow = capture_data_flow(raw, output, processor.tokenizer,
+                            dataset_records=len(train_ds), pixel_dtype=dtype, optimizer=optimizer)
+                    else:
+                        flow = capture_chunk_data_flow(raw, output, processor.tokenizer,
+                            dataset_records=len(train_ds), pixel_dtype=dtype, optimizer=optimizer)
+                    atomic_json(context.root / "data-flow.json", flow, mode=0o644)
+                ok, n = (action_token_counts(output, batch["labels"], action_tokenizer.action_token_begin_idx)
+                         if head_spec is None else (0, 0))
                 correct += ok
                 target_count += n
+                if head_spec is not None:
+                    valid_action_steps += int(batch["action_mask"].sum())
                 tokens += int(batch["attention_mask"].sum())
                 examples += batch["input_ids"].shape[0]
                 losses.append(float(loss.detach()))
@@ -479,6 +554,8 @@ def execute(plan, context):
                 "examples_seen": examples, "non_padding_tokens": tokens,
                 "microbatches": training["gradient_accumulation_steps"], "action_token_correct": correct,
                 "action_token_count": target_count, "action_token_accuracy": correct / target_count if target_count else None,
+                "objective": "masked_l1" if head_spec else "action_token_cross_entropy",
+                "valid_action_steps": valid_action_steps if head_spec else None,
                 "learning_rate": training["learning_rate"], "gradient_norm": float(grad_norm),
                 "step_duration_ms": elapsed_ms, "examples_per_second": examples / (elapsed_ms / 1000),
                 "gpu_memory_allocated_bytes": after["allocated_bytes"], "gpu_memory_reserved_bytes": after["reserved_bytes"],
@@ -499,7 +576,7 @@ def execute(plan, context):
                 "normalization_contract": normalization, "split_manifest_id": partition["manifest_id"],
                 "preprocessing": {"prompt_style": "modern", "center_crop": False},
                 "seed": seed, "max_steps": training["max_steps"]}
-    saved = save_adapter(model, weights, host_identity, metadata=metadata)
+    saved = model.save_quic_adapter(weights, host_identity, metadata=metadata)
     processor.save_pretrained(context.staging_checkpoint / "processor")
     atomic_json(context.staging_checkpoint / "auxiliary" / "dataset_statistics.json", model.norm_stats, mode=0o644)
     if mode == "train-q99":
@@ -512,7 +589,12 @@ def execute(plan, context):
         if isinstance(module, (QuICLinear, QuICConv2d)):
             parent_name, _, child = name.rpartition(".")
             setattr(model.get_submodule(parent_name) if parent_name else model, child, module.base_layer)
-    load_adapter(model, weights, host_identity)
+    if model.action_head is not None:
+        # Destroy the in-memory readout to make reload parity cover its serialized bytes.
+        with torch.no_grad():
+            for parameter in model.action_head.parameters():
+                parameter.zero_()
+    model.load_quic_adapter(weights, host_identity)
     reloaded = reference()
     if not torch.equal(reloaded, learned_reference):
         raise TrainingRuntimeError("QuIC save/reload logit parity failed")
@@ -520,11 +602,13 @@ def execute(plan, context):
         "optimizer_steps": training["max_steps"], "trainable_parameter_count": counts["trainable"],
         "frozen_parameter_count": counts["frozen"], "total_parameter_count": counts["total"],
         "adapter_parameter_count": counts["adapter"], "trainable_adapter_parameter_count": counts["trainable_adapter"],
-        "changed_adapter_tensor_count": sum(changed), "peak_vram_bytes": peak_allocated,
+        "changed_adapter_tensor_count": sum(changed[:adapter_tensor_count]),
+        "action_head_parameter_count": head_parameters, "changed_action_head_tensor_count": sum(changed[adapter_tensor_count:]), "peak_vram_bytes": peak_allocated,
         "peak_reserved_vram_bytes": peak_reserved, "checkpoint_id": None, "failure": None,
         "identity_logit_max_absolute_error": identity_error, "reload_logit_max_absolute_error": 0.0,
         "baseline_validation": baseline, "adapter_validation": final_validation,
         "split_manifest_id": partition["manifest_id"], "tensor_sha256": saved["tensor_sha256"],
+        "model_variant": {"action_head": head_spec}, "objective": "masked_l1" if head_spec else "action_token_cross_entropy",
         "performance": {"schema_version": "ovlab.performance-summary/v1", "parameter_counts": counts,
             "cuda_allocator": {"source": "pytorch-cuda-caching-allocator", "peak_allocated_bytes": peak_allocated,
                 "peak_reserved_bytes": peak_reserved}, "estimated_compute_method": "dense-parameter-token-proxy/training-v1"}}

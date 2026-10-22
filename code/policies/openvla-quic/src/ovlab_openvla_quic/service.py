@@ -106,6 +106,26 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
     tensor_sha = _sha_file(directory / "adapter.safetensors")
     if tensor_sha != payload.get("tensor_sha256") or tensor_sha != settings.adapter_tensor_sha256:
         raise QuICDescriptorError("QuIC adapter tensor SHA256 mismatch")
+    head_spec = identity.get("action_head")
+    horizon = 1
+    if head_spec is not None:
+        if (not isinstance(head_spec, dict) or set(head_spec) != {"type", "horizon", "hidden_dim"}
+                or head_spec["type"] != "mlp_chunk"
+                or type(head_spec["horizon"]) is not int or not 1 <= head_spec["horizon"] <= 256
+                or type(head_spec["hidden_dim"]) is not int or not 1 <= head_spec["hidden_dim"] <= 16384):
+            raise QuICDescriptorError("invalid action head configuration")
+        record = metadata.get("action_head")
+        if (not isinstance(record, dict) or set(record) != {"config", "tensor_sha256"}
+                or record["config"] != head_spec
+                or _sha_file(directory / "action_head.safetensors") != record["tensor_sha256"]):
+            raise QuICDescriptorError("action head artifact configuration or SHA256 mismatch")
+        if settings.prompt_style != "modern" or settings.target_action_spec.dimension != 7:
+            raise QuICDescriptorError("Action chunks require modern prompts and seven dimensional actions")
+        if any(row["name"] == "language_model.lm_head" or row["name"].startswith("action_head.") for row in payload["manifest"]):
+            raise QuICDescriptorError("Chunk adapter targets an inactive or fully trained head")
+        horizon = head_spec["horizon"]
+    elif metadata.get("action_head") is not None or (directory / "action_head.safetensors").exists():
+        raise QuICDescriptorError("Token policy cannot carry an action head artifact")
     image = ImageObservationSpec(
         name=settings.canonical_camera_name, shapes=(settings.input_image_shape,),
         dtype="uint8", encodings=(ImageEncoding.RAW,), color_spaces=(ColorSpace.RGB,),
@@ -113,7 +133,7 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
     declaration = {
         "images": [image_spec_to_wire(image)], "proprioception": [],
         "action_spec": action_spec_to_wire(settings.target_action_spec),
-        "minimum_horizon": 1, "maximum_horizon": 1,
+        "minimum_horizon": horizon, "maximum_horizon": horizon,
         "dynamic_instructions": True, "deterministic_reset": True,
     }
     entries = tuple(_placement_entry(entry, payload["format_version"]) for entry in payload["manifest"])
@@ -125,6 +145,8 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
     # The registry resource name can differ from the source repository name;
     # the artifact's checkpoint identity is verified against bytes at load.
     host["checkpoint_id"] = identity["checkpoint_id"]
+    if head_spec is not None:
+        host["action_head"] = head_spec
     if normalization_mode == "train-q99":
         host["normalization_contract_sha256"] = normalization["sha256"]
         host["action_normalization"] = {settings.unnorm_key: {"action": normalization["action_statistics"]}}
@@ -135,7 +157,7 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
         transform = {"kind": "threshold", "index": 6, "minimum": 0.0, "maximum": 1.0,
                      "threshold": 0.5, "below": 1.0, "equal": 0.0, "above": -1.0}
     return QuICMethodDescriptor(
-        variant=QuICVariant.PEFT, display_name="QuIC-PEFT (dense token OpenVLA)",
+        variant=QuICVariant.PEFT, display_name="QuIC-PEFT (OpenVLA action chunks)" if head_spec else "QuIC-PEFT (dense token OpenVLA)",
         provider=QuICProviderSpec(source_commit="533b1a76ea600f50738cb9369ed47192a216e2af"),
         implementation_status=QuICImplementationStatus.IMPLEMENTED,
         profile=QuICProfileDefinition(profile, "quic-peft-vla/0.1.0", config_hash),
@@ -148,7 +170,8 @@ def descriptor_from_settings(settings: OpenVlaQuICSettings):
         base_model_identity={"availability": "available", "host_identity": identity, "host": host},
         artifact_identity={"availability": "available", "form": "multiplicative_adapter",
                            "directory": str(directory.resolve()), "manifest_sha256": _sha_file(payload_path),
-                           "tensor_sha256": tensor_sha},
+                           "tensor_sha256": tensor_sha,
+                           **({"action_head_tensor_sha256": metadata["action_head"]["tensor_sha256"]} if head_spec else {})},
         provenance_identity={"availability": "available", "training_metadata": metadata},
         deployment_state={"availability": "available", "active_adapter": True, "merge_state": "unmerged",
                           "requires_base_model": True, "deployment_replaces_base_weights": False},
