@@ -298,8 +298,8 @@ docker compose --file deploy/compose/compose.yaml --profile reporting run --rm r
 ```
 
 The source is mounted at `/var/lib/ovlab/runs:ro`; the report is written below
-`/var/lib/ovlab/exports/derived/<run>/<profile>/<derived-build-id>` and the isolated
-export below `/var/lib/ovlab/exports/isolated/<run>`. Report generation performs
+`/var/lib/ovlab/exports/evaluate/derived/<run>/<profile>/<derived-build-id>` and the isolated
+export below `/var/lib/ovlab/exports/evaluate/isolated/<run>`. Report generation performs
 neither policy inference nor LIBERO execution. Only `runs/` is writable during
 the benchmark; reporting/export failure is isolated from canonical finalization.
 

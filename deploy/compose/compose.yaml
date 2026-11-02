@@ -314,7 +314,7 @@ services:
       OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw
       OVLAB_RUNS_ROOT: /var/lib/ovlab/runs
       OVLAB_EXPORTS_ROOT: /var/lib/ovlab/exports
-      OVLAB_DERIVED_DISPLAY_ROOT: ${OVLAB_DERIVED_DISPLAY_ROOT:-/var/lib/ovlab/exports/derived}
+      OVLAB_DERIVED_DISPLAY_ROOT: ${OVLAB_DERIVED_DISPLAY_ROOT:-/var/lib/ovlab/exports/evaluate/derived}
       OVLAB_EXPORTS_DISPLAY_ROOT: ${OVLAB_EXPORTS_DISPLAY_ROOT:-/var/lib/ovlab/exports}
       OVLAB_IMAGE_DIGEST: ${OVLAB_REPORTING_IMAGE_DIGEST:-unavailable}
       OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}

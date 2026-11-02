@@ -131,8 +131,6 @@ class DataManager:
         self.exports_root = Path(
             exports_root if exports_root is not None else self.data_root / "exports"
         ).expanduser().resolve()
-        self.derived_root = self.exports_root / "derived"
-        self.interactive_root = self.exports_root / "interactive"
         self.archive_root = Path(
             archive_root if archive_root is not None else self.data_root / "archive"
         ).expanduser().resolve()
@@ -244,45 +242,97 @@ class DataManager:
         except (RunReferenceAmbiguousError, RunReferenceError) as exc:
             raise DataSafetyError(str(exc)) from exc
 
+    def _export_layout_root(self, *, archived: bool) -> Path:
+        root = self.archive_root / "exports" if archived else self.exports_root
+        for category in ("train", "evaluate"):
+            category_root = root / category
+            if category_root.is_symlink():
+                raise DataSafetyError(f"managed export root contains a symbolic link: {category_root}")
+        return root
+
+    @staticmethod
+    def _artifact_reference(roots: tuple[Path, ...], reference: str, label: str):
+        try:
+            return resolve_run_reference_across(roots, reference, label=label)
+        except RunReferenceAmbiguousError:
+            # A regenerated artifact may have the same ID in both layouts.
+            # Prefer the typed copy while retaining a separate legacy selector.
+            matches = []
+            for root in roots:
+                try:
+                    matches.append(resolve_run_reference(root, reference, label=label))
+                except RunReferenceUnavailableError:
+                    continue
+            if matches and len({match.run_id for match in matches}) == 1:
+                return matches[0]
+            raise
+
     def _report_target(self, identifier: str, *, archived: bool = False) -> DataTarget:
-        training = identifier.startswith("training:")
-        plain = identifier.split(":", 1)[1] if training else identifier
-        root = self.archive_root / "exports" / "derived" if archived else self.derived_root
-        if training:
-            resolved = self._run_reference(root / "training", plain, "training report")
-            plain = resolved.run_id
-        else:
-            resolved = self._run_reference(root, plain, "report")
-            plain = resolved.run_id
-        relative = Path("training") / plain if training else Path(plain)
-        path = self._managed_directory(root / relative, root, "report")
+        legacy = identifier.startswith("legacy:")
+        identifier = identifier.removeprefix("legacy:")
+        training = identifier.startswith(("training:", "train:"))
+        plain = identifier.split(":", 1)[1] if training else identifier.removeprefix("evaluate:")
+        category = "train" if training else "evaluate"
+        root = self._export_layout_root(archived=archived)
+        roots = (root / category / "derived", root / "derived" / "training" if training else root / "derived")
+        for report_root in (*roots, root / "derived"):
+            if report_root.is_symlink():
+                raise DataSafetyError(f"managed report root contains a symbolic link: {report_root}")
+        if legacy:
+            roots = roots[1:]
+        try:
+            resolved = self._artifact_reference(roots, plain, "report")
+        except RunReferenceUnavailableError as exc:
+            raise DataSourceUnavailableError(str(exc)) from exc
+        except RunReferenceError as exc:
+            raise DataSafetyError(str(exc)) from exc
+        plain = self._identifier(resolved.run_id, "report ID")
+        path = self._managed_directory(resolved.path, root, "report")
         display = f"training:{plain}" if training else plain
-        companion_relative = Path("interactive") / relative
-        companion_path = (self.archive_root / "exports" / companion_relative) if archived else (self.exports_root / companion_relative)
+        if legacy:
+            display = f"legacy:{display}"
+        source_relative = path.relative_to(root)
+        companion_parts = list(source_relative.parts)
+        companion_parts[companion_parts.index("derived")] = "interactive"
+        companion_path = root.joinpath(*companion_parts)
         if companion_path.is_symlink():
             raise DataSafetyError(f"managed interactive report contains a symbolic link: {companion_path}")
         return DataTarget(
             "report", display, path,
-            Path("exports") / "derived" / relative,
+            Path("exports") / source_relative,
             self._report_state(path),
             companion_path=companion_path,
-            companion_relative=Path("exports") / companion_relative,
+            companion_relative=Path("exports").joinpath(*companion_parts),
         )
 
     def _export_target(self, identifier: str, *, archived: bool = False) -> DataTarget:
+        legacy = isinstance(identifier, str) and identifier.startswith("legacy:")
+        if legacy:
+            identifier = identifier.removeprefix("legacy:")
         if not isinstance(identifier, str) or ":" not in identifier:
             raise DataSafetyError("export ID must use isolated:NAME or grouped:NAME")
         family, plain = identifier.split(":", 1)
         if family not in {"isolated", "grouped"}:
             raise DataSafetyError("export ID must use isolated:NAME or grouped:NAME")
-        root = self.archive_root / "exports" if archived else self.exports_root
-        if family == "isolated":
-            plain = self._run_reference(root / family, plain, "isolated export").run_id
-        else:
-            plain = self._identifier(plain, "export ID")
-        relative = Path(family) / plain
-        path = self._managed_directory(root / relative, root, "export")
+        root = self._export_layout_root(archived=archived)
+        roots = (root / "evaluate" / family, root / family)
+        for family_root in roots:
+            if family_root.is_symlink():
+                raise DataSafetyError(f"managed export root contains a symbolic link: {family_root}")
+        if legacy:
+            roots = roots[1:]
+        try:
+            resolved = self._artifact_reference(roots, plain, f"{family} export")
+        except RunReferenceUnavailableError as exc:
+            raise DataSourceUnavailableError(str(exc)) from exc
+        except RunReferenceError as exc:
+            raise DataSafetyError(str(exc)) from exc
+        plain = self._identifier(resolved.run_id, "export ID")
+        path = self._managed_directory(resolved.path, root, "export")
+        relative = path.relative_to(root)
         display = f"{family}:{plain}"
+        if legacy:
+            display = f"legacy:{display}"
         return DataTarget(
             "export", display, path, Path("exports") / relative,
             self._export_state(path, family),
@@ -319,46 +369,49 @@ class DataManager:
         return targets
 
     def _list_reports(self, *, archived: bool) -> list[DataTarget]:
-        root = self.archive_root / "exports" / "derived" if archived else self.derived_root
-        if not root.is_dir():
-            return []
+        root = self._export_layout_root(archived=archived)
         targets = []
-        for path in sorted(root.iterdir()):
-            if path.is_symlink():
-                raise DataSafetyError(f"managed report root contains a symbolic link: {path}")
-            if not path.is_dir():
+        locations = (
+            (root / "train" / "derived", "training:"),
+            (root / "evaluate" / "derived", ""),
+            (root / "derived" / "training", "training:"),
+            (root / "derived", ""),
+        )
+        for report_root, prefix in locations:
+            if report_root.is_symlink():
+                raise DataSafetyError(f"managed report root contains a symbolic link: {report_root}")
+            if not report_root.is_dir():
                 continue
-            if path.name == "training":
-                for item in sorted(path.iterdir()):
-                    if item.is_symlink():
-                        raise DataSafetyError(f"managed training report root contains a symbolic link: {item}")
-                    if item.is_dir():
-                        targets.append(self._report_target(f"training:{item.name}", archived=archived))
-            else:
-                targets.append(self._report_target(path.name, archived=archived))
+            for path in sorted(report_root.iterdir()):
+                if path.is_symlink():
+                    raise DataSafetyError(f"managed report root contains a symbolic link: {path}")
+                if path.is_dir() and not (report_root == root / "derived" and path.name == "training"):
+                    category = "train" if prefix else "evaluate"
+                    legacy = "legacy:" if report_root.is_relative_to(root / "derived") and (root / category / "derived" / path.name).is_dir() else ""
+                    targets.append(self._report_target(f"{legacy}{prefix}{path.name}", archived=archived))
         return targets
 
     def _list_exports(self, *, archived: bool) -> list[DataTarget]:
-        root = self.archive_root / "exports" if archived else self.exports_root
-        if not root.is_dir():
-            return []
+        root = self._export_layout_root(archived=archived)
         targets = []
-        for family in ("isolated", "grouped"):
-            family_root = root / family
-            if family_root.is_symlink():
-                raise DataSafetyError(f"managed export root contains a symbolic link: {family_root}")
-            if not family_root.is_dir():
-                continue
-            for path in sorted(family_root.iterdir()):
-                if path.is_symlink():
-                    raise DataSafetyError(f"managed export root contains a symbolic link: {path}")
-                if not path.is_dir():
+        for category in (root / "evaluate", root):
+            for family in ("isolated", "grouped"):
+                family_root = category / family
+                if family_root.is_symlink():
+                    raise DataSafetyError(f"managed export root contains a symbolic link: {family_root}")
+                if not family_root.is_dir():
                     continue
-                if not _IDENTIFIER.fullmatch(path.name):
-                    raise DataSafetyError(
-                        f"managed export root contains an active or invalid entry: {path}"
-                    )
-                targets.append(self._export_target(f"{family}:{path.name}", archived=archived))
+                for path in sorted(family_root.iterdir()):
+                    if path.is_symlink():
+                        raise DataSafetyError(f"managed export root contains a symbolic link: {path}")
+                    if not path.is_dir():
+                        continue
+                    if not _IDENTIFIER.fullmatch(path.name):
+                        raise DataSafetyError(
+                            f"managed export root contains an active or invalid entry: {path}"
+                        )
+                    legacy = "legacy:" if category == root and (root / "evaluate" / family / path.name).is_dir() else ""
+                    targets.append(self._export_target(f"{legacy}{family}:{path.name}", archived=archived))
         return targets
 
     def list(self, *, kind: str = "all", archived: bool = False, detail: bool = False) -> dict[str, object]:

@@ -440,7 +440,7 @@ class ComposeDeployment:
             exports.chmod(0o2770)
         if not exports.is_dir():
             raise ComposeDeploymentError(f"OVLAB_EXPORTS_ROOT is not a directory: {exports}")
-        for name in ("derived", "interactive", "isolated", "grouped"):
+        for name in ("train", "evaluate", "train/derived", "train/interactive", "evaluate/derived", "evaluate/interactive", "evaluate/isolated", "evaluate/grouped"):
             output = exports / name
             if not output.exists():
                 output.mkdir(mode=0o2770, parents=True)
@@ -677,7 +677,7 @@ class ComposeDeployment:
             run_path = Path(new_runs[0])
             tracking = track_run("eval", run_path, self.environment)
             exports_root = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (run_path.parent.parent / "exports")
-            derived_root = exports_root / "derived"
+            derived_root = exports_root / "evaluate" / "derived"
             postprocess_environment = {
                 **environment,
                 "OVLAB_REPORT_RUN_ID": run_path.name,

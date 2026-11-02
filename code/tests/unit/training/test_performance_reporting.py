@@ -100,6 +100,27 @@ def test_training_performance_report_tracks_vram_compute_and_parameter_classes(t
         engine.verify(run.name)
 
 
+def test_training_application_writes_typed_exports_and_verifies_legacy_reports(tmp_path, monkeypatch):
+    from ovlab_benchctl.application import OvlabApplication
+
+    run = _training_run(tmp_path / "runs/train")
+    repository = Path(__file__).resolve().parents[4]
+    app = OvlabApplication(repository, environment={"OVLAB_DATA_ROOT": str(tmp_path)})
+    generated = app.train_report(run.name)
+    assert Path(generated["output"]).is_relative_to(tmp_path / "exports/train/derived" / run.name)
+    assert Path(generated["interactive_output"]).is_relative_to(tmp_path / "exports/train/interactive" / run.name)
+    assert app.train_report(run.name, verify=True)["integrity"] == "verified"
+    legacy = TrainingDerivedReportEngine(run.parent, tmp_path / "exports/derived")
+    legacy.generate(run.name)
+    Path(generated["output"]).rename(Path(generated["output"]).with_name("newer-build"))
+    assert app.train_report(run.name, verify=True, build_id=generated["derived_build_id"])["integrity"] == "verified"
+    (tmp_path / "exports/train").rename(tmp_path / "saved-typed-exports")
+    monkeypatch.setenv("OVLAB_DERIVED_DISPLAY_ROOT", str(tmp_path / "exports/train/derived"))
+    verified = app.train_report(run.name, verify=True)
+    assert verified["integrity"] == "verified"
+    assert Path(verified["interactive_output"]).is_dir()
+
+
 def test_interactive_training_uses_actual_counts_and_forward_pass_evidence(tmp_path):
     from ovlab_benchctl.training_evidence import action_token_counts, capture_data_flow
     from types import SimpleNamespace

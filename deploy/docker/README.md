@@ -90,10 +90,14 @@ Keep deployment evidence outside the source checkout:
 │   ├── evaluate/      # canonical traces, per-episode videos, metrics and provenance
 │   └── train/         # canonical training evidence and staged output
 └── exports/
-    ├── grouped/       # comparison tables and figures
-    ├── isolated/      # per-run publication exports
-    ├── derived/       # regenerated HTML reports and plots
-    └── interactive/   # offline report dashboards
+    ├── evaluate/
+    │   ├── grouped/       # comparison tables and figures
+    │   ├── isolated/      # per-run publication exports
+    │   ├── derived/       # regenerated evaluation reports
+    │   └── interactive/   # offline evaluation dashboards
+    └── train/
+        ├── derived/       # regenerated training reports
+        └── interactive/   # offline training dashboards
 ```
 
 The CLI creates a missing `runs/` directory with mode `2770` and passes the
@@ -233,8 +237,8 @@ docker compose \
 ```
 
 The report service reads `/var/lib/ovlab/runs` read-only and atomically writes
-the HTML bundle to `/var/lib/ovlab/exports/derived/<run>/<profile>/<derived-build-id>`
-plus the isolated export to `/var/lib/ovlab/exports/isolated/<run>`. It verifies
+the HTML bundle to `/var/lib/ovlab/exports/evaluate/derived/<run>/<profile>/<derived-build-id>`
+plus the isolated export to `/var/lib/ovlab/exports/evaluate/isolated/<run>`. It verifies
 canonical checksums and publishes manifests last. Grouped exports use the same
 image through the `export` Compose profile.
 

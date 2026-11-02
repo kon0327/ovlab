@@ -538,8 +538,8 @@ flowchart LR
     Report["DerivedReportEngine"]
     Isolated["isolated run/episode export"]
     Grouped["explicit grouped comparison"]
-    Derived["exports/derived/<run>/<profile>/<build>"]
-    Exports["exports/isolated or grouped"]
+    Derived["exports/evaluate/derived/<run>/<profile>/<build>"]
+    Exports["exports/evaluate/isolated or grouped"]
 
     Run --> Verify
     Verify --> Recompute --> Compare

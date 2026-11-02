@@ -164,7 +164,7 @@ class OvlabApplication:
         exports = Path(
             self.environment.get("OVLAB_EXPORTS_ROOT", runs.parent / "exports")
         ).expanduser().resolve()
-        derived = exports / "derived"
+        derived = exports / "evaluate" / "derived"
         return runs, derived, exports
 
     def _data_root(self) -> Path:
@@ -737,9 +737,16 @@ class OvlabApplication:
 
     def report_verify(self, run, profile="libero-task-default", *, build_id=None):
         from ovlab_runner import DerivedReportEngine
-        runs, derived, _ = self._data_roots()
+        runs, derived, exports = self._data_roots()
         run_id = self._benchmark_run_id(run)
-        return DerivedReportEngine(runs, derived, self._report_profile(profile)).verify(run_id, build_id=build_id)
+        report_profile = self._report_profile(profile)
+        suffix = Path(run_id) / report_profile.identifier / build_id if build_id is not None else Path(run_id)
+        if not (derived / suffix).is_dir() and (exports / "derived" / suffix).is_dir():
+            derived = exports / "derived"
+        engine = DerivedReportEngine(runs, derived, report_profile)
+        if derived == exports / "derived" and engine.display_root.parent.name == "evaluate":
+            engine.display_root = engine.display_root.parent.parent / "derived"
+        return engine.verify(run_id, build_id=build_id)
 
     @staticmethod
     def report_profiles():
@@ -944,11 +951,18 @@ class OvlabApplication:
 
     def train_report(self, run_id, *, verify=False, build_id=None):
         from ovlab_runner import TrainingDerivedReportEngine
-        _, derived, _ = self._data_roots()
+        _, _, exports = self._data_roots()
+        derived = exports / "train" / "derived"
         training_run = self._training_run(run_id)
+        suffix = Path(training_run.run_id) / "system-performance" / build_id if build_id is not None else Path(training_run.run_id)
+        legacy_suffix = Path("training") / suffix
+        if verify and not (derived / suffix).is_dir() and (exports / "derived" / legacy_suffix).is_dir():
+            derived = exports / "derived"
         engine = TrainingDerivedReportEngine(
             training_run.path.parent, derived,
         )
+        if derived == exports / "derived" and engine.display_root.parent.name == "train":
+            engine.display_root = engine.display_root.parent.parent / "derived"
         if verify:
             return engine.verify(training_run.run_id, build_id=build_id)
         return engine.generate(training_run.run_id)

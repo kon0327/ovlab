@@ -477,7 +477,7 @@ activation or host package installation is required. Set
 
 `train report` uses that same image, but mounts canonical
 `OVLAB_RUNS_ROOT` read-only and writes under
-`OVLAB_EXPORTS_ROOT/derived/training`. It reports exact parameter classes, PyTorch CUDA
+`OVLAB_EXPORTS_ROOT/train/derived`. It reports exact parameter classes, PyTorch CUDA
 allocator VRAM/peaks and explicitly estimated—not measured—GFLOPs.
 
 During deployment, benchmark and policy containers are torn down after the

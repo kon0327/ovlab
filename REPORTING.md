@@ -17,11 +17,20 @@ The recommended host workspace is outside the source repository:
 │   ├── evaluate/ # immutable traces, metrics, videos and provenance
 │   └── train/    # canonical training evidence and staged output
 └── exports/
-    ├── grouped/     # explicitly selected comparison exports
-    ├── isolated/    # per-run publication exports
-    ├── derived/     # regenerable benchmark and training HTML reports
-    └── interactive/ # offline graphical report companions
+    ├── evaluate/
+    │   ├── grouped/     # explicitly selected comparison exports
+    │   ├── isolated/    # per-run publication exports
+    │   ├── derived/     # regenerable evaluation HTML reports
+    │   └── interactive/ # offline graphical report companions
+    └── train/
+        ├── derived/     # regenerable training HTML reports
+        └── interactive/ # offline graphical training reports
 ```
+
+New generated outputs are separated by run type under `exports/train/` and
+`exports/evaluate/`, matching `runs/train/` and `runs/evaluate/`. Existing flat
+export trees remain readable by verification and data lifecycle commands; they
+are not moved automatically. Archiving preserves each artifact’s existing layout.
 
 The CLI uses the repository sibling `ovlab-data/` by default. Override the
 locations only when required by the host:
@@ -128,7 +137,7 @@ the same build instead of creating a semantically duplicate report.
 Reports are stored by canonical run ID, profile, and deterministic build ID:
 
 ```text
-exports/derived/<run-id>/<profile-id>/
+exports/evaluate/derived/<run-id>/<profile-id>/
 ├── latest.json
 └── <derived-build-id>/
     ├── index.html
@@ -182,8 +191,8 @@ generate both report variants automatically. Their JSON result includes
 `interactive_output`, `interactive_build_id`, and `interactive_integrity`.
 
 ```text
-exports/interactive/
-├── <run-id>/<profile-id>/
+exports/
+├── evaluate/interactive/<run-id>/<profile-id>/
 │   ├── latest.json
 │   └── <interactive-build-id>/
 │       ├── index.html
@@ -191,7 +200,7 @@ exports/interactive/
 │       ├── manifest.json
 │       ├── assets/dashboard.{css,js}
 │       └── tasks/<task-key>/index.html
-└── training/<training-run-id>/system-performance/
+└── train/interactive/<training-run-id>/system-performance/
     ├── latest.json
     └── <interactive-build-id>/
         ├── index.html
@@ -227,6 +236,14 @@ action-token accuracy for each optimizer step. Dataset size and examples seen
 (which can include repeated records) remain separate. Loss retains its existing
 meaning: the last microbatch loss at the recorded optimizer step.
 
+The model is illustrated with an interactive processing diagram: select a stage
+with a pointer or keyboard to inspect its captured inputs, model settings and
+outputs. The report highlights outcomes, training loss, accuracy and missing
+evidence. Evidence details start open. Charts support exact sample inspection
+with the keyboard and zoom controls, alongside complete tables of the recorded
+series and training metrics. Responsive layouts, visible keyboard focus, reduced
+motion support and print styles keep the same evidence usable across devices.
+
 Historical runs can be regenerated immediately. Missing batch captures,
 dataset counts or accuracy remain **Unavailable**, without inferred example
 counts or fabricated samples. Robot task success is shown for eval; train
@@ -236,8 +253,8 @@ A single eval episode has a binary outcome rather than a statistical rate.
 Dashboard builds have deterministic identities and file manifests. Existing
 `report verify` and `train report --verify` commands also verify the companion
 dashboard for new builds, including missing, extra and modified files. Previous
-HTML builds remain verifiable without a dashboard. Keep `exports/derived/` and
-`exports/interactive/` together when relocating reports.
+HTML builds remain verifiable without a dashboard. Keep each category’s `derived/` and `interactive/` directories together when
+relocating reports.
 
 ## Verify a report
 
@@ -320,7 +337,7 @@ checkpoint finalizer succeeds. The commands above regenerate or verify it
 without starting a trainer.
 
 Output is stored under
-`exports/derived/training/<training-run-id>/system-performance/<build-id>/`. Training
+`exports/train/derived/<training-run-id>/system-performance/<build-id>/`. Training
 reports show optimizer-step VRAM tracking and peaks, exact total/trainable/
 frozen/adapter counts, step duration and loss statistics, and estimated GFLOPs
 per optimizer step and in total. The estimator is the documented dense-model
@@ -381,7 +398,7 @@ To export exactly one episode instead of the full run:
 The layout is:
 
 ```text
-exports/isolated/<run-name>/
+exports/evaluate/isolated/<run-name>/
 ├── episodes/
 │   ├── tables/
 │   │   ├── <episode>__statistics.csv
@@ -441,7 +458,7 @@ selection mode:
 The layout is:
 
 ```text
-exports/grouped/<group-name>/
+exports/evaluate/grouped/<group-name>/
 ├── tables/
 │   ├── run-summary.csv
 │   ├── episode-summary.csv

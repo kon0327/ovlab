@@ -116,18 +116,25 @@ Interactive execution asks for an explicit confirmation. Automation must use
 ./ovlab data archive --all --yes --json
 ```
 
+New reports and exports use `exports/train/` or `exports/evaluate/`. Legacy flat
+exports remain manageable without moving them. If the same artifact exists in
+both layouts, the ordinary ID selects the typed copy; `data list` also shows a
+`legacy:` ID for the older copy, such as `legacy:training:RUN` for a training
+report or `legacy:isolated:RUN` for an export. Archive operations preserve each
+copy’s existing relative path.
+
 Archive paths mirror the active layout:
 
 ```text
 archive/
 ├── runs/train/<training-run-id>/
 ├── runs/evaluate/<evaluation-run-id>/
-├── exports/derived/<run-id>/
-├── exports/derived/training/<training-run-id>/
-├── exports/interactive/<run-id>/
-├── exports/interactive/training/<training-run-id>/
-├── exports/isolated/<run-id>/
-├── exports/grouped/<group-id>/
+├── exports/evaluate/derived/<run-id>/
+├── exports/train/derived/<training-run-id>/
+├── exports/evaluate/interactive/<run-id>/
+├── exports/train/interactive/<training-run-id>/
+├── exports/evaluate/isolated/<run-id>/
+├── exports/evaluate/grouped/<group-id>/
 └── manifests/
     ├── run/train/<training-run-id>.json
     ├── run/evaluate/<evaluation-run-id>.json

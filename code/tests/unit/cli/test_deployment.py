@@ -108,6 +108,7 @@ def deployment_environment(tmp_path):
         "PATH": os.environ["PATH"],
         "OVLAB_DATASETS_PATH": str(datasets),
         "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(runs.parent / "exports"),
     }
 
 
@@ -188,6 +189,7 @@ def test_success_reports_new_host_run_path(tmp_path):
             "PATH": os.environ["PATH"],
             "OVLAB_DATASETS_PATH": str(datasets),
             "OVLAB_RUNS_ROOT": str(runs),
+            "OVLAB_EXPORTS_ROOT": str(runs.parent / "exports"),
         },
         runner=runner,
     )
@@ -483,6 +485,7 @@ def test_missing_dataset_mount_fails_before_compose(tmp_path):
     deployment = ComposeDeployment(REPOSITORY, environment={
         "OVLAB_DATASETS_PATH": str(datasets),
         "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(runs.parent / "exports"),
     }, runner=runner)
     plan = deployment.plan(
         OFT, profile="oft", renderer="egl", env_file=ENV_FILE,
@@ -502,6 +505,7 @@ def test_unset_dataset_path_uses_managed_storage_next_to_runs(tmp_path):
     deployment = ComposeDeployment(REPOSITORY, environment={
         "PATH": os.environ["PATH"],
         "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(runs.parent / "exports"),
     }, runner=runner)
     plan = deployment.plan(
         OFT, profile="oft", renderer="egl", env_file=ENV_FILE,
@@ -527,6 +531,7 @@ def test_missing_runs_root_is_created_setgid_without_world_access(tmp_path):
     deployment = ComposeDeployment(REPOSITORY, environment={
         "OVLAB_DATASETS_PATH": str(datasets),
         "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(runs.parent / "exports"),
     }, runner=runner)
     plan = deployment.plan(
         LORA, profile="openvla", renderer="egl", env_file=ENV_FILE,

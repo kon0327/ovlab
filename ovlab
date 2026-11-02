@@ -166,7 +166,7 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
         runs_root="$(realpath -m -- "${OVLAB_RUNS_ROOT:-$model_data_root/runs}")"
         training_runs_root="$(realpath -m -- "$model_data_root/training-runs")"
         exports_root="$(realpath -m -- "${OVLAB_EXPORTS_ROOT:-$model_data_root/exports}")"
-        derived_root="$exports_root/derived"
+        derived_root="$exports_root/train/derived"
         if [[ ! -d "$runs_root/train" && ! -d "$training_runs_root" ]]; then
             echo "ovlab: training run directories do not exist: $runs_root/train or $training_runs_root" >&2
             exit 4
@@ -192,18 +192,21 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
             [[ "$argument" == "--verify" ]] && training_report_verify="true"
         done
         if [[ "$training_report_verify" == "true" ]]; then
+            if [[ ! -d "$derived_root" && -d "$exports_root/derived" ]]; then
+                derived_root="$exports_root/derived"
+            fi
             if [[ ! -d "$derived_root" ]]; then
                 echo "ovlab: derived report directory does not exist: $derived_root" >&2
                 exit 4
             fi
             exports_mount="type=bind,source=$exports_root,target=/var/lib/ovlab/exports,readonly"
         else
-            mkdir -p -- "$derived_root" "$exports_root/interactive"
-            chmod 2770 -- "$exports_root" "$derived_root" "$exports_root/interactive"
+            mkdir -p -- "$derived_root" "$exports_root/train/interactive"
+            chmod 2770 -- "$exports_root" "$exports_root/train" "$derived_root" "$exports_root/train/interactive"
             exports_mount="type=bind,source=$exports_root,target=/var/lib/ovlab/exports"
         fi
         declare -A training_report_groups=(["$(id -g)"]=1)
-        for report_root in "${training_report_roots[@]}" "$exports_root" "$derived_root" "$exports_root/interactive"; do
+        for report_root in "${training_report_roots[@]}" "$exports_root" "$exports_root/train" "$derived_root" "$exports_root/train/interactive" "$exports_root/interactive"; do
             if [[ -d "$report_root" ]]; then
                 training_report_groups["$(stat -c %g -- "$report_root")"]=1
             fi
@@ -243,7 +246,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
         configs_root="${OVLAB_CONFIGS_ROOT:-$repository_root/configs}"
         runs_root="$(realpath -m -- "$runs_root")"
         exports_root="$(realpath -m -- "$exports_root")"
-        derived_root="$exports_root/derived"
+        derived_root="$exports_root/evaluate/derived"
         configs_root="$(realpath -m -- "$configs_root")"
         if [[ "${1:-}" != "report" || "${2:-}" != "profiles" ]] && [[ ! -d "$runs_root" ]]; then
             echo "ovlab: canonical run source directory does not exist: $runs_root" >&2
@@ -280,6 +283,9 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 --mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly"
             )
             if [[ "$verification_kind" == "report" ]]; then
+                if [[ ! -d "$derived_root" && -d "$exports_root/derived" ]]; then
+                    derived_root="$exports_root/derived"
+                fi
                 if [[ ! -d "$derived_root" ]]; then
                     echo "ovlab: derived report directory does not exist: $derived_root" >&2
                     exit 4
@@ -311,8 +317,8 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 "${verification_mounts[@]}" \
                 "$reporting_image" "$@"
         fi
-        mkdir -p -- "$runs_root" "$exports_root/derived" "$exports_root/interactive" "$exports_root/isolated" "$exports_root/grouped"
-        if ! chmod 2770 -- "$exports_root" "$exports_root/derived" "$exports_root/interactive" "$exports_root/isolated" "$exports_root/grouped"; then
+        mkdir -p -- "$runs_root" "$exports_root/evaluate/derived" "$exports_root/evaluate/interactive" "$exports_root/evaluate/isolated" "$exports_root/evaluate/grouped"
+        if ! chmod 2770 -- "$exports_root" "$exports_root/evaluate" "$exports_root/evaluate/derived" "$exports_root/evaluate/interactive" "$exports_root/evaluate/isolated" "$exports_root/evaluate/grouped"; then
             echo "ovlab: cannot establish group-writable reporting output directories." >&2
             exit 6
         fi

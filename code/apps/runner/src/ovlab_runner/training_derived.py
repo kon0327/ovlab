@@ -216,6 +216,7 @@ class TrainingDerivedReportEngine:
     def __init__(self, training_runs_root: str | Path, derived_root: str | Path):
         self.training_runs_root = Path(training_runs_root).expanduser().resolve()
         self.derived_root = Path(derived_root).expanduser().resolve()
+        self.report_root = self.derived_root if self.derived_root.parent.name == "train" else self.derived_root / "training"
         display = os.environ.get("OVLAB_DERIVED_DISPLAY_ROOT")
         self.display_root = Path(display).expanduser() if display else self.derived_root
 
@@ -238,7 +239,7 @@ class TrainingDerivedReportEngine:
         model = build_training_performance_model(source)
         identity = {"source": model["source"], "renderer": TRAINING_REPORT_RENDERER, "schema": TRAINING_REPORT_SCHEMA}
         build_id = _digest(identity)[:20]
-        profile_root = self.derived_root / "training" / run_id / "system-performance"
+        profile_root = self.report_root / run_id / "system-performance"
         target = profile_root / build_id
         if target.is_dir():
             self.verify(run_id, build_id=build_id, _verify_interactive=False)
@@ -266,9 +267,9 @@ class TrainingDerivedReportEngine:
             target.parent.mkdir(parents=True, exist_ok=True)
             stage.rename(target)
             (profile_root / "latest.json").write_bytes(_canonical({"schema_version": "ovlab.training-report-latest/v1", "derived_build_id": build_id}))
-            training_report_root = self.derived_root / "training"
-            finalize_managed_tree(training_report_root)
-            finalize_managed_directory(training_report_root.parent)
+            finalize_managed_tree(self.report_root / run_id)
+            finalize_managed_directory(self.report_root)
+            finalize_managed_directory(self.derived_root)
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             raise
@@ -278,7 +279,7 @@ class TrainingDerivedReportEngine:
     def verify(self, run_id: str, *, build_id: str | None = None, _verify_interactive: bool = True) -> dict[str, object]:
         source = self._source(run_id)
         _verify_training_run(source)
-        profile_root = self.derived_root / "training" / run_id / "system-performance"
+        profile_root = self.report_root / run_id / "system-performance"
         if build_id is None:
             build_id = str(_read_json(profile_root / "latest.json")["derived_build_id"])
         target = (profile_root / build_id).resolve()

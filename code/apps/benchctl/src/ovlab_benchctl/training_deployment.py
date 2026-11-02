@@ -273,9 +273,9 @@ class TrainingDeployment:
         ).expanduser().resolve()
         exports_root.mkdir(parents=True, exist_ok=True)
         exports_root.chmod(0o2770)
-        derived_root = exports_root / "derived"
-        interactive_root = exports_root / "interactive"
-        for output_root in (derived_root, interactive_root):
+        derived_root = exports_root / "train" / "derived"
+        interactive_root = exports_root / "train" / "interactive"
+        for output_root in (exports_root / "train", derived_root, interactive_root):
             output_root.mkdir(parents=True, exist_ok=True)
             output_root.chmod(0o2770)
         reporting = [

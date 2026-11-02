@@ -22,7 +22,7 @@ from .permissions import finalize_managed_tree
 
 
 SCHEMA = "ovlab.interactive-report/v1"
-RENDERER = "ovlab-interactive-dashboard@1.0.0"
+RENDERER = "ovlab-interactive-dashboard@1.1.0"
 
 
 def _clean(value):
@@ -213,14 +213,14 @@ def _page(data, prefix, links, source_href):
     navigation = "".join(f'<a href="{html.escape(href, quote=True)}">{html.escape(label)}</a>' for label, href in links)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OVLAB · {html.escape(data["run_id"])} · {data["mode"]}</title><link rel="stylesheet" href="{prefix}assets/dashboard.css"></head>
-<body><aside><a class="brand" href="{prefix}index.html">OVLAB<span>Interactive reports</span></a><nav><a href="#overview">Overview</a><a href="#flow">Model data flow</a><a href="#explorer">Batch &amp; record explorer</a><a href="#parameters">Hyperparameters</a><a href="#performance">Performance</a>{navigation}</nav><a href="{html.escape(source_href, quote=True)}">Existing HTML report ↗</a><a href="{prefix}report.json">Dashboard data ↗</a></aside>
-<main><header><p class="eyebrow">OVLAB / {data["mode"].upper()} / {html.escape(data.get("scope_label", "Run overview"))}</p><h1>Model evidence dashboard</h1><p class="identity">{html.escape(data["run_id"])}</p><span class="badge">{html.escape(str(data["status"]))}</span></header>
+<body><a class="skip-link" href="#overview">Skip to report</a><aside><a class="brand" href="{prefix}index.html">OVLAB<span>Interactive reports</span></a><nav aria-label="Report sections"><a href="#overview">Overview &amp; outcome</a><a href="#flow">Interactive model</a><a href="#explorer">Batch &amp; record explorer</a><a href="#performance">Performance &amp; metrics</a><a href="#parameters">Hyperparameters</a></nav><div class="related"><p>Report navigation</p>{navigation}<a href="{html.escape(source_href, quote=True)}">Full HTML report</a><a href="{prefix}report.json">Complete dashboard JSON</a></div></aside>
+<main><header><p class="eyebrow">OVLAB / {"Train" if data["mode"] == "train" else "Evaluate"} / {html.escape(data.get("scope_label", "Run overview"))}</p><div class="heading-row"><h1>Model evidence dashboard</h1><span class="badge" data-status="{html.escape(str(data["status"]), quote=True)}">{html.escape(str(data["status"]))}</span></div><p class="identity">{html.escape(data["run_id"])}</p><p>Follow the evidence from model inputs to measured results.</p></header>
 <noscript><p>Enable JavaScript for record selection and charts. Full evidence is available in report.json and the existing HTML report.</p></noscript>
-<section id="overview"><h2>Dataset at a glance</h2><div id="kpis" class="grid"></div><div id="notes" class="notes"></div></section>
-<section id="flow"><h2>What enters and leaves the model?</h2><div id="flow-content" class="flow"></div></section>
-<section id="explorer"><h2>From the full run to a single record</h2><div id="selectors" class="toolbar"></div><div id="batch" class="notes"></div><div id="record" class="grid detail"></div></section>
-<section id="parameters"><h2>Hyperparameters · model settings</h2><label>Find a setting <input id="parameter-search" type="search" placeholder="learning rate, rank, precision…"></label><div class="table-scroll"><table><thead><tr><th>Setting / canonical path</th><th>Value</th></tr></thead><tbody id="parameter-rows"></tbody></table></div></section>
-<section id="performance"><h2>How did the model perform?</h2><div id="outcome"></div><div id="charts" class="grid"></div><div id="metric-table" class="table-scroll"></div></section>
+<section id="overview"><h2>Run at a glance</h2><div id="outcome" class="outcome"></div><div id="highlights" class="grid highlights"></div><div id="kpis" class="grid count-grid"></div><div class="evidence-notes"><h3>Evidence &amp; interpretation</h3><div id="notes" class="notes"></div></div></section>
+<section id="flow"><h2>Inside the model data flow</h2><p id="model-help">Select a stage to trace its connections and highlight its evidence. Every stage description stays visible. This schematic describes the recorded data contract; it does not infer unrecorded model internals.</p><div id="model-illustration" tabindex="0" role="region" aria-label="Interactive model diagram" aria-describedby="model-help"></div><div id="flow-content" class="flow"></div></section>
+<section id="explorer"><h2>Inspect a batch or policy call</h2><div id="selectors" class="toolbar"></div><div id="batch" class="notes" aria-live="polite"></div><div id="record" class="grid detail"></div></section>
+<section id="performance"><h2>Performance &amp; full metrics</h2><p>Inspect exact samples, zoom a chart, or read its complete recorded series below.</p><div id="charts" class="grid charts"></div><div id="metric-table" class="metric-tables"></div></section>
+<section id="parameters"><h2>Hyperparameters &amp; model settings</h2><label for="parameter-search">Find a setting</label><input id="parameter-search" type="search" placeholder="learning rate, rank, precision…"><p id="parameter-count" class="caption" role="status"></p><div class="table-scroll" tabindex="0" role="region" aria-label="Hyperparameters"><table><thead><tr><th scope="col">Setting / canonical path</th><th scope="col">Value</th></tr></thead><tbody id="parameter-rows"></tbody></table></div></section>
 <footer>Offline · canonical evidence stays read-only · missing values remain unavailable · <a href="{prefix}manifest.json">Integrity manifest</a></footer></main>
 <script id="dashboard-data" type="application/json">{payload}</script><script src="{prefix}assets/dashboard.js" defer></script></body></html>'''
 

@@ -339,16 +339,16 @@ def test_source_launcher_uses_dedicated_reporting_container(tmp_path):
     assert "--network" in arguments and "none" in arguments
     assert "OVLAB_RUNS_ROOT=/var/lib/ovlab/runs" in arguments
     assert "OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports" in arguments
-    assert f"OVLAB_DERIVED_DISPLAY_ROOT={data / 'exports' / 'derived'}" in arguments
+    assert f"OVLAB_DERIVED_DISPLAY_ROOT={data / 'exports' / 'evaluate' / 'derived'}" in arguments
     assert f"OVLAB_EXPORTS_DISPLAY_ROOT={data / 'exports'}" in arguments
     assert any("target=/var/lib/ovlab/runs,readonly" in value for value in arguments)
     assert any("target=/var/lib/ovlab/exports" in value for value in arguments)
     assert arguments[-4:] == ["export", "isolated", "--run", "run-id"]
     assert (data / "exports").stat().st_mode & 0o7777 == 0o2770
-    assert (data / "exports/derived").stat().st_mode & 0o7777 == 0o2770
-    assert (data / "exports/interactive").stat().st_mode & 0o7777 == 0o2770
-    assert (data / "exports/isolated").stat().st_mode & 0o7777 == 0o2770
-    assert (data / "exports/grouped").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/evaluate/derived").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/evaluate/interactive").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/evaluate/isolated").stat().st_mode & 0o7777 == 0o2770
+    assert (data / "exports/evaluate/grouped").stat().st_mode & 0o7777 == 0o2770
 
 
 def test_report_profiles_uses_read_only_registry_container_without_data_directories(tmp_path):

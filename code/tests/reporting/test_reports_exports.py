@@ -116,6 +116,20 @@ def test_interactive_eval_chunk_alignment_and_script_escaping(tmp_path):
     assert "\\u003c/script\\u003e" in page
 
 
+def test_application_verifies_explicit_legacy_build_alongside_typed_reports(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    run_id, _ = _canonical_run(runs)
+    exports = tmp_path / "exports"
+    legacy = DerivedReportEngine(runs, exports / "derived")
+    generated = legacy.generate(run_id)
+    (exports / "evaluate/derived" / run_id).mkdir(parents=True)
+    monkeypatch.setenv("OVLAB_DERIVED_DISPLAY_ROOT", str(exports / "evaluate/derived"))
+    app = OvlabApplication(REPOSITORY, environment={"OVLAB_DATA_ROOT": str(tmp_path)})
+    verified = app.report_verify(run_id, build_id=generated["derived_build_id"])
+    assert verified["integrity"] == "verified"
+    assert Path(verified["interactive_output"]).is_dir()
+
+
 class AlternatingBenchmark(TrackingBenchmark):
     def _reset_episode(self, context):
         result = super()._reset_episode(context)
@@ -453,7 +467,7 @@ def test_isolated_episode_and_run_exports_are_readable_atomic_units(tmp_path):
     episode_result = engine.generate_isolated(run_id, episode_id=episode_id)
     target = Path(episode_result["output"])
     metadata = json.loads((target / "metadata.json").read_text(encoding="utf-8"))
-    assert target == exports / "isolated" / run_id
+    assert target == exports / "evaluate/isolated" / run_id
     assert metadata["export_type"] == "isolated"
     assert metadata["source"]["scope"] == "episode"
     assert metadata["source"]["episodes"] == [episode_id]
@@ -511,7 +525,7 @@ def test_grouped_manual_all_and_same_model_exports(tmp_path):
     generated = engine.generate_grouped("manual-comparison", run_ids=[second, first])
     target = Path(generated["output"])
     metadata = json.loads((target / "metadata.json").read_text(encoding="utf-8"))
-    assert target == exports / "grouped/manual-comparison"
+    assert target == exports / "evaluate/grouped/manual-comparison"
     assert metadata["source"]["runs"] == sorted([first, second])
     assert metadata["source"]["selection"]["mode"] == "manual"
     assert (target / "tables/run-summary.csv").is_file()
@@ -542,6 +556,12 @@ def test_grouped_manual_all_and_same_model_exports(tmp_path):
     assert same["source_run_ids"] == sorted([first, second])
     all_runs = engine.generate_grouped("all-runs", all_runs=True)
     assert all_runs["source_run_ids"] == sorted([first, second])
+    legacy = exports / "grouped/manual-comparison"
+    legacy.parent.mkdir(parents=True)
+    target.rename(legacy)
+    verified_legacy = engine.verify("grouped", "manual-comparison")
+    assert verified_legacy["integrity"] == "verified"
+    assert Path(verified_legacy["output"]) == legacy
     with pytest.raises(ArtifactError, match="exactly one selector"):
         engine.generate_grouped("invalid", all_runs=True, run_ids=[first])
     with pytest.raises(ArtifactError, match="unknown grouped export template"):
@@ -611,7 +631,7 @@ def test_external_publish_can_skip_html_but_keeps_isolated_export_and_read_only_
 
     assert result["report"] is None
     assert result["isolated_export"]["integrity"] == "verified"
-    assert not (data / "exports/derived").exists()
+    assert not (data / "exports/evaluate/derived").exists()
     assert (run_path / "integrity.json").read_bytes() == before
 
 
@@ -651,7 +671,7 @@ def test_unified_cli_report_and_export_json_workflows(tmp_path):
     generated = invoke("report", "generate", "--run", run_id, "--profile", "libero-task-default", "--json")
     assert generated.returncode == 0 and generated.stderr == ""
     result = json.loads(generated.stdout)["result"]
-    assert Path(result["output"]).is_relative_to(data / "exports/derived")
+    assert Path(result["output"]).is_relative_to(data / "exports/evaluate/derived")
     verified = invoke("report", "verify", "--run", run_id, "--profile", "libero-task-default", "--build", result["derived_build_id"], "--json")
     assert verified.returncode == 0 and json.loads(verified.stdout)["result"]["integrity"] == "verified"
     task = invoke("report", "generate", "--run", run_id, "--task", "mock-task-0", "--profile", "libero-task-default", "--json")
@@ -670,13 +690,13 @@ def test_unified_cli_report_and_export_json_workflows(tmp_path):
     isolated = invoke("export", "isolated", "--run", run_id, "--json")
     assert isolated.returncode == 0 and isolated.stderr == ""
     isolated_result = json.loads(isolated.stdout)["result"]
-    assert Path(isolated_result["output"]) == data / "exports/isolated" / run_id
+    assert Path(isolated_result["output"]) == data / "exports/evaluate/isolated" / run_id
     checked = invoke("export", "verify", "--kind", "isolated", "--name", run_id, "--json")
     assert checked.returncode == 0 and json.loads(checked.stdout)["result"]["integrity"] == "verified"
 
     grouped = invoke("export", "grouped", "--name", "cli-group", "--runs", run_id, "--json")
     assert grouped.returncode == 0 and grouped.stderr == ""
     group_result = json.loads(grouped.stdout)["result"]
-    assert Path(group_result["output"]) == data / "exports/grouped/cli-group"
+    assert Path(group_result["output"]) == data / "exports/evaluate/grouped/cli-group"
     checked = invoke("export", "verify", "--kind", "grouped", "--name", "cli-group", "--json")
     assert checked.returncode == 0 and json.loads(checked.stdout)["result"]["integrity"] == "verified"

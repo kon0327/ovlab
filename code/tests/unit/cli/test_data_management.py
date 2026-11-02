@@ -89,6 +89,59 @@ def test_data_list_compact_detail_and_training_report_identity(tmp_path):
     assert run_item["run_hash"] == run_hash("run-1")
 
 
+def test_typed_exports_list_and_archive_with_interactive_companions(tmp_path):
+    data = tmp_path / "data"
+    _tree(data)
+    exports = data / "exports"
+    (exports / "train").mkdir()
+    (exports / "evaluate").mkdir()
+    for family in ("derived", "interactive"):
+        (exports / "train" / family).mkdir()
+        (exports / family / "training/training-1").rename(exports / "train" / family / "training-1")
+        (exports / family / "training").rmdir()
+        (exports / family).rename(exports / "evaluate" / family)
+    for family in ("isolated", "grouped"):
+        (exports / family).rename(exports / "evaluate" / family)
+
+    manager = DataManager(data, data / "runs")
+    items = manager.list()["items"]
+    reports = [item for item in items if item["kind"] == "report"]
+    assert {item["id"] for item in reports} == {"run-1", "training:training-1"}
+    manager.archive(all_data=True)
+    archived = data / "archive/exports"
+    assert (archived / "train/derived/training-1/system-performance/build-1/manifest.json").is_file()
+    assert (archived / "train/interactive/training-1/system-performance/build-1/index.html").is_file()
+    assert (archived / "evaluate/interactive/run-1/libero-task-default/build-1/index.html").is_file()
+    assert (archived / "evaluate/isolated/run-1/metadata.json").is_file()
+    assert len(manager.list(archived=True)["items"]) == 5
+
+
+def test_regenerated_artifacts_coexist_with_legacy_layout_and_remain_selectable(tmp_path):
+    import shutil
+
+    data = tmp_path / "data"
+    _tree(data)
+    exports = data / "exports"
+    for family in ("derived", "interactive", "isolated", "grouped"):
+        shutil.copytree(exports / family, exports / "evaluate" / family)
+    # Training has a separate typed root, with no training/ subdirectory.
+    (exports / "train").mkdir()
+    for family in ("derived", "interactive"):
+        shutil.move(exports / "evaluate" / family / "training", exports / "train" / family)
+    manager = DataManager(data, data / "runs")
+    items = manager.list()["items"]
+    assert len(items) == 9
+    assert {item["id"] for item in items if item["kind"] == "report"} == {
+        "run-1", "training:training-1", "legacy:run-1", "legacy:training:training-1",
+    }
+    assert manager.select(report_id=run_hash("run-1"))[0].path == exports / "evaluate/derived/run-1"
+    assert manager.select(export_id="isolated:run-1")[0].path == exports / "evaluate/isolated/run-1"
+    assert manager.select(export_id="legacy:isolated:run-1")[0].path == exports / "isolated/run-1"
+    assert manager.select(report_id="legacy:training:training-1")[0].path == exports / "derived/training/training-1"
+    manager.archive(all_data=True)
+    assert len(manager.list(archived=True)["items"]) == 9
+
+
 def test_run_report_and_isolated_export_accept_displayed_run_hash(tmp_path):
     data = tmp_path / "data"
     run, report, _, isolated, _, _ = _tree(data)

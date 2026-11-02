@@ -981,6 +981,7 @@ class ExportEngine:
     def __init__(self, runs_root, exports_root):
         self.runs_root = Path(runs_root).expanduser().resolve()
         self.exports_root = Path(exports_root).expanduser().resolve()
+        self.evaluation_root = self.exports_root / "evaluate"
         display = os.environ.get("OVLAB_EXPORTS_DISPLAY_ROOT")
         self.display_root = Path(display).expanduser() if display else self.exports_root
 
@@ -994,7 +995,7 @@ class ExportEngine:
             raise ArtifactError(f"unknown isolated export template: {template}")
         record = _record(self.runs_root, run_id)
         episodes = _episode_data(record, episode_id)
-        target = _inside(self.exports_root / "isolated" / run_key(run_id), self.exports_root, "isolated export")
+        target = _inside(self.evaluation_root / "isolated" / run_key(run_id), self.exports_root, "isolated export")
         stage = target.parent / f".{target.name}.{uuid.uuid4().hex}.partial"
         stage.mkdir(parents=True)
         omitted = []
@@ -1101,7 +1102,7 @@ class ExportEngine:
         _validate_metric_compatibility(records)
         episode_map = {record["run_id"]: _episode_data(record) for record in records}
         run_rows = _run_summary(records, episode_map)
-        target = _inside(self.exports_root / "grouped" / group_name, self.exports_root, "grouped export")
+        target = _inside(self.evaluation_root / "grouped" / group_name, self.exports_root, "grouped export")
         stage = target.parent / f".{group_name}.{uuid.uuid4().hex}.partial"
         stage.mkdir(parents=True)
         try:
@@ -1199,7 +1200,9 @@ class ExportEngine:
             key = _portable_id(name, "group name")
         else:
             key = run_key(name)
-        target = _inside(self.exports_root / kind / key, self.exports_root, "export")
+        target = _inside(self.evaluation_root / kind / key, self.exports_root, "export")
+        if not target.is_dir():
+            target = _inside(self.exports_root / kind / key, self.exports_root, "legacy export")
         metadata = _json(target / "metadata.json")
         if metadata.get("schema_version") != EXPORT_METADATA_SCHEMA or metadata.get("export_type") != kind:
             raise ArtifactError("unsupported export metadata schema or type")
