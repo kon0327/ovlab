@@ -14,12 +14,13 @@ import uuid
 from .derived import _chart_statistics, _chart_svg, _descriptive_statistics
 from .errors import ArtifactError, ReportingSourceUnavailableError
 from .interactive import publish_dashboard, verify_dashboard
-from .permissions import finalize_managed_directory, finalize_managed_tree
+from .key_parameters import training_parameters
+from .permissions import MANAGED_FILE_MODE, finalize_managed_directory, finalize_managed_tree
 
 
 TRAINING_REPORT_SCHEMA = "ovlab.training-performance-report/v1"
 TRAINING_REPORT_MANIFEST_SCHEMA = "ovlab.training-performance-report-manifest/v1"
-TRAINING_REPORT_RENDERER = "ovlab-training-performance-html@1.1.0"
+TRAINING_REPORT_RENDERER = "ovlab-training-performance-html@1.2.0"
 
 
 def _canonical(value) -> bytes:
@@ -87,6 +88,7 @@ def build_training_performance_model(training_run: str | Path) -> dict[str, obje
     manifest = _verify_training_run(root)
     result = _read_json(root / "result.json")
     plan = _read_json(root / "training-plan.json")
+    evidence = _read_json(root / "data-flow.json") if (root / "data-flow.json").is_file() else None
     metrics = _read_metrics(root / "metrics.jsonl")
     allocated = [float(row["gpu_memory_allocated_bytes"]) / (1024 * 1024) for row in metrics if isinstance(row.get("gpu_memory_allocated_bytes"), int | float)]
     reserved = [float(row["gpu_memory_reserved_bytes"]) / (1024 * 1024) for row in metrics if isinstance(row.get("gpu_memory_reserved_bytes"), int | float)]
@@ -123,6 +125,7 @@ def build_training_performance_model(training_run: str | Path) -> dict[str, obje
         "checkpoint_id": manifest.get("checkpoint_id"),
         "profile_id": plan.get("scientific", {}).get("profile", {}).get("id") if isinstance(plan.get("scientific"), dict) else None,
         "parameter_counts": parameter_counts,
+        "key_parameters": training_parameters(plan, result, manifest, evidence),
         "system_metrics": {
             "schema_version": "ovlab.system-metrics-summary/v1",
             "sample_count": len(metrics),
@@ -184,6 +187,21 @@ def _chart_model(model: dict[str, object]) -> dict[str, object]:
 def _html(model: dict[str, object], chart_statistics: dict[str, dict[str, object]]) -> str:
     counts = model["parameter_counts"]
     system = model["system_metrics"]
+    parameter_groups = []
+    for group in model["key_parameters"]:
+        items = []
+        for item in group["items"]:
+            value = "Unavailable" if item["value"] is None else str(item["value"])
+            source = item["source"] or "Not recorded"
+            items.append(
+                '<div class="parameter-item"><dt>' + html.escape(item["label"]) + '</dt>'
+                '<dd class="parameter-value">' + html.escape(value) + '</dd>'
+                '<dd class="parameter-source">' + html.escape(source) + '</dd></div>'
+            )
+        parameter_groups.append(
+            '<div class="parameter-group"><h3>' + html.escape(group["title"]) + '</h3><dl>'
+            + ''.join(items) + '</dl></div>'
+        )
     rows = []
     for chart_id in ("vram_tracking", "estimated_compute"):
         rows.append(
@@ -205,8 +223,9 @@ def _html(model: dict[str, object], chart_statistics: dict[str, dict[str, object
         f'{html.escape(str(estimator.get("qualification")))}</p>'
     )
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OVLAB training performance {html.escape(str(model["training_run_id"]))}</title><style>
-body{{font-family:system-ui,sans-serif;background:#f2f4f7;color:#172033;margin:0}}main{{max-width:1180px;margin:auto;padding:28px}}section{{background:#fff;border:1px solid #d0d5dd;border-radius:10px;padding:18px;margin:16px 0}}table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid #e4e7ec;padding:8px;text-align:left}}code{{overflow-wrap:anywhere}}.chart{{width:100%;height:430px}}
+body{{font-family:system-ui,sans-serif;background:#f2f4f7;color:#172033;margin:0}}main{{max-width:1180px;margin:auto;padding:28px}}section{{background:#fff;border:1px solid #d0d5dd;border-radius:10px;padding:18px;margin:16px 0}}table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid #e4e7ec;padding:8px;text-align:left}}code{{overflow-wrap:anywhere}}.chart{{width:100%;height:430px}}.parameter-groups{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr));gap:12px;align-items:start}}.parameter-group{{border:1px solid #cfdaeb;border-top:3px solid #2563a6;border-radius:6px;background:#f7faff;padding:14px;min-width:0}}.parameter-group h3{{margin:0 0 10px}}.parameter-group dl{{margin:0}}.parameter-item{{border-top:1px solid #dbe5f0;padding:8px 0;overflow-wrap:anywhere}}.parameter-item dt{{font-size:13px;color:#465b71}}.parameter-item dd{{margin:2px 0 0}}.parameter-value{{font-weight:700;color:#174e8a;font-variant-numeric:tabular-nums}}.parameter-source{{color:#52677c;font:11px/1.4 ui-monospace,monospace}}section>table{{display:block;max-width:100%;overflow-x:auto}}
 </style></head><body><main><h1>OVLAB training performance report</h1><section><h2>Identity</h2><p><strong>Training run:</strong> <code>{html.escape(str(model["training_run_id"]))}</code><br><strong>Status:</strong> {html.escape(str(model["status"]))}<br><strong>Checkpoint:</strong> <code>{html.escape(str(model["checkpoint_id"]))}</code></p></section>
+<section><h2>Key parameters</h2><p>Recorded configuration and model details. Source paths beginning with run/ refer to canonical run evidence; unavailable values were not recorded.</p><div class="parameter-groups">{''.join(parameter_groups)}</div></section>
 <section><h2>Model complexity</h2><table><thead><tr><th>Total</th><th>Trainable</th><th>Frozen</th><th>Adapter</th><th>Trainable adapter</th></tr></thead><tbody><tr><td>{counts.get("total", "unavailable")}</td><td>{counts.get("trainable", "unavailable")}</td><td>{counts.get("frozen", "unavailable")}</td><td>{counts.get("adapter", "unavailable")}</td><td>{counts.get("trainable_adapter", "unavailable")}</td></tr></tbody></table></section>
 <section><h2>System telemetry</h2><p>VRAM source: {html.escape(str(system["vram_source"]))}; {html.escape(str(system["vram_qualification"]))}. Compute: {html.escape(str(system["compute_qualification"]))}.</p>{estimator_html}<p><strong>Peak allocated:</strong> {system.get("peak_allocated_bytes", "unavailable")} bytes · <strong>Peak reserved:</strong> {system.get("peak_reserved_bytes", "unavailable")} bytes · <strong>Estimated total:</strong> {system.get("estimated_total_gflops", "unavailable")} GFLOPs</p>{''.join(rows)}</section>
 <section><h2>Provenance</h2><p>Canonical training evidence is read-only. Full data, estimator formulas and source checksums are in <a href="report.json">report.json</a>.</p></section></main></body></html>'''
@@ -266,8 +285,15 @@ class TrainingDerivedReportEngine:
             (stage / "manifest.json").write_bytes(_canonical(manifest))
             target.parent.mkdir(parents=True, exist_ok=True)
             stage.rename(target)
-            (profile_root / "latest.json").write_bytes(_canonical({"schema_version": "ovlab.training-report-latest/v1", "derived_build_id": build_id}))
-            finalize_managed_tree(self.report_root / run_id)
+            temporary = profile_root / f".latest.{uuid.uuid4().hex}.tmp"
+            temporary.write_bytes(_canonical({"schema_version": "ovlab.training-report-latest/v1", "derived_build_id": build_id}))
+            temporary.chmod(MANAGED_FILE_MODE)
+            temporary.replace(profile_root / "latest.json")
+            # Existing builds can be owned by the host or a different
+            # container UID. Only seal the build created by this publisher.
+            finalize_managed_tree(target)
+            finalize_managed_directory(profile_root)
+            finalize_managed_directory(self.report_root / run_id)
             finalize_managed_directory(self.report_root)
             finalize_managed_directory(self.derived_root)
         except Exception:

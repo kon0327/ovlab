@@ -121,6 +121,24 @@ def test_training_application_writes_typed_exports_and_verifies_legacy_reports(t
     assert Path(verified["interactive_output"]).is_dir()
 
 
+def test_new_training_build_does_not_change_previous_build_permissions(tmp_path, monkeypatch):
+    import ovlab_runner.training_derived as training_module
+
+    run = _training_run(tmp_path / "runs/train")
+    engine = TrainingDerivedReportEngine(run.parent, tmp_path / "exports/train/derived")
+    monkeypatch.setattr(training_module, "TRAINING_REPORT_RENDERER", "fixture-v1")
+    old = Path(engine.generate(run.name)["output"])
+    old.chmod(0o550)
+    try:
+        monkeypatch.setattr(training_module, "TRAINING_REPORT_RENDERER", "fixture-v2")
+        new = engine.generate(run.name)
+        assert Path(new["output"]) != old
+        assert old.stat().st_mode & 0o7777 == 0o550
+        assert (old.parent / "latest.json").stat().st_mode & 0o777 == 0o640
+    finally:
+        old.chmod(0o2770)
+
+
 def test_interactive_training_uses_actual_counts_and_forward_pass_evidence(tmp_path):
     from ovlab_benchctl.training_evidence import action_token_counts, capture_data_flow
     from types import SimpleNamespace
@@ -160,6 +178,17 @@ def test_interactive_training_uses_actual_counts_and_forward_pass_evidence(tmp_p
     before = {path.name: _sha(path) for path in run.iterdir()}
     generated = TrainingDerivedReportEngine(run.parent, tmp_path / "derived").generate(run.name)
     dashboard = json.loads((Path(generated["interactive_output"]) / "report.json").read_text())
+    parameters = {item["label"]: item for group in dashboard["key_parameters"] for item in group["items"]}
+    assert parameters["Learning rate"] == {
+        "label": "Learning rate", "value": .001,
+        "source": "run/training-plan.json:scientific.training.learning_rate",
+    }
+    assert parameters["Batch size per device"]["value"] == 1
+    assert parameters["Gradient accumulation steps"]["value"] == 2
+    assert parameters["Training objective"]["value"] is None
+    derived_html = (Path(generated["output"]) / "index.html").read_text()
+    assert "Key parameters" in derived_html and "0.001" in derived_html
+    assert "run/training-plan.json:scientific.training.learning_rate" in derived_html
     assert dashboard["counts"] == {"optimizer_steps": 2, "dataset_records": 123, "examples_seen": 4,
         "microbatches": 4, "supervised_action_tokens": 8}
     assert dashboard["hyperparameters"]["optimizer"]["betas"] == [.9, .999]

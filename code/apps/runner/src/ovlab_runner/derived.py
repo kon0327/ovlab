@@ -26,14 +26,15 @@ from .artifacts.layout import run_key, safe_key
 from .errors import ArtifactError, ReportingRendererError, ReportingSourceUnavailableError
 from .inspection import verify_run
 from .interactive import publish_dashboard, verify_dashboard
-from .permissions import finalize_managed_directory, finalize_managed_tree
+from .key_parameters import evaluation_parameters
+from .permissions import MANAGED_FILE_MODE, finalize_managed_directory, finalize_managed_tree
 
 
 REPORT_PROFILE_SCHEMA = "ovlab.report-profile/v1"
 REPORT_SCHEMA = "ovlab.report/v1"
 REPORT_MANIFEST_SCHEMA = "ovlab.report-manifest/v1"
 REPORT_RENDERER_ID = "ovlab-jinja-static-html"
-REPORT_RENDERER_VERSION = "1.6.0"
+REPORT_RENDERER_VERSION = "1.7.0"
 CHART_BUILDERS = {
     "action_timeseries": "1.2.0",
     "latency_distribution": "1.2.0",
@@ -635,6 +636,7 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
         },
         "benchmark": connection.get("benchmark"),
         "policy": connection.get("policy"),
+        "key_parameters": evaluation_parameters(plan, connection, complexity),
         "performance": {
             "telemetry_schema": "ovlab.performance-telemetry/v1",
             "model_complexity": complexity,
@@ -1213,8 +1215,13 @@ class DerivedReportEngine:
                 "schema_version": "ovlab.report-latest/v1", "derived_build_id": build_id,
                 "status": manifest["status"], "scope": model["scope"], "scope_task_id": task_id,
             })
+            (profile_root / "latest.json").chmod(MANAGED_FILE_MODE)
             run_report_root = self.derived_root / run_key(run_id)
-            finalize_managed_tree(run_report_root)
+            # Older builds may be owned by another reporting UID. Seal only the
+            # new immutable build and leave existing sibling artifacts intact.
+            finalize_managed_tree(target)
+            finalize_managed_directory(profile_root)
+            finalize_managed_directory(run_report_root)
             finalize_managed_directory(run_report_root.parent)
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)

@@ -8,6 +8,7 @@
 <p><strong>Experiment:</strong> {{ model.run.experiment_name or model.run.experiment }}</p>
 <p><strong>Policy:</strong> {{ model.policy.name }} {{ model.policy.version }} · <strong>Benchmark:</strong> {{ model.benchmark.name }} {{ model.benchmark.version }}</p>
 <p><strong>Scientific config:</strong> <code>{{ model.run.scientific_config_hash }}</code><br><strong>Execution config:</strong> <code>{{ model.run.execution_config_hash }}</code></p></section>
+<section class="card key-parameters"><h2>Key parameters</h2><p>Recorded configuration and model details. Source paths beginning with run/ refer to canonical run evidence; unavailable values were not recorded.</p><div class="parameter-groups">{% for group in model.key_parameters %}<div class="parameter-group"><h3>{{ group.title }}</h3><dl>{% for item in group["items"] %}<div class="parameter-item"><dt>{{ item.label }}</dt><dd class="parameter-value{% if item.value is none %} unavailable{% endif %}">{{ item.value if item.value is not none else 'Unavailable' }}</dd><dd class="parameter-source">{{ item.source if item.source else 'Not recorded' }}</dd></div>{% endfor %}</dl></div>{% endfor %}</div></section>
 <section class="card"><h2>Model complexity and system telemetry</h2>
 <p>{{ model.performance.vram_source }}; {{ model.performance.vram_qualification }}. GFLOPs values are an {{ model.performance.compute_qualification }}.</p>
 <table><thead><tr><th>Method</th><th>Total params</th><th>Trainable params</th><th>Adapter params</th><th>Merge</th><th>Quantization</th></tr></thead><tbody><tr>

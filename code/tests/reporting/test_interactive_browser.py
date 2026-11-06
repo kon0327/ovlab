@@ -151,6 +151,9 @@ def test_real_evaluation_loads_only_the_selected_episode_offline(tmp_path, brows
         page.wait_for_load_state("networkidle")
         assert not any("/data/episodes/" in url for url in requests)
         assert page.locator("#record .card").count() == 0
+        model_stage = page.locator(".flow-stage").filter(has=page.get_by_role("button", name="Model / policy"))
+        assert "Policy" in model_stage.inner_text() and "mock-policy" in model_stage.inner_text()
+        assert "run/connection.json:policy.name" in model_stage.inner_text()
         assert page.get_by_role("button", name="Open run 1, mock-task-0").count() == 1
         page.get_by_role("button", name="Open run 1, mock-task-0").click()
         page.wait_for_function("document.querySelectorAll('#record .card').length === 2")
@@ -175,11 +178,21 @@ def test_real_evaluation_loads_only_the_selected_episode_offline(tmp_path, brows
 
 
 def test_real_training_loads_metrics_only_when_requested(tmp_path, browser):
+    import json
     import runpy
     from ovlab_runner import TrainingDerivedReportEngine
 
     helper = Path(__file__).resolve().parents[1] / "unit/training/test_performance_reporting.py"
-    run = runpy.run_path(str(helper))["_training_run"](tmp_path / "runs/train")
+    helpers = runpy.run_path(str(helper))
+    run = helpers["_training_run"](tmp_path / "runs/train")
+    plan = json.loads((run / "training-plan.json").read_text())
+    plan["scientific"]["training"] = {"learning_rate": 0.000002, "per_device_batch_size": 4,
+                                      "gradient_accumulation_steps": 2, "precision": "bf16"}
+    helpers["_write_json"](run / "training-plan.json", plan)
+    manifest = json.loads((run / "manifest.json").read_text())
+    manifest["files"] = [{"path": path.name, "size": path.stat().st_size, "sha256": helpers["_sha"](path)}
+                         for path in sorted(run.iterdir()) if path.name != "manifest.json"]
+    helpers["_write_json"](run / "manifest.json", manifest)
     generated = TrainingDerivedReportEngine(run.parent, tmp_path / "exports/train/derived").generate(run.name)
     target = Path(generated["interactive_output"])
     page = browser.new_page()
@@ -192,6 +205,11 @@ def test_real_training_loads_metrics_only_when_requested(tmp_path, browser):
         assert not any("/data/training.js" in url for url in requests)
         assert page.locator(".chart-card").count() == 0
         assert "0.5" in page.locator("#highlights").inner_text()
+        result_stage = page.locator(".flow-stage").filter(has=page.get_by_role("button", name="Optimizer & checkpoint"))
+        assert "Learning rate" in result_stage.inner_text()
+        assert "0.000002" in result_stage.inner_text()
+        assert "run/training-plan.json:scientific.training.learning_rate" in result_stage.inner_text()
+        assert "Unavailable" in page.locator("#flow-content").inner_text()
         page.get_by_role("button", name="Load training results").click()
         page.wait_for_function("document.querySelectorAll('.chart-card').length === 4")
         assert len([url for url in requests if "/data/training.js" in url]) == 1

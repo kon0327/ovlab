@@ -15,3 +15,16 @@ table.statistics { min-width: 1120px; font-size: .82rem; }
 table.statistics th { white-space: nowrap; }
 .unavailable { color: #667085; font-style: italic; }
 a { color: #155eef; }
+
+.parameter-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: .8rem; align-items: start; }
+.parameter-group { border: 1px solid #cfdaeb; border-top: 3px solid #2563a6; border-radius: .4rem; padding: .8rem; min-width: 0; background: #f7faff; }
+.parameter-group h3 { margin: 0 0 .6rem; font-size: 1rem; }
+.parameter-group dl { margin: 0; }
+.parameter-item { border-top: 1px solid #dbe5f0; padding: .55rem 0; overflow-wrap: anywhere; }
+.parameter-item dt { color: #465b71; font-size: .8rem; }
+.parameter-item dd { margin: .15rem 0 0; }
+.parameter-value { font-weight: 700; color: #174e8a; font-variant-numeric: tabular-nums; }
+.parameter-value.unavailable { color: #667085; }
+.parameter-source { color: #52677c; font: .7rem/1.4 ui-monospace, monospace; }
+
+.card > table { display: block; max-width: 100%; overflow-x: auto; }

@@ -26,6 +26,24 @@ from ovlab_runner.derived import _trace_view
 REPOSITORY = Path(__file__).resolve().parents[3]
 
 
+def test_key_parameters_preserve_recorded_zero_and_mark_missing_values():
+    from ovlab_runner.key_parameters import evaluation_parameters, training_parameters
+
+    plan = {"base_episode_seed": 0, "metadata": {"policy_configuration": {"runtime": {"quantization": "none"}}}}
+    eval_groups = evaluation_parameters(plan, {}, {})
+    evaluation = {item["label"]: item for group in eval_groups for item in group["items"]}
+    assert evaluation["Base episode seed"]["value"] == 0
+    assert evaluation["Configured quantization"]["value"] == "none"
+    assert evaluation["Configured precision"] == {"label": "Configured precision", "value": None, "source": None}
+    train_plan = {"scientific": {"profile": {"training": {"learning_rate": 0.000002, "seed": 0}}}}
+    train_groups = training_parameters(train_plan, {}, {}, None)
+    training = {item["label"]: item for group in train_groups for item in group["items"]}
+    assert training["Learning rate"]["value"] == 0.000002
+    assert training["Learning rate"]["source"] == "run/training-plan.json:scientific.profile.training.learning_rate"
+    assert training["Training seed"]["value"] == 0
+    assert training["Trainable parameters"]["value"] is None
+
+
 def test_trace_report_extracts_policy_allocator_vram_and_estimated_compute(tmp_path):
     performance = MappingProxyType({
         "schema_version": "ovlab.performance-telemetry/v1",
@@ -65,7 +83,15 @@ def test_interactive_eval_preserves_counts_records_hierarchy_and_integrity(tmp_p
     result = engine.generate(run_id)
     target = Path(result["interactive_output"])
     assert target.parent == derived.parent / "interactive" / run_id / "libero-task-default"
+    assert target.parent.stat().st_mode & 0o7777 == 0o2770
+    assert target.parent.parent.stat().st_mode & 0o7777 == 0o2770
     model = json.loads((target / "report.json").read_text())
+    parameters = {item["label"]: item for group in model["key_parameters"] for item in group["items"]}
+    assert parameters["Episodes per task"]["value"] == 2
+    assert parameters["Episodes per task"]["source"] == "run/plan.json:rollout_count_per_task"
+    assert parameters["Configured precision"]["value"] is None
+    derived_html = Path(result["output"], "index.html").read_text()
+    assert "Key parameters" in derived_html and "Episodes per task" in derived_html
     assert model["counts"] == {"tasks": 1, "episodes": 2, "observations": 10,
         "predictions": 10, "predicted_actions": 10, "executed_actions": 10}
     episode = model["tasks"][0]["episodes"][0]
@@ -119,6 +145,25 @@ def test_interactive_eval_chunk_alignment_and_script_escaping(tmp_path):
     page = _page(model, "", [], "index.html")
     assert '</script><script>alert("injected")' not in page
     assert "\\u003c/script\\u003e" in page
+
+
+def test_new_eval_build_does_not_change_previous_build_permissions(tmp_path, monkeypatch):
+    import ovlab_runner.derived as derived_module
+
+    runs = tmp_path / "runs"
+    run_id, _ = _canonical_run(runs, name="separate-report-builds")
+    engine = DerivedReportEngine(runs, tmp_path / "derived")
+    monkeypatch.setattr(derived_module, "REPORT_RENDERER_VERSION", "fixture-v1")
+    old = Path(engine.generate(run_id)["output"])
+    old.chmod(0o550)
+    try:
+        monkeypatch.setattr(derived_module, "REPORT_RENDERER_VERSION", "fixture-v2")
+        new = engine.generate(run_id)
+        assert Path(new["output"]) != old
+        assert old.stat().st_mode & 0o7777 == 0o550
+        assert (old.parent / "latest.json").stat().st_mode & 0o777 == 0o640
+    finally:
+        old.chmod(0o2770)
 
 
 def test_application_verifies_explicit_legacy_build_alongside_typed_reports(tmp_path, monkeypatch):

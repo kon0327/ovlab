@@ -18,11 +18,11 @@ import zlib
 import numpy as np
 
 from .errors import ArtifactError
-from .permissions import finalize_managed_tree
+from .permissions import MANAGED_FILE_MODE, finalize_managed_directory, finalize_managed_tree
 
 
 SCHEMA = "ovlab.interactive-report/v1"
-RENDERER = "ovlab-interactive-dashboard@1.2.0"
+RENDERER = "ovlab-interactive-dashboard@1.3.0"
 
 
 def _clean(value):
@@ -167,6 +167,7 @@ def build_eval_dashboard(source, model):
     return {
         "schema_version": SCHEMA, "mode": "eval", "run_id": model["run"]["run_id"],
         "status": model["run"]["status"], "tasks": tasks, "outcome": model["outcome"],
+        "key_parameters": model.get("key_parameters", []),
         "counts": {"tasks": len(tasks), "episodes": len(episodes), **{
             key: sum(episode["counts"][key] for episode in episodes)
             for key in ("observations", "predictions", "predicted_actions", "executed_actions")}},
@@ -192,6 +193,7 @@ def build_train_dashboard(source, model):
     return {
         "schema_version": SCHEMA, "mode": "train", "run_id": model["training_run_id"],
         "status": model["status"], "tasks": [], "metrics": metrics, "evidence": evidence,
+        "key_parameters": model.get("key_parameters", []),
         "counts": {"optimizer_steps": len(metrics), "examples_seen": sum(row["examples_seen"] for row in metrics) if recorded_counts else None,
             "dataset_records": evidence.get("dataset_records") if evidence else None,
             "supervised_action_tokens": sum(row["action_token_count"] for row in metrics) if metrics and all("action_token_count" in row for row in metrics) else None,
@@ -217,7 +219,7 @@ def _page(data, prefix, links, source_href):
 <main><header><p class="eyebrow">OVLAB / {"Train" if data["mode"] == "train" else "Evaluate"} / {html.escape(data.get("scope_label", "Run overview"))}</p><div class="heading-row"><h1>Model evidence dashboard</h1><span class="badge" data-status="{html.escape(str(data["status"]), quote=True)}">{html.escape(str(data["status"]))}</span></div><p class="identity">{html.escape(data["run_id"])}</p><p>Follow the evidence from model inputs to measured results.</p></header>
 <noscript><p>Enable JavaScript for record selection and charts. Full evidence is available in report.json and the existing HTML report.</p></noscript>
 <section id="overview"><h2>Run at a glance</h2><div id="outcome" class="outcome"></div><div id="highlights" class="grid highlights"></div><div id="kpis" class="grid count-grid"></div><div class="evidence-notes"><h3>Evidence &amp; interpretation</h3><div id="notes" class="notes"></div></div></section>
-<section id="flow"><h2>Inside the model data flow</h2><p id="model-help">Select a stage to trace its connections and highlight its evidence. Every stage description stays visible. This schematic describes the recorded data contract; it does not infer unrecorded model internals.</p><div id="model-illustration" tabindex="0" role="region" aria-label="Interactive model diagram" aria-describedby="model-help"></div><div id="flow-content" class="flow"></div></section>
+<section id="flow"><h2>Inside the model data flow</h2><p id="model-help">Select a stage to trace its connections and highlight its evidence. Every stage description stays visible. This schematic describes the recorded data contract; it does not infer unrecorded model internals. Parameter sources starting with run/ refer to canonical run evidence.</p><div id="model-illustration" tabindex="0" role="region" aria-label="Interactive model diagram" aria-describedby="model-help"></div><div id="flow-content" class="flow"></div></section>
 <section id="explorer"><h2>Inspect a batch or policy call</h2><div id="selectors" class="toolbar"></div><div id="batch" class="notes" aria-live="polite"></div><div id="record" class="grid detail"></div></section>
 <section id="performance"><h2>Performance &amp; full metrics</h2><p>Inspect exact samples, zoom a chart, or read its complete recorded series below.</p><div id="charts" class="grid charts"></div><div id="metric-table" class="metric-tables"></div></section>
 <section id="parameters"><h2>Hyperparameters &amp; model settings</h2><label for="parameter-search">Find a setting</label><input id="parameter-search" type="search" placeholder="learning rate, rank, precision…"><p id="parameter-count" class="caption" role="status"></p><div class="table-scroll" tabindex="0" role="region" aria-label="Hyperparameters"><table><thead><tr><th scope="col">Setting / canonical path</th><th scope="col">Value</th></tr></thead><tbody id="parameter-rows"></tbody></table></div></section>
@@ -262,6 +264,17 @@ def _dashboard_summary(data, prefix=""):
 
 def publish_dashboard(report: Path, derived_root: Path, source: Path, *, training=False):
     target = dashboard_path(report, derived_root)
+    # The profile parents must stay group-writable for later container builds.
+    # Do not chmod the host-owned interactive bind mount or parents owned by
+    # another UID; the publishing user can only normalize directories it owns.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    interactive_root = derived_root.parent / "interactive"
+    owner = getattr(os, "geteuid", lambda: None)()
+    parent = target.parent
+    while parent != interactive_root:
+        if owner is not None and parent.stat().st_uid == owner:
+            finalize_managed_directory(parent)
+        parent = parent.parent
     if target.exists():
         verify_dashboard(report, derived_root)
         return target
@@ -308,6 +321,7 @@ def publish_dashboard(report: Path, derived_root: Path, source: Path, *, trainin
         stage.rename(target)
         temporary = target.parent / f".latest.{uuid.uuid4().hex}.tmp"
         temporary.write_bytes(_bytes({"schema_version": SCHEMA, "derived_build_id": target.name}))
+        temporary.chmod(MANAGED_FILE_MODE)
         temporary.replace(target.parent / "latest.json")
         # Only the immutable build itself is finalized. Its parents, including
         # the host-owned exports/interactive bind mount, stay writable so later

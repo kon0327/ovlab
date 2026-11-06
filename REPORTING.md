@@ -232,6 +232,14 @@ Observations, prediction calls, predicted actions and executed actions have
 separate counts. A policy call is one observation; it does not claim knowledge
 of an unrecorded internal model tensor batch.
 
+Both the interactive and derived reports highlight recorded settings alongside
+their source fields: evaluation includes policy, checkpoint, precision,
+quantization, seed and action execution; training includes the dataset,
+adaptation method, batch, learning rate, objective and parameter counts. A
+`run/` source refers to canonical run evidence. Missing settings are shown as
+unavailable rather than inferred. The complete configuration remains available
+in the interactive hyperparameter table and canonical evidence.
+
 New training runs record `data-flow.json` from the first actual forward pass:
 full input/output tensor shapes and dtypes, a bounded first-record token/pixel
 preview, decoded prompt and predicted supervised tokens, transformed-image

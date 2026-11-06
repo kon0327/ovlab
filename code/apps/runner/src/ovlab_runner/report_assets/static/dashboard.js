@@ -61,7 +61,10 @@
   const stageButtons=[];
   stages.forEach(([id,title,body],i)=>{
     const article=node("article",null,"flow-stage"),button=node("button",title,"stage-button");button.type="button";button.setAttribute("aria-pressed","false");
-    button.addEventListener("click",()=>selectStage(i,true));article.append(button,node("p",body));$("flow-content").append(article);stageButtons.push(button);
+    button.addEventListener("click",()=>selectStage(i,true));article.append(button,node("p",body));
+    const group=(data.key_parameters||[]).find(group=>group.stage===id);
+    if(group){const list=node("dl",null,"stage-parameters");group.items.forEach(item=>{const entry=node("div",null,"stage-parameter");entry.append(node("dt",item.label),node("dd",exactValue(item.value),item.value==null?"stage-parameter-value unavailable":"stage-parameter-value"),node("dd",item.source||"Not recorded","stage-parameter-source"));list.append(entry);});article.append(list);}
+    $("flow-content").append(article);stageButtons.push(button);
     groups[i].addEventListener("click",()=>selectStage(i,true));
   });
   function selectStage(index,scroll=false){connections.forEach((connection,i)=>connection.classList.toggle("selected",i===index||i===index-1));if(scroll){const host=$("model-illustration"),x=(12+index*199)/1000*svg.getBoundingClientRect().width;host.scrollLeft=Math.max(0,x-(host.clientWidth-178/1000*svg.getBoundingClientRect().width)/2);}groups.forEach((group,i)=>group.classList.toggle("selected",i===index));stageButtons.forEach((button,i)=>{button.setAttribute("aria-pressed",String(i===index));button.parentElement.classList.toggle("selected",i===index);});}
