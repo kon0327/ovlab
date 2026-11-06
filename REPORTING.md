@@ -199,6 +199,7 @@ exports/
 │       ├── report.json
 │       ├── manifest.json
 │       ├── assets/dashboard.{css,js}
+│       ├── data/episodes/<episode-key>.js
 │       └── tasks/<task-key>/index.html
 └── train/interactive/<training-run-id>/system-performance/
     ├── latest.json
@@ -206,14 +207,19 @@ exports/
         ├── index.html
         ├── report.json
         ├── manifest.json
-        └── assets/dashboard.{css,js}
+        ├── assets/dashboard.{css,js}
+        └── data/training.js
 ```
 
-Open `interactive_output/index.html` directly in a browser. The dashboard embeds
-its evidence and needs neither a web server nor network access. The run view
-embeds the first three policy calls of each episode; task pages let you select
-every prediction. `report.json` retains the complete dashboard evidence. Sidebar
-links lead to task dashboards and the existing HTML reports.
+Open `interactive_output/index.html` directly in a browser. The report works
+without a web server or network access. The overview loads only summary data;
+select an episode and choose **Load run details**, or use **Open run** in the
+episode table, to load that episode's complete evidence. Task pages use the same
+on-demand loading. Training dashboards load batch evidence and metric series
+when **Load training results** is selected. Large tables show 100 rows at a time
+with controls for navigating every recorded row. `report.json` retains the
+complete dashboard evidence. Keep the `data/` directory with the report when
+moving it. Sidebar links lead to task dashboards and the existing HTML reports.
 
 Dashboards show counts for the full run, a graphical input → model → output
 flow, actual batch and record evidence, searchable hyperparameters, and charts

@@ -14,7 +14,7 @@
   const countLabels = {tasks:"Tasks", episodes:"Finalized episodes", observations:"Observations", predictions:"Policy calls", predicted_actions:"Predicted actions", executed_actions:"Applied actions", optimizer_steps:"Recorded optimizer steps", examples_seen:"Examples seen", dataset_records:"Dataset records", supervised_action_tokens:"Supervised action tokens", microbatches:"Microbatches"};
   Object.entries(data.counts).forEach(([key, value]) => $("kpis").append(card(countLabels[key] || key.replaceAll("_", " "), value)));
   data.notes.forEach(text => $("notes").append(node("p", text)));
-  const lastValue = key => [...(data.metrics || [])].reverse().find(row => finite(row[key]))?.[key];
+  const lastValue = key => data.latest_metrics?.[key] ?? [...(data.metrics || [])].reverse().find(row => finite(row[key]))?.[key];
   if (train) {
     $("highlights").append(card("Latest recorded loss", lastValue("training_loss"), "Last recorded microbatch; lower values alone do not establish robot task success."));
     $("highlights").append(chunkTrain ? card("Latest valid action steps", lastValue("valid_action_steps")) : card("Latest action-token accuracy", finite(lastValue("action_token_accuracy")) ? fmt(lastValue("action_token_accuracy")*100)+"%" : null, "Supervised tokens, separate from robot task success."));
@@ -99,36 +99,75 @@
     });
     return e;
   };
+  // Script chunks work offline when reports are opened directly with file://.
+  const pendingChunks = new Map();
+  const deliver = (key, payload) => {const request=pendingChunks.get(key);if(request){pendingChunks.delete(key);request.script.remove();request.resolve(payload);}};
+  window.ovlabReceiveEpisode = (key, episode) => deliver("episode:"+key, episode);
+  window.ovlabReceiveTraining = payload => deliver("training", payload);
+  function loadChunk(path, kind) {
+    const key=kind==="training" ? kind : "episode:"+path.split("/").pop().replace(/\.js$/, "");
+    if(pendingChunks.has(key)) return pendingChunks.get(key).promise;
+    const script=node("script");script.src=path;
+    let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});
+    pendingChunks.set(key,{script,promise,resolve,reject});
+    const fail=message=>{const request=pendingChunks.get(key);if(request){pendingChunks.delete(key);script.remove();request.reject(new Error(message));}};
+    script.onerror=()=>fail("Could not load the selected data file. Keep the complete report folder together.");
+    script.onload=()=>fail("The selected data file did not contain the expected report data.");
+    document.head.append(script);return promise;
+  }
+  let inspectEpisode=()=>{}, renderSelectedActions=()=>{};
   if (train) {
-    $("batch").append(node("p", evidence ? `Actual captured microbatch ${evidence.microbatch_index}; ${fmt(evidence.batch_size)} records. Tensor shapes describe the full batch. First-record previews are bounded; total element counts and truncation are explicit.` : "No batch capture exists in this historical run. Hyperparameters show the configured batch size; actual examples are unavailable."));
-    $("record").append(detail("Input batch", evidence?.input_batch), detail("Input record · index 0", evidence?.input_record), detail("Output batch", evidence?.output_batch), detail("Output record · index 0", evidence?.output_record));
+    if(data.training_script){
+      const load=node("button","Load training results"), status=node("p","Training metrics and captured batch details load when requested.");
+      status.setAttribute("role","status");$("batch").append(status,load);
+      load.addEventListener("click",async()=>{load.disabled=true;status.textContent="Loading training results…";try{const payload=await loadChunk(data.training_script,"training");data.metrics=payload.metrics;data.evidence=payload.evidence;$("batch").replaceChildren();renderTrainingEvidence(payload.evidence);renderTrainingPerformance();}catch(error){status.textContent=error.message;load.disabled=false;}});
+    } else renderTrainingEvidence(evidence);
   } else if (data.tasks.length) {
     const taskSelect = node("select"), episodeSelect = node("select"), recordSlider = node("input");
-    recordSlider.type = "range"; recordSlider.min = "0"; recordSlider.step = "1";
-    const recordLabel = node("label", "Prediction / policy call"); recordLabel.append(recordSlider);
-    for (const [label, control] of [["Task", taskSelect], ["Episode", episodeSelect]]) {const l = node("label", label); l.append(control); $("selectors").append(l);}
-    $("selectors").append(recordLabel);
-    data.tasks.forEach((task, i) => {const option = node("option", task.task_id); option.value = i; taskSelect.append(option);});
-    const renderRecord = () => {
-      const task = data.tasks[Number(taskSelect.value)], episode = task.episodes[Number(episodeSelect.value)];
-      $("record").replaceChildren(); $("batch").replaceChildren();
-      previous.disabled=!episode?.records.length || Number(recordSlider.value)===0;next.disabled=!episode?.records.length || Number(recordSlider.value)>=episode.records.length-1;recordSlider.disabled=!episode?.records.length;
-      if(!episode?.records.length) recordLabel.firstChild.textContent="No recorded policy calls";
-      if (!episode) {$("batch").append(node("p", "No finalized episodes in this task.")); return;}
-      const row = episode.records[Number(recordSlider.value)];
-      $("batch").append(node("p", `Rollout ${episode.rollout_index} · seed ${episode.seed} · ${episode.terminal_status} · ${episode.counts.predictions} calls · ${episode.counts.executed_actions} executed actions. ${episode.records.length < episode.counts.predictions ? "The run overview embeds the first three calls; open the task page in the navigation to inspect every call." : "Every recorded prediction is selectable."}`));
-      if (!row) {$("record").append(detail("Policy input", null), detail("Policy output", null)); return;}
-      recordLabel.firstChild.textContent = `Prediction ${row.index + 1} / ${episode.counts.predictions} · ${fmt(row.latency_ms)} ms`;
+    const load=node("button","Load run details"), previous=node("button","Previous call"),next=node("button","Next call");
+    const contextHost=node("div",null,"episode-context");$("explorer").append(contextHost);
+    let selectedEpisode=null,requestVersion=0;
+    recordSlider.type="range";recordSlider.min="0";recordSlider.step="1";
+    const recordLabel=node("label","Prediction / policy call");recordLabel.append(recordSlider);
+    for(const [label,control] of [["Task",taskSelect],["Episode / run",episodeSelect]]){const l=node("label",label);l.append(control);$("selectors").append(l);}
+    $("selectors").append(load,recordLabel,previous,next);
+    data.tasks.forEach((task,i)=>{const option=node("option",task.task_id);option.value=i;taskSelect.append(option);});
+    const summary=()=>data.tasks[Number(taskSelect.value)]?.episodes[Number(episodeSelect.value)];
+    function renderRecord(){
+      $("record").replaceChildren();
+      const episode=selectedEpisode,row=episode?.records[Number(recordSlider.value)];
+      previous.disabled=!episode?.records.length||Number(recordSlider.value)===0;next.disabled=!episode?.records.length||Number(recordSlider.value)>=episode.records.length-1;recordSlider.disabled=!episode?.records.length;
+      if(!episode){recordLabel.firstChild.textContent="Prediction / policy call";return;}
+      if(!row){recordLabel.firstChild.textContent="No recorded policy calls";$("record").append(detail("Policy input",null),detail("Policy output",null));return;}
+      recordLabel.firstChild.textContent=`Prediction ${row.index+1} / ${episode.counts.predictions} · ${fmt(row.latency_ms)} ms`;
       recordSlider.setAttribute("aria-valuetext",`Prediction ${row.index+1} of ${episode.counts.predictions}`);
-      if(episode.records.length<episode.counts.predictions){const link=node("a","Inspect every policy call for this task","button-link");const match=Array.from(document.querySelectorAll(".related a")).find(a=>a.textContent===task.task_id);if(match){link.href=match.href;$("batch").append(link);}}
-      $("record").append(detail("Input record · observation", row.input), detail("Output record · action chunk", row.output));
-    };
-    const updateEpisode = () => {const episode = data.tasks[Number(taskSelect.value)].episodes[Number(episodeSelect.value)]; recordSlider.max = Math.max(0, (episode?.records.length || 0) - 1); recordSlider.value = 0; renderRecord();};
-    const updateTask = () => {episodeSelect.replaceChildren(); data.tasks[Number(taskSelect.value)].episodes.forEach((episode,i) => {const option = node("option", `${episode.rollout_index} · ${episode.terminal_status} · ${episode.episode_id}`); option.value = i; episodeSelect.append(option);}); updateEpisode();};
-    const previous=node("button","Previous call"),next=node("button","Next call");previous.type=next.type="button";
-    const stepRecord=delta=>{recordSlider.value=Number(recordSlider.value)+delta;renderRecord();};previous.addEventListener("click",()=>stepRecord(-1));next.addEventListener("click",()=>stepRecord(1));$("selectors").append(previous,next);
-    taskSelect.addEventListener("change", updateTask); episodeSelect.addEventListener("change", updateEpisode); recordSlider.addEventListener("input", renderRecord); updateTask();
+      $("record").append(detail("Input record · observation",row.input),detail("Output record · action chunk",row.output));
+    }
+    function updateEpisode(){
+      requestVersion++;selectedEpisode=null;recordSlider.value=0;recordSlider.max=0;contextHost.replaceChildren();renderRecord();renderSelectedActions(null);
+      const episode=summary();load.disabled=!episode;$("batch").replaceChildren(node("p",episode ? `Rollout ${episode.rollout_index} · seed ${episode.seed} · ${episode.terminal_status} · ${episode.counts.predictions} calls · ${episode.counts.executed_actions} applied actions. Select Load run details to inspect this episode.` : "No finalized episodes in this task."));
+    }
+    function updateTask(){episodeSelect.replaceChildren();data.tasks[Number(taskSelect.value)].episodes.forEach((episode,i)=>{const option=node("option",`${episode.rollout_index} · ${episode.terminal_status} · ${episode.episode_id}`);option.value=i;episodeSelect.append(option);});updateEpisode();}
+    async function loadSelected(){
+      const episode=summary();if(!episode)return;
+      const version=++requestVersion;load.disabled=true;$("batch").replaceChildren(node("p","Loading selected run details…"));
+      try{
+        const loaded=episode.detail_script?await loadChunk(episode.detail_script,"episode"):episode;
+        if(version!==requestVersion)return;
+        selectedEpisode=loaded;recordSlider.max=Math.max(0,loaded.records.length-1);recordSlider.value=0;load.disabled=false;
+        $("batch").replaceChildren(node("p",`Rollout ${loaded.rollout_index} · seed ${loaded.seed} · ${loaded.terminal_status} · ${loaded.counts.predictions} calls · ${loaded.counts.executed_actions} applied actions. Every recorded policy call is selectable.`));
+        contextHost.replaceChildren();const {records,...context}=loaded;contextHost.append(detail(`Episode context and metrics · ${loaded.episode_id}`,context));
+        renderRecord();renderSelectedActions(loaded);
+      }catch(error){if(version!==requestVersion)return;load.disabled=false;$("batch").replaceChildren(node("p",error.message));}
+    }
+    inspectEpisode=(taskIndex,episodeIndex)=>{taskSelect.value=taskIndex;updateTask();episodeSelect.value=episodeIndex;updateEpisode();$("explorer").scrollIntoView();loadSelected();};
+    const step=delta=>{recordSlider.value=Number(recordSlider.value)+delta;renderRecord();};
+    load.addEventListener("click",loadSelected);previous.addEventListener("click",()=>step(-1));next.addEventListener("click",()=>step(1));taskSelect.addEventListener("change",updateTask);episodeSelect.addEventListener("change",updateEpisode);recordSlider.addEventListener("input",renderRecord);updateTask();
   } else $("batch").append(node("p", "No finalized policy records are available."));
+  function renderTrainingEvidence(captured){
+    $("batch").append(node("p",captured?`Actual captured microbatch ${captured.microbatch_index}; ${fmt(captured.batch_size)} records. Tensor shapes describe the full batch. First-record previews are bounded; total element counts and truncation are explicit.`:"No batch capture exists in this historical run. Hyperparameters show the configured batch size; actual examples are unavailable."));
+    $("record").append(detail("Input batch",captured?.input_batch),detail("Input record · index 0",captured?.input_record),detail("Output batch",captured?.output_batch),detail("Output record · index 0",captured?.output_record));
+  }
   const flatten = (value, prefix = "", rows = []) => {
     if (value != null && typeof value === "object" && !Array.isArray(value)) {
       if (!Object.keys(value).length) rows.push([prefix, "Unavailable — not recorded"]);
@@ -176,7 +215,9 @@
     const series=node("details",null,"series-data");series.open=true;series.append(node("summary",`Recorded series · all ${fmt(recordedPoints.length)} samples`));
     const wrap=node("div",null,"table-scroll series-scroll"),table=node("table"),thead=node("thead"),head=node("tr"),tbody=node("tbody");wrap.tabIndex=0;wrap.setAttribute("role","region");wrap.setAttribute("aria-label",`${title} recorded series`);
     [xLabel,unit].forEach(text=>{const th=node("th",text);th.scope="col";head.append(th);});thead.append(head);table.append(thead,tbody);
-    recordedPoints.forEach(point=>{const row=node("tr");point.forEach(value=>row.append(node("td",exactValue(value))));tbody.append(row);});wrap.append(table);series.append(wrap);e.append(series);$("charts").append(e);
+    const pageSize=100,previousPage=node("button","Previous samples"),nextPage=node("button","Next samples"),pageStatus=node("span",null,"caption"),pager=node("div",null,"pagination");let page=0;
+    function renderPage(){tbody.replaceChildren();const start=page*pageSize,end=Math.min(start+pageSize,recordedPoints.length),fragment=document.createDocumentFragment();for(let i=start;i<end;i++){const row=node("tr");recordedPoints[i].forEach(value=>row.append(node("td",exactValue(value))));fragment.append(row);}tbody.append(fragment);pageStatus.textContent=`Samples ${start+1}–${end} of ${recordedPoints.length}`;previousPage.disabled=page===0;nextPage.disabled=end>=recordedPoints.length;}
+    previousPage.addEventListener("click",()=>{page--;renderPage();});nextPage.addEventListener("click",()=>{page++;renderPage();});renderPage();pager.append(previousPage,pageStatus,nextPage);wrap.append(table);series.append(wrap,pager);e.append(series);$("charts").append(e);
     const ctx = canvas.getContext("2d"), W = 640, H = 240, left = 64, right = 20, top = 15, bottom = 40;
     canvas.width = W * 2; canvas.height = H * 2; ctx.scale(2, 2);
     const visible = () => available.filter(p => p[0] >= xmin && p[0] <= xmax);
@@ -199,19 +240,26 @@
     canvas.addEventListener("pointerup",()=>{dragging=null;});canvas.addEventListener("pointercancel",()=>{dragging=null;});
     canvas.addEventListener("pointermove",event=>{if(dragging){const shift=(pos(event)-dragging.x)/(W-left-right)*(dragging.max-dragging.min);xmin=dragging.min-shift;xmax=dragging.max-shift;clamp();draw();}const x=xmin+(pos(event)-left)/(W-left-right)*(xmax-xmin), shown=visible();if(shown.length){const nearest=shown.reduce((a,b)=>Math.abs(a[0]-x)<Math.abs(b[0]-x)?a:b);tip.textContent=`${xLabel}: ${exactValue(nearest[0])} · ${exactValue(nearest[1])} ${unit}`;}});draw();
   }
-  if (train) {
+  function renderTrainingPerformance() {
+    $("charts").replaceChildren();$("metric-table").replaceChildren();
     const rows = data.metrics, series = key => rows.map((row,i) => [row.global_step ?? row.optimizer_step ?? i+1, row[key] ?? null]);
     chart("Training loss · recorded microbatch",series("training_loss"),"Optimizer step","loss");
     if (chunkTrain) chart("Valid action steps",series("valid_action_steps"),"Optimizer step","steps");
     else chart("Supervised action-token accuracy",series("action_token_accuracy"),"Optimizer step","fraction");
     chart("Optimizer step duration",series("step_duration_ms"),"Optimizer step","ms");
     chart("GPU allocator memory",series("gpu_memory_allocated_bytes").map(([x,y])=>[x,y==null?null:y/1048576]),"Optimizer step","MiB");
-    $("outcome").append(node("p", "Robot task success: unavailable in a training-only run. Evaluation is reported in the corresponding eval dashboard.", "notes"));
     $("metric-table").append(detail("Model parameter counts",data.parameter_counts),detail("System performance evidence",data.performance));
     const table=node("table"),thead=node("thead"),head=node("tr"),tbody=node("tbody"),keys=[...new Set(data.metrics.flatMap(row=>Object.keys(row)))];
     keys.forEach(key=>{const th=node("th",key.replaceAll("_"," "));th.scope="col";head.append(th);});thead.append(head);table.append(thead,tbody);
-    data.metrics.forEach(row=>{const tr=node("tr");keys.forEach(key=>tr.append(node("td",exactValue(row[key]))));tbody.append(tr);});
-    const wrap=node("div",null,"table-scroll");wrap.tabIndex=0;wrap.setAttribute("role","region");wrap.setAttribute("aria-label","All recorded training metrics");wrap.append(table);$("metric-table").append(node("h3","All recorded training metrics"),wrap);
+    const pageSize=100,previousPage=node("button","Previous metrics"),nextPage=node("button","Next metrics"),pageStatus=node("span",null,"caption"),pager=node("div",null,"pagination");let page=0;
+    function renderPage(){tbody.replaceChildren();const start=page*pageSize,end=Math.min(start+pageSize,data.metrics.length),fragment=document.createDocumentFragment();for(let i=start;i<end;i++){const tr=node("tr"),row=data.metrics[i];keys.forEach(key=>tr.append(node("td",exactValue(row[key]))));fragment.append(tr);}tbody.append(fragment);pageStatus.textContent=`Rows ${data.metrics.length?start+1:0}–${end} of ${data.metrics.length}`;previousPage.disabled=page===0;nextPage.disabled=end>=data.metrics.length;}
+    previousPage.addEventListener("click",()=>{page--;renderPage();});nextPage.addEventListener("click",()=>{page++;renderPage();});renderPage();pager.append(previousPage,pageStatus,nextPage);
+    const wrap=node("div",null,"table-scroll");wrap.tabIndex=0;wrap.setAttribute("role","region");wrap.setAttribute("aria-label","All recorded training metrics");wrap.append(table);$("metric-table").append(node("h3","All recorded training metrics"),wrap,pager);
+  }
+  if(train){
+    $("outcome").append(node("p", "Robot task success: unavailable in a training-only run. Evaluation is reported in the corresponding eval dashboard.", "notes"));
+    if(data.training_script) $("charts").append(node("p","Load training results in the explorer to view charts and metrics.","caption"));
+    else renderTrainingPerformance();
   } else {
     const outcome=data.outcome;
     if(outcome){const total=outcome.eligible_episode_count, success=outcome.successful_episode_count;$("outcome").append(node("p",total===1?`Binary episode outcome: ${success===1?"success":"non-success"}. One episode does not establish a statistical success rate.`:`Success rate: ${total?fmt(success/total*100)+"%":"Unavailable"} · ${success} / ${total} finalized episodes. Non-success: ${total-success} / ${total}. Missing: ${outcome.missing_episode_count}.`)); const bar=node("div",null,"progress"),fill=node("span");bar.setAttribute("role","img");bar.setAttribute("aria-label",`${success} successful and ${total-success} non-successful finalized episodes`);fill.style.width=`${total?success/total*100:0}%`;bar.append(fill);$("outcome").append(bar);}
@@ -219,17 +267,18 @@
     chart("Episode outcome",episodes.map((ep,i)=>[i+1,ep.success?1:0]),"Episode index","0 / 1");
     chart("Executed actions per episode",episodes.map((ep,i)=>[i+1,ep.counts.executed_actions]),"Episode index","actions");
     chart("Mean policy inference latency",episodes.map((ep,i)=>[i+1,ep.trace_view.inference_latency_statistics_ms.mean]),"Episode index","ms");
-    if(data.scope_label) {
-      const options=node("select");options.setAttribute("aria-label","Applied action component");["tx","ty","tz","rx","ry","rz","gripper"].forEach((name,i)=>{const option=node("option",name);option.value=i;options.append(option);});
-      const host=node("div");host.append(node("p","Applied-action component · samples are ordered within each episode", "caption"),options);$("charts").append(host);
-      let previous=null;const drawActions=()=>{if(previous)previous.remove();const rows=episodes.flatMap(ep=>ep.records.flatMap(r=>r.output.executed.map(a=>a.applied)));chart(`Applied action · ${options.selectedOptions[0].textContent}`,rows.map((row,i)=>[i,row[Number(options.value)]??null]),"Executed sample index","command (see action_spec units)");previous=$("charts").lastChild;};options.addEventListener("change",drawActions);drawActions();
-    }
+    const actionHost=node("div",null,"action-explorer"),actionStatus=node("p","Load a run to inspect its applied actions.","caption"),options=node("select");options.setAttribute("aria-label","Applied action component");
+    ["tx","ty","tz","rx","ry","rz","gripper"].forEach((name,i)=>{const option=node("option",name);option.value=i;options.append(option);});
+    options.disabled=true;actionHost.append(actionStatus,options);$("charts").append(actionHost);
+    let selectedActionEpisode=null,actionChart=null;
+    function drawActions(){if(actionChart){actionChart.remove();actionChart=null;}if(!selectedActionEpisode)return;const rows=selectedActionEpisode.records.flatMap(r=>(r.output?.executed||[]).map(a=>a.applied));chart(`Applied action · ${options.selectedOptions[0].textContent}`,rows.map((row,i)=>[i,row[Number(options.value)]??null]),"Executed sample index","command (see action_spec units)");actionChart=$("charts").lastChild;}
+    renderSelectedActions=episode=>{selectedActionEpisode=episode;options.disabled=!episode;actionStatus.textContent=episode?`Applied actions for rollout ${episode.rollout_index}`:"Load a run to inspect its applied actions.";drawActions();};options.addEventListener("change",drawActions);
     $("metric-table").append(detail("System performance evidence",data.performance));
-    const table=node("table"),head=node("tr");["Task","Rollout","Seed","Status","Calls","Applied actions","Reason"].forEach(x=>head.append(node("th",x)));table.append(head);
-    data.tasks.forEach(task=>task.episodes.forEach(ep=>{const tr=node("tr");[task.task_id,ep.rollout_index,ep.seed,ep.terminal_status,ep.counts.predictions,ep.counts.executed_actions,ep.terminal_reason].forEach(x=>tr.append(node("td",fmt(x))));table.append(tr);}));const episodesWrap=node("div",null,"table-scroll");episodesWrap.tabIndex=0;episodesWrap.setAttribute("role","region");episodesWrap.setAttribute("aria-label","Episode outcomes");episodesWrap.append(table);$("metric-table").append(node("h3","Every finalized episode"),episodesWrap);
+    const table=node("table"),head=node("tr");["Task","Rollout","Seed","Status","Calls","Applied actions","Reason","Details"].forEach(x=>head.append(node("th",x)));table.append(head);
+    data.tasks.forEach((task,taskIndex)=>task.episodes.forEach((ep,episodeIndex)=>{const tr=node("tr");[task.task_id,ep.rollout_index,ep.seed,ep.terminal_status,ep.counts.predictions,ep.counts.executed_actions,ep.terminal_reason].forEach(x=>tr.append(node("td",fmt(x))));const cell=node("td"),button=node("button","Open run");button.setAttribute("aria-label",`Open run ${ep.rollout_index}, ${task.task_id}`);button.addEventListener("click",()=>inspectEpisode(taskIndex,episodeIndex));cell.append(button);tr.append(cell);table.append(tr);}));const episodesWrap=node("div",null,"table-scroll");episodesWrap.tabIndex=0;episodesWrap.setAttribute("role","region");episodesWrap.setAttribute("aria-label","Episode outcomes");episodesWrap.append(table);$("metric-table").append(node("h3","Every finalized episode"),episodesWrap);
     const metrics=node("table"),metricHead=node("tr");["Scope","Metric","Value","Unit","Valid n","Excluded n","Unavailable n","Min","Median","Mean","Sample SD","Max","Status / reason"].forEach(x=>metricHead.append(node("th",x)));metrics.append(metricHead);
     const metricRows=(scope,rows)=>rows.forEach(metric=>{const tr=node("tr"),stats=metric.statistics||{},value=typeof metric.value==="object"&&metric.value!=null?JSON.stringify(metric.value):exactValue(metric.value);[scope,metric.metric_id,value,metric.unit,stats.valid_n??metric.sample_count,stats.excluded_n,stats.unavailable_n,stats.minimum,stats.median,stats.mean,stats.standard_deviation,stats.maximum,`${metric.status}${metric.reason?" · "+metric.reason:""}`].forEach(value=>tr.append(node("td",exactValue(value))));metrics.append(tr);});
-    data.tasks.forEach(task=>{metricRows(task.task_id,task.metrics);task.episodes.forEach(ep=>metricRows(ep.episode_id,ep.metrics));});const metricsWrap=node("div",null,"table-scroll");metricsWrap.tabIndex=0;metricsWrap.setAttribute("role","region");metricsWrap.setAttribute("aria-label","Canonical task and episode metrics");metricsWrap.append(metrics);$("metric-table").append(node("h3","Canonical task and episode metrics"),metricsWrap);
-    data.tasks.forEach(task=>{const {episodes,...context}=task;$("metric-table").append(detail(`Task context · ${task.task_id}`,context));episodes.forEach(episode=>{const {records,...context}=episode;$("metric-table").append(detail(`Episode context · ${episode.episode_id}`,context));});});
+    data.tasks.forEach(task=>{metricRows(task.task_id,task.metrics);});const metricsWrap=node("div",null,"table-scroll");metricsWrap.tabIndex=0;metricsWrap.setAttribute("role","region");metricsWrap.setAttribute("aria-label","Canonical task and episode metrics");metricsWrap.append(metrics);$("metric-table").append(node("h3","Canonical task metrics · episode metrics appear in the selected run"),metricsWrap);
+    data.tasks.forEach(task=>{const {episodes,...context}=task;$("metric-table").append(detail(`Task context · ${task.task_id}`,context));});
   }
 })();

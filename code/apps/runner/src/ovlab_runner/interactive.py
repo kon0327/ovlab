@@ -22,7 +22,7 @@ from .permissions import finalize_managed_tree
 
 
 SCHEMA = "ovlab.interactive-report/v1"
-RENDERER = "ovlab-interactive-dashboard@1.1.0"
+RENDERER = "ovlab-interactive-dashboard@1.2.0"
 
 
 def _clean(value):
@@ -225,6 +225,41 @@ def _page(data, prefix, links, source_href):
 <script id="dashboard-data" type="application/json">{payload}</script><script src="{prefix}assets/dashboard.js" defer></script></body></html>'''
 
 
+def _script_payload(value):
+    """A local script works with file:// as well as HTTP; escape script delimiters."""
+    return _bytes(value).decode("utf-8").replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
+def _episode_summary(episode, script):
+    latency = (episode.get("trace_view") or {}).get("inference_latency_statistics_ms") or {}
+    return {
+        key: episode.get(key) for key in (
+            "episode_id", "rollout_index", "seed", "terminal_status", "terminal_reason", "success", "counts"
+        )
+    } | {"trace_view": {"inference_latency_statistics_ms": {"mean": latency.get("mean")}}, "detail_script": script}
+
+
+def _dashboard_summary(data, prefix=""):
+    if data["mode"] == "train":
+        evidence = data.get("evidence")
+        last = {}
+        for row in reversed(data["metrics"]):
+            for key in ("training_loss", "action_token_accuracy", "valid_action_steps"):
+                if key not in last and isinstance(row.get(key), (int, float)) and not isinstance(row[key], bool) and math.isfinite(row[key]):
+                    last[key] = row[key]
+        return {**data, "metrics": [], "latest_metrics": last,
+                "evidence": {"objective": evidence.get("objective")} if evidence else None,
+                "training_script": prefix + "data/training.js"}
+    tasks = []
+    for task in data["tasks"]:
+        episodes = []
+        for episode in task["episodes"]:
+            key = hashlib.sha256(_bytes([task["task_key"], episode["episode_id"]])).hexdigest()
+            episodes.append(_episode_summary(episode, prefix + f"data/episodes/{key}.js"))
+        tasks.append({**task, "episodes": episodes})
+    return {**data, "tasks": tasks}
+
+
 def publish_dashboard(report: Path, derived_root: Path, source: Path, *, training=False):
     target = dashboard_path(report, derived_root)
     if target.exists():
@@ -238,6 +273,21 @@ def publish_dashboard(report: Path, derived_root: Path, source: Path, *, trainin
         for name, content in _assets().items():
             (stage / "assets" / name).write_bytes(content)
         (stage / "report.json").write_bytes(_bytes(data))
+        if training:
+            (stage / "data").mkdir()
+            (stage / "data" / "training.js").write_text(
+                "window.ovlabReceiveTraining(" + _script_payload({"metrics": data["metrics"], "evidence": data["evidence"]}) + ");\n",
+                encoding="utf-8",
+            )
+        else:
+            (stage / "data" / "episodes").mkdir(parents=True)
+            for task in data["tasks"]:
+                for episode in task["episodes"]:
+                    key = hashlib.sha256(_bytes([task["task_key"], episode["episode_id"]])).hexdigest()
+                    (stage / "data" / "episodes" / f"{key}.js").write_text(
+                        "window.ovlabReceiveEpisode(" + _script_payload(key) + "," + _script_payload(episode) + ");\n",
+                        encoding="utf-8",
+                    )
         links = []
         for task in data["tasks"]:
             task_dir = stage / "tasks" / task["task_key"]
@@ -246,13 +296,10 @@ def publish_dashboard(report: Path, derived_root: Path, source: Path, *, trainin
                 "counts": {"tasks": 1, "episodes": len(task["episodes"]), **{
                     key: sum(episode["counts"][key] for episode in task["episodes"])
                     for key in ("observations", "predictions", "predicted_actions", "executed_actions")}}}
-            (task_dir / "index.html").write_text(_page(scoped, "../../", [("Run overview", "../../index.html")],
+            (task_dir / "index.html").write_text(_page(_dashboard_summary(scoped, "../../"), "../../", [("Run overview", "../../index.html")],
                 os.path.relpath(report / "tasks" / task["task_key"] / "index.html", task_dir)), encoding="utf-8")
             links.append((task["task_id"], f'tasks/{task["task_key"]}/index.html'))
-        # The run view contains bounded previews; task views retain every prediction.
-        overview = {**data, "tasks": [{**task, "episodes": [{**episode, "records": episode["records"][:3]}
-            for episode in task["episodes"]]} for task in data["tasks"]]}
-        (stage / "index.html").write_text(_page(overview, "", links, os.path.relpath(report / "index.html", stage)), encoding="utf-8")
+        (stage / "index.html").write_text(_page(_dashboard_summary(data), "", links, os.path.relpath(report / "index.html", stage)), encoding="utf-8")
         files = [{"path": str(path.relative_to(stage)), "size_bytes": path.stat().st_size, "sha256": _sha(path)}
             for path in sorted(stage.rglob("*")) if path.is_file()]
         manifest = {"schema_version": SCHEMA, "derived_build_id": target.name, "identity_inputs": _identity(report), "files": files}

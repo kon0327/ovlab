@@ -76,9 +76,14 @@ def test_interactive_eval_preserves_counts_records_hierarchy_and_integrity(tmp_p
     assert row["output"]["actions"][0] == row["output"]["executed"][0]["requested"]
     assert row["output"]["raw_output"]["value"] == {"token_ids": [0]}
     task_html = next(target.glob("tasks/*/index.html")).read_text()
-    assert '"index":4' in task_html
+    assert '"index":4' not in task_html
     overview = (target / "index.html").read_text()
     assert '"index":4' not in overview
+    assert "data:image/png;base64" not in overview
+    episode_scripts = list(target.glob("data/episodes/*.js"))
+    assert len(episode_scripts) == 2
+    assert all('"index":4' in script.read_text() for script in episode_scripts)
+    assert all("data:image/png;base64" in script.read_text() for script in episode_scripts)
     assert 'src="assets/dashboard.js"' in overview
     assert "http://" not in overview and "https://" not in overview
     assert engine.generate(run_id)["interactive_build_id"] == result["interactive_build_id"]

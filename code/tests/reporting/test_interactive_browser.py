@@ -1,6 +1,7 @@
 """Optional offline dashboard regressions; install Playwright and Chromium to run."""
 
 import pytest
+from pathlib import Path
 
 playwright = pytest.importorskip("playwright.sync_api")
 
@@ -83,14 +84,16 @@ def test_sparse_long_series_and_unavailable_series_keep_every_sample(dashboard):
     loss, accuracy = page.locator(".chart-card").nth(0), page.locator(".chart-card").nth(1)
     assert "1 valid / 2,001 recorded samples" in loss.locator(".chart-summary").inner_text()
     assert "no finite recorded samples" not in loss.inner_text()
-    assert loss.locator(".series-data tbody tr").count() == 2001
-    assert loss.locator(".series-data tbody tr").nth(1000).locator("td").nth(1).inner_text() == "0.000002"
+    assert loss.locator(".series-data tbody tr").count() == 100
+    for _ in range(10):
+        loss.get_by_role("button", name="Next samples").click()
+    assert loss.locator(".series-data tbody tr").first.locator("td").nth(1).inner_text() == "0.000002"
     sample = loss.get_by_label("Inspect an exact recorded sample")
     sample.fill("1000")
     sample.dispatch_event("input")
     assert "0.000002 loss" in loss.locator(".exact-sample").inner_text()
     assert "no finite recorded samples" in accuracy.inner_text()
-    assert accuracy.locator(".series-data tbody tr").count() == 2001
+    assert accuracy.locator(".series-data tbody tr").count() == 100
     assert "Unavailable fraction" in accuracy.locator(".exact-sample").inner_text()
 
 
@@ -108,6 +111,7 @@ def test_keyboard_model_selection_reveals_mobile_stage_without_collapsing_eviden
     page = dashboard(mobile=True)
     assert page.locator("details").count() > 0
     assert page.locator("details").evaluate_all("items => items.every(item => item.open)")
+
     button = page.get_by_role("button", name="Optimizer & checkpoint", exact=True)
     button.focus()
     page.keyboard.press("Enter")
@@ -129,3 +133,69 @@ def test_keyboard_model_selection_reveals_mobile_stage_without_collapsing_eviden
     assert geometry["left"] >= -1 and geometry["right"] <= geometry["width"] + 1
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     assert page.locator("details").evaluate_all("items => items.every(item => item.open)")
+
+def test_real_evaluation_loads_only_the_selected_episode_offline(tmp_path, browser):
+    from test_reports_exports import _canonical_run
+    from ovlab_runner import DerivedReportEngine
+
+    runs = tmp_path / "runs"
+    run_id, _ = _canonical_run(runs, name="lazy-browser", rollouts=2, alternating=True, maximum_steps=5)
+    generated = DerivedReportEngine(runs, tmp_path / "derived").generate(run_id)
+    target = Path(generated["interactive_output"])
+    page = browser.new_page()
+    requests, errors = [], []
+    page.on("request", lambda request: requests.append(request.url))
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto((target / "index.html").as_uri())
+        page.wait_for_load_state("networkidle")
+        assert not any("/data/episodes/" in url for url in requests)
+        assert page.locator("#record .card").count() == 0
+        assert page.get_by_role("button", name="Open run 1, mock-task-0").count() == 1
+        page.get_by_role("button", name="Open run 1, mock-task-0").click()
+        page.wait_for_function("document.querySelectorAll('#record .card').length === 2")
+        assert len([url for url in requests if "/data/episodes/" in url]) == 1
+        assert "Rollout 1" in page.locator("#batch").inner_text()
+        assert page.locator("#record img").count() > 0
+        assert page.locator("#selectors input[type=range]").get_attribute("max") == "4"
+        page.locator("#selectors input[type=range]").press("End")
+        assert "Prediction 5 / 5" in page.locator("#selectors").inner_text()
+        task_page = next(target.glob("tasks/*/index.html"))
+        requests.clear()
+        page.goto(task_page.as_uri())
+        page.wait_for_load_state("networkidle")
+        assert not any("/data/episodes/" in url for url in requests)
+        page.get_by_role("button", name="Load run details").click()
+        page.wait_for_function("document.querySelectorAll('#record .card').length === 2")
+        assert len([url for url in requests if "/data/episodes/" in url]) == 1
+        assert page.locator("#selectors input[type=range]").get_attribute("max") == "4"
+        assert not errors
+    finally:
+        page.close()
+
+
+def test_real_training_loads_metrics_only_when_requested(tmp_path, browser):
+    import runpy
+    from ovlab_runner import TrainingDerivedReportEngine
+
+    helper = Path(__file__).resolve().parents[1] / "unit/training/test_performance_reporting.py"
+    run = runpy.run_path(str(helper))["_training_run"](tmp_path / "runs/train")
+    generated = TrainingDerivedReportEngine(run.parent, tmp_path / "exports/train/derived").generate(run.name)
+    target = Path(generated["interactive_output"])
+    page = browser.new_page()
+    requests, errors = [], []
+    page.on("request", lambda request: requests.append(request.url))
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto((target / "index.html").as_uri())
+        page.wait_for_load_state("networkidle")
+        assert not any("/data/training.js" in url for url in requests)
+        assert page.locator(".chart-card").count() == 0
+        assert "0.5" in page.locator("#highlights").inner_text()
+        page.get_by_role("button", name="Load training results").click()
+        page.wait_for_function("document.querySelectorAll('.chart-card').length === 4")
+        assert len([url for url in requests if "/data/training.js" in url]) == 1
+        assert "All recorded training metrics" in page.locator("#metric-table").inner_text()
+        assert not errors
+    finally:
+        page.close()
