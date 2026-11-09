@@ -11,7 +11,11 @@ boundaries and current scope limits.
 The complete system design, runtime boundaries, data flows and extension points
 are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-OVLAB follows a **Config → Connect → Run → Inspect** workflow: define an experiment, connect interchangeable policies and benchmarks through shared contracts, execute reproducible runs, and validate or analyze their immutable traces offline.
+OVLAB follows a **Define experiment → Plan → Run → Report** workflow: a JSON
+experiment tree can contain models, tasks and ablations at any depth. Each node
+can run independently and produces immutable canonical evidence plus a
+hierarchical report. See the [experiment workflow guide](docs/EXPERIMENT_WORKFLOW.md)
+and [example JSON](configs/experiments/workflows/libero-model-tree.json).
 
 The experiment runner and benchmark adapter execute together in a runner process or container. Each VLA implementation runs independently as a policy service, communicating through a dependency-light policy protocol. This separation allows Vanilla, LoRA, OFT, and QuIC implementations to keep distinct dependency environments.
 
@@ -21,8 +25,9 @@ The experiment runner and benchmark adapter execute together in a runner process
 - `configs/`: benchmark, policy, metric, protocol, and experiment configuration.
 - `deploy/`: reserved for Docker, Compose, and deployment scripts.
 - `external/`: destinations for pinned external repositories and the dedicated OpenVLA-QuIC fork.
-- `runs/evaluate/` and `runs/train/`: optional local evaluation and training
-  output; contents are not versioned.
+- `runs/<experiment-id>/train|evaluate/`: canonical evidence for experiment
+  nodes; contents are not versioned. Legacy direct commands retain their old
+  `runs/train|evaluate/` locations.
 
 Container deployments use a host-backed artifact workspace outside the source
 checkout. The canonical convention is `ovlab-data/runs` for immutable evidence,
@@ -44,8 +49,23 @@ publication exports are documented in the [`Data management guide`](DATA_MANAGEM
 
 ## Command line
 
-Install the host CLI in its own environment first. The installer prefers Conda
-and uses `venv` when Conda is unavailable; see [Environment setup](ENVIRONMENT.md).
+To make the checkout's launcher available as `ovlab` without activating an
+environment, install it once into `~/.local/bin`:
+
+```bash
+bash ./install-ovlab-cli.sh
+ovlab --help
+ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json --dry-run
+```
+
+The installer prints a PATH instruction if `~/.local/bin` is not already on
+PATH. It never replaces an unrelated command. The launcher uses the same
+Docker routing and Python selection as `./ovlab`; repository-relative
+experiment specifications also work from another directory.
+
+For a dedicated host Python environment, use the environment installer. It
+prefers Conda and uses `venv` when Conda is unavailable; see
+[Environment setup](ENVIRONMENT.md).
 
 ```bash
 source ./install-ovlab-env.sh
@@ -59,6 +79,9 @@ environment when available:
 
 ```bash
 ./ovlab --help
+./ovlab experiment plan --spec configs/experiments/workflows/libero-model-tree.json
+./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json --dry-run
+./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json
 ./ovlab doctor
 ./ovlab doctor --experiment configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ./ovlab eval run libero10-lora-merged-rpc-smoke
@@ -83,6 +106,8 @@ environment when available:
 ./ovlab report verify --run RUN_ID_OR_HASH --profile libero-task-default --build BUILD_ID
 ./ovlab export isolated --run RUN_ID_OR_HASH
 ./ovlab export grouped --name STUDY_NAME --runs RUN_ID_OR_HASH_A RUN_ID_OR_HASH_B
+./ovlab export isolated --category train --run TRAINING_RUN_ID
+./ovlab export grouped --category train --name TRAINING_STUDY --runs TRAIN_RUN_A TRAIN_RUN_B
 ./ovlab data list
 ./ovlab data archive --run RUN_ID
 ./ovlab dataset resolve --benchmark libero --suite libero_10

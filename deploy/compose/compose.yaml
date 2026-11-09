@@ -68,9 +68,11 @@ services:
     profiles: [openvla]
     stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs/evaluate]
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
     environment:
       OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
+      OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}
+      OVLAB_EXPERIMENT_NODE: ${OVLAB_EXPERIMENT_NODE:-}
       OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-openvla}
       OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
       OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
@@ -157,9 +159,11 @@ services:
     profiles: [oft]
     stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs/evaluate]
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
     environment:
       OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
+      OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}
+      OVLAB_EXPERIMENT_NODE: ${OVLAB_EXPERIMENT_NODE:-}
       OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-oft}
       OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
       OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
@@ -251,9 +255,11 @@ services:
     profiles: [quic]
     stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, /var/lib/ovlab/runs/evaluate]
+    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
     environment:
       OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
+      OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}
+      OVLAB_EXPERIMENT_NODE: ${OVLAB_EXPERIMENT_NODE:-}
       OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-quic}
       OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver did not set an execution profile}
       OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?configuration bundle resolver did not set an identity}
@@ -314,6 +320,8 @@ services:
       OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw
       OVLAB_RUNS_ROOT: /var/lib/ovlab/runs
       OVLAB_EXPORTS_ROOT: /var/lib/ovlab/exports
+      OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}
+      OVLAB_EXPERIMENT_NODE: ${OVLAB_EXPERIMENT_NODE:-}
       OVLAB_DERIVED_DISPLAY_ROOT: ${OVLAB_DERIVED_DISPLAY_ROOT:-/var/lib/ovlab/exports/evaluate/derived}
       OVLAB_EXPORTS_DISPLAY_ROOT: ${OVLAB_EXPORTS_DISPLAY_ROOT:-/var/lib/ovlab/exports}
       OVLAB_IMAGE_DIGEST: ${OVLAB_REPORTING_IMAGE_DIGEST:-unavailable}
@@ -347,6 +355,8 @@ services:
       OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro
       OVLAB_RUNS_ROOT: /var/lib/ovlab/runs
       OVLAB_EXPORTS_ROOT: /var/lib/ovlab/exports
+      OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}
+      OVLAB_EXPERIMENT_NODE: ${OVLAB_EXPERIMENT_NODE:-}
       OVLAB_IMAGE_DIGEST: ${OVLAB_REPORTING_IMAGE_DIGEST:-unavailable}
       OVLAB_DEPLOYMENT_MANIFEST_SHA256: ${OVLAB_DEPLOYMENT_MANIFEST_SHA256:-unavailable}
       OVLAB_CONTAINER_RUNTIME_VERSION: ${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}

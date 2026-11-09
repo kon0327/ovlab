@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import errno
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,9 @@ import struct
 from typing import Mapping
 import uuid
 
+from ovlab_core.experiment_scope import ExperimentScope
+
+from .run_references import RunReferenceError, resolve_run_reference_tree
 from .strict_yaml import dumps
 from .training_errors import CheckpointBundleError, TrainingRuntimeError
 from .training_identity import atomic_json, canonical_json, identity, inventory, safe_relative, sha256_file
@@ -33,10 +37,17 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _run_id(profile_id: str, scientific_id: str) -> str:
+def _run_id(profile_id: str, scientific_id: str, scope: ExperimentScope | None = None) -> str:
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", profile_id).strip("._-") or "training"
-    return f"{slug}_{stamp}_{scientific_id.rsplit('-', 1)[-1][:8]}"
+    suffix = scientific_id.rsplit("-", 1)[-1][:8]
+    if scope is not None:
+        # The final eight characters are a lookup locator, not the scientific
+        # identity. Include per-execution entropy so repeated or sibling nodes
+        # remain distinct while preserving the canonical readable run-key form.
+        payload = f"{scientific_id}:{scope.experiment_id}:{scope.node_path}:{uuid.uuid4().hex}"
+        suffix = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    return f"{slug}_{stamp}_{suffix}"
 
 
 @dataclass(slots=True)
@@ -158,11 +169,36 @@ class OpenVlaTrainerAdapter(TrainerAdapter):
 class TrainingRunStore:
     def __init__(
         self, model_data_root: str | Path, *, runs_root: str | Path | None = None,
-        training_runs_root: str | Path | None = None,
+        training_runs_root: str | Path | None = None, scope: ExperimentScope | None = None,
     ):
         self.model_data_root = Path(model_data_root).expanduser().resolve()
         self.runs_root = Path(runs_root).expanduser().resolve() if runs_root is not None else self.model_data_root / "runs"
-        self.root = Path(training_runs_root).expanduser().resolve() if training_runs_root is not None else self.runs_root / "train"
+        self.scope = scope if scope is not None else ExperimentScope.from_environment()
+        self.explicit_root = training_runs_root is not None
+        self.root = (Path(training_runs_root).expanduser().resolve() if training_runs_root is not None
+                     else self.scope.runs_root(self.runs_root, "train") if self.scope is not None
+                     else self.runs_root / "train")
+
+    def _run_root(self, run_id: str) -> Path:
+        if not isinstance(run_id, str) or Path(run_id).parts != (run_id,) or run_id in {".", ".."}:
+            raise TrainingRuntimeError("training run ID must be one portable path segment")
+        direct = self.root / run_id
+        if direct.is_symlink():
+            raise TrainingRuntimeError(f"training run resolves to a forbidden symbolic link: {run_id}")
+        if direct.is_dir():
+            return direct.resolve()
+        if self.explicit_root:
+            raise TrainingRuntimeError(f"training run does not exist: {run_id}")
+        try:
+            search_root = self.root if self.scope is not None else self.runs_root
+            found = resolve_run_reference_tree(search_root, run_id,
+                                               category=None if self.scope is not None else "train",
+                                               label="training run")
+        except RunReferenceError as exc:
+            raise TrainingRuntimeError(str(exc)) from exc
+        if self.scope is not None and not found.path.is_relative_to(self.root):
+            raise TrainingRuntimeError(f"training run does not exist in the selected experiment node: {run_id}")
+        return found.path
 
     def create(
         self,
@@ -172,7 +208,27 @@ class TrainingRunStore:
         provenance: Mapping[str, object],
     ) -> TrainingRunContext:
         scientific_id = str(plan["scientific_training_id"])
-        run_id = _run_id(str(resolved_profile["id"]), scientific_id)
+        run_id = _run_id(str(resolved_profile["id"]), scientific_id, self.scope)
+        if self.scope is not None:
+            candidate = self.runs_root
+            for part in (self.scope.experiment_id, "train", *self.scope.node_parts):
+                candidate = candidate / part
+                if candidate.is_symlink() or not candidate.resolve().is_relative_to(self.runs_root):
+                    raise TrainingRuntimeError("experiment run path contains a symbolic link or escapes the runs root")
+        self.root.mkdir(parents=True, exist_ok=True)
+        if self.scope is not None:
+            scoped_parent = self.runs_root / self.scope.experiment_id
+            parent = scoped_parent
+            for part in ("train", *self.scope.node_parts):
+                # The created hierarchy must be writable by the isolated worker.
+                # Existing unrelated experiment roots are never touched.
+                if parent.is_symlink() or not parent.resolve().is_relative_to(self.runs_root):
+                    raise TrainingRuntimeError("experiment run path contains a symbolic link or escapes the runs root")
+                parent.chmod(0o2770)
+                parent = parent / part
+            if parent.is_symlink() or not parent.resolve().is_relative_to(self.runs_root):
+                raise TrainingRuntimeError("experiment run path contains a symbolic link or escapes the runs root")
+            parent.chmod(0o2770)
         root = self.root / run_id
         try:
             root.mkdir(parents=True, exist_ok=False)
@@ -195,6 +251,8 @@ class TrainingRunStore:
             "schema_version": TRAINING_RUN_SCHEMA,
             "run_id": run_id,
             "created_at": _utc_now(),
+            **({"experiment_scope": {"experiment_id": self.scope.experiment_id,
+                                       "node_path": self.scope.node_path}} if self.scope is not None else {}),
             **dict(provenance),
         }, mode=0o644)
         for name in ("events.jsonl", "metrics.jsonl"):
@@ -235,10 +293,13 @@ class TrainingRunStore:
         return result
 
     def list(self) -> list[dict[str, object]]:
-        if not self.root.is_dir():
-            return []
         results = []
-        for path in sorted(self.root.glob("*/result.json")):
+        roots = (self.root,) if self.scope is not None or self.explicit_root else (self.root, self.runs_root)
+        seen: set[Path] = set()
+        for path in sorted(path for root in roots if root.is_dir() for path in root.rglob("result.json")):
+            if path in seen or not (path.parent / "training-plan.json").is_file() or path.is_symlink():
+                continue
+            seen.add(path)
             try:
                 document = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -247,16 +308,14 @@ class TrainingRunStore:
         return results
 
     def inspect(self, run_id: str) -> dict[str, object]:
-        root = self.root / run_id
-        if not root.is_dir() or not root.resolve().is_relative_to(self.root.resolve()):
-            raise TrainingRuntimeError(f"training run does not exist: {run_id}")
+        root = self._run_root(run_id)
         result_path = root / "result.json"
         result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {"status": "running"}
         plan = json.loads((root / "training-plan.json").read_text(encoding="utf-8"))
         return {"schema_version": TRAINING_RUN_SCHEMA, "run_id": run_id, "host_path": str(root), "result": result, "plan": plan}
 
     def verify(self, run_id: str) -> dict[str, object]:
-        root = self.root / run_id
+        root = self._run_root(run_id)
         manifest_path = root / "manifest.json"
         if not manifest_path.is_file():
             raise TrainingRuntimeError(f"training run is not finalized: {run_id}")

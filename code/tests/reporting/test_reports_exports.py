@@ -21,6 +21,7 @@ from ovlab_runner import (
     RunConfigurationSnapshot, build_report_model, builtin_profile, validate_export_spec,
 )
 from ovlab_runner.derived import _trace_view
+from ovlab_runner.unified_reports import UnifiedInteractiveReportEngine
 
 
 REPOSITORY = Path(__file__).resolve().parents[3]
@@ -42,6 +43,51 @@ def test_key_parameters_preserve_recorded_zero_and_mark_missing_values():
     assert training["Learning rate"]["source"] == "run/training-plan.json:scientific.profile.training.learning_rate"
     assert training["Training seed"]["value"] == 0
     assert training["Trainable parameters"]["value"] is None
+
+
+def test_json_profile_selects_evaluation_parameters_and_tracks_configuration(tmp_path):
+    from ovlab_runner.key_parameters import default_key_parameters
+
+    runs = tmp_path / "runs"
+    run_id, _ = _canonical_run(runs, name="profile-parameters", rollouts=2)
+    parameters = default_key_parameters("evaluate")
+    group = next(group for group in parameters["groups"] if group["stage"] == "representation")
+    parameters["groups"] = [group]
+    group["items"] = [group["items"][0]]
+    group["items"][0]["label"] = "Configured rollout count"
+    (tmp_path / "parameters.json").write_text(json.dumps(parameters), encoding="utf-8")
+    document = builtin_profile().document()
+    document.update(id="custom-parameters", key_parameters="parameters.json")
+    profile_file = tmp_path / "profile.json"
+    profile_file.write_text(json.dumps(document), encoding="utf-8")
+    profile = OvlabApplication(REPOSITORY)._report_profile(str(profile_file))
+    engine = UnifiedInteractiveReportEngine(runs, tmp_path / "interactive", profile)
+    generated = engine.generate(run_id)
+    model = json.loads((Path(generated["output"]) / "model.json").read_text())
+    assert model["key_parameters"] == [{"title": group["title"], "stage": "representation", "items": [{
+        "label": "Configured rollout count", "value": 2, "source": "run/plan.json:rollout_count_per_task",
+    }]}]
+    assert engine.verify(run_id)["integrity"] == "verified"
+    group["items"][0]["label"] = "Episodes"
+    (tmp_path / "parameters.json").write_text(json.dumps(parameters), encoding="utf-8")
+    revised = OvlabApplication(REPOSITORY)._report_profile(str(profile_file))
+    assert UnifiedInteractiveReportEngine(runs, tmp_path / "interactive", revised).generate(run_id)["interactive_build_id"] != generated["interactive_build_id"]
+    document["key_parameters"] = "../outside.json"
+    with pytest.raises(ArtifactError, match="escapes"):
+        ReportProfile.from_mapping(document, template_base=tmp_path)
+
+
+def test_key_parameter_configuration_rejects_invalid_sources_and_stages():
+    from ovlab_runner.key_parameters import default_key_parameters, validate_key_parameters
+
+    parameters = default_key_parameters("evaluate")
+    parameters["groups"][0]["items"][0]["sources"][0]["source"] = "/etc/passwd"
+    with pytest.raises(ArtifactError, match="source or dotted path"):
+        validate_key_parameters(parameters, "evaluate")
+    parameters = default_key_parameters("train")
+    parameters["groups"][0]["stage"] = ["not-a-stage"]
+    with pytest.raises(ArtifactError, match="supported stage"):
+        validate_key_parameters(parameters, "train")
 
 
 def test_trace_report_extracts_policy_allocator_vram_and_estimated_compute(tmp_path):
@@ -124,6 +170,66 @@ def test_interactive_eval_preserves_counts_records_hierarchy_and_integrity(tmp_p
     (target / "assets/dashboard.js").write_text("tampered")
     with pytest.raises(ArtifactError, match="interactive report file checksum mismatch"):
         engine.verify(run_id)
+
+
+def test_unified_eval_report_contains_full_derived_evidence_without_derived_tree(tmp_path):
+    runs = tmp_path / "runs" / "exp-one" / "evaluate" / "model-a" / "task-a" / "ablation-1"
+    run_id, source = _canonical_run(runs, name="unified-eval", rollouts=2, maximum_steps=3)
+    root = tmp_path / "exports" / "exp-one" / "evaluate" / "model-a" / "task-a" / "ablation-1" / "interactive"
+    engine = UnifiedInteractiveReportEngine(runs, root)
+    before = (source / "integrity.json").read_bytes()
+    published = engine.generate(run_id)
+    target = Path(published["output"])
+    assert target.is_relative_to(root)
+    assert not list((tmp_path / "exports").rglob("derived"))
+    assert json.loads((target / "model.json").read_text())["charts"]
+    assert json.loads((target / "model.json").read_text())["provenance"]["verification"] == "verified"
+    overview = (target / "index.html").read_text()
+    assert "Complete report evidence" in overview
+    assert "Full HTML report" not in overview
+    assert '"index":2' not in overview
+    assert len(list(target.glob("data/episodes/*.js"))) == 2
+    assert published["interactive_build_id"] == engine.generate(run_id)["interactive_build_id"]
+    assert engine.verify(run_id)["integrity"] == "verified"
+    assert before == (source / "integrity.json").read_bytes()
+    (target / "model.json").write_text("{}")
+    with pytest.raises(ArtifactError, match="interactive report file checksum mismatch"):
+        engine.verify(run_id)
+
+
+def test_legacy_interactive_remains_verifiable_after_renderer_revision(tmp_path, monkeypatch):
+    import ovlab_runner.interactive as interactive_module
+
+    runs = tmp_path / "runs"
+    run_id, _ = _canonical_run(runs, name="legacy-renderer", rollouts=1, maximum_steps=2)
+    engine = DerivedReportEngine(runs, tmp_path / "derived")
+    generated = engine.generate(run_id)
+    previous = Path(generated["interactive_output"])
+    monkeypatch.setattr(interactive_module, "RENDERER", "ovlab-interactive-dashboard@future")
+    assert engine.verify(run_id)["interactive_integrity"] == "verified"
+    assert previous.is_dir()
+
+
+def test_unified_task_report_verifies_from_latest_without_repeating_scope(tmp_path):
+    runs = tmp_path / "runs" / "exp-one" / "evaluate" / "model-a"
+    run_id, _ = _canonical_run(runs, name="unified-task", rollouts=1, maximum_steps=2)
+    engine = UnifiedInteractiveReportEngine(runs, tmp_path / "exports" / "exp-one" / "evaluate" / "model-a" / "interactive")
+    generated = engine.generate(run_id, task_id="mock-task-0")
+    model = json.loads((Path(generated["output"]) / "model.json").read_text())
+    assert model["scope"] == "task"
+    assert engine.verify(run_id)["interactive_build_id"] == generated["interactive_build_id"]
+    assert engine.verify(run_id, build_id=generated["interactive_build_id"])["integrity"] == "verified"
+
+
+def test_application_routes_scoped_run_to_only_interactive_report(tmp_path):
+    runs = tmp_path / "runs" / "exp-one" / "evaluate" / "model-a" / "task-a"
+    run_id, _ = _canonical_run(runs, name="scoped-application", rollouts=1, maximum_steps=2)
+    app = OvlabApplication(REPOSITORY, environment={"OVLAB_DATA_ROOT": str(tmp_path)})
+    generated = app.report_generate(run_id)
+    target = Path(generated["output"])
+    assert target.is_relative_to(tmp_path / "exports" / "exp-one" / "evaluate" / "model-a" / "task-a" / "interactive")
+    assert not list((tmp_path / "exports").rglob("derived"))
+    assert app.report_verify(run_id)["interactive_build_id"] == generated["interactive_build_id"]
 
 
 def test_interactive_eval_chunk_alignment_and_script_escaping(tmp_path):

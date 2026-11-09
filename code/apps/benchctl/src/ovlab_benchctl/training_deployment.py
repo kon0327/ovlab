@@ -10,6 +10,8 @@ import subprocess
 import sys
 import uuid
 
+from ovlab_core.experiment_scope import ExperimentScope
+
 from .application import OvlabApplication
 from .datasets import DatasetRequest, DatasetStore, LiberoDatasetBridge
 from .image_metadata import IMAGE_CONTRACT_LABEL
@@ -81,6 +83,19 @@ class TrainingDeployment:
         groups = {os.getgid(), *(path.stat().st_gid for path in directories)}
         return [argument for group in sorted(groups) for argument in ("--group-add", str(group))]
 
+    @staticmethod
+    def _prepare_scoped_hierarchy(base: Path, scope: ExperimentScope, category: str) -> Path:
+        """Create each scoped parent with worker group access when host-owned."""
+        current = base
+        for part in (scope.experiment_id, category, *scope.node_parts):
+            current = current / part
+            if current.is_symlink():
+                raise TrainingRuntimeError(f"experiment path contains a symbolic link: {current}")
+            current.mkdir(exist_ok=True)
+            if current.stat().st_uid == os.getuid():
+                current.chmod(0o2770)
+        return current
+
     def _prepare_base_checkpoint(self, plan: dict[str, object]) -> dict[str, object]:
         """Materialize HF blob links for an isolated, offline snapshot mount."""
         from .checkpointing import (
@@ -143,13 +158,20 @@ class TrainingDeployment:
 
     def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False,
             fit_action_normalization: bool = False, interactive_progress: bool = False) -> dict[str, object]:
+        scope = ExperimentScope.from_environment(self.environment)
+        training_root = scope.runs_root(self.runs_root, "train") if scope is not None else self.runs_root / "train"
         for directory in (
             self.model_data_root / "datasets",
-            self.runs_root / "train",
             self.model_data_root / "checkpoints",
         ):
             directory.mkdir(parents=True, exist_ok=True)
             directory.chmod(0o2770)
+        self.runs_root.mkdir(parents=True, exist_ok=True)
+        if scope is not None:
+            self._prepare_scoped_hierarchy(self.runs_root, scope, "train")
+        else:
+            training_root.mkdir(parents=True, exist_ok=True)
+            training_root.chmod(0o2770)
         profile_path, profile = self._profile(profile_reference)
         from .training_profiles import with_fitted_action_normalization
         profile = with_fitted_action_normalization(profile, fit_action_normalization)
@@ -187,7 +209,7 @@ class TrainingDeployment:
             allow_checkpoint_download=True,
         )
         plan = self._prepare_base_checkpoint(plan)
-        store = TrainingRunStore(self.model_data_root, runs_root=self.runs_root)
+        store = TrainingRunStore(self.model_data_root, runs_root=self.runs_root, scope=scope)
         context = store.create(
             load(profile_path),
             profile.document,
@@ -273,20 +295,29 @@ class TrainingDeployment:
         ).expanduser().resolve()
         exports_root.mkdir(parents=True, exist_ok=True)
         exports_root.chmod(0o2770)
-        derived_root = exports_root / "train" / "derived"
-        interactive_root = exports_root / "train" / "interactive"
-        for output_root in (exports_root / "train", derived_root, interactive_root):
-            output_root.mkdir(parents=True, exist_ok=True)
-            output_root.chmod(0o2770)
+        export_node_root = scope.exports_root(exports_root, "train") if scope is not None else exports_root / "train"
+        interactive_root = export_node_root / "interactive"
+        if scope is not None:
+            self._prepare_scoped_hierarchy(exports_root, scope, "train")
+        else:
+            export_node_root.mkdir(parents=True, exist_ok=True)
+            export_node_root.chmod(0o2770)
+        interactive_root.mkdir(exist_ok=True)
+        if interactive_root.stat().st_uid == os.getuid():
+            interactive_root.chmod(0o2770)
+        scope_environment = (["--env", f"OVLAB_EXPERIMENT_ID={scope.experiment_id}",
+                              "--env", f"OVLAB_EXPERIMENT_NODE={scope.node_path}"]
+                             if scope is not None else [])
         reporting = [
             "docker", "run", "--rm", "--network", "none", "--read-only",
-            "--user", "10001:10001", *self._container_groups(self.runs_root, context.root, exports_root, derived_root, interactive_root),
+            "--user", "10001:10001", *self._container_groups(self.runs_root, context.root, exports_root, interactive_root),
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
             "--env", "OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data",
-            "--env", f"OVLAB_DERIVED_DISPLAY_ROOT={derived_root}",
             "--env", "OVLAB_RUNS_ROOT=/var/lib/ovlab/runs",
             "--env", "OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports",
+            "--env", f"OVLAB_EXPORTS_DISPLAY_ROOT={exports_root}",
+            *scope_environment,
             "--mount", f"type=bind,source={self.runs_root},target=/var/lib/ovlab/runs,readonly",
             "--mount", f"type=bind,source={exports_root},target=/var/lib/ovlab/exports",
             reporting_image, "train", "report", "--run", context.run_id, "--json",

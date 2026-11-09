@@ -19,6 +19,7 @@ from .run_references import (
     RunReferenceUnavailableError,
     resolve_run_reference,
     resolve_run_reference_across,
+    resolve_run_reference_tree,
     run_hash,
 )
 
@@ -100,7 +101,7 @@ class DataTarget:
 
     @property
     def run_hash(self) -> str | None:
-        return run_hash(self.identifier.split(":", 1)[-1]) if self.kind == "run" else None
+        return run_hash(Path(self.identifier.split(":", 1)[-1]).name) if self.kind == "run" else None
 
     def document(self, *, detail: bool = False) -> dict[str, object]:
         value = {
@@ -167,6 +168,15 @@ class DataManager:
     def _run_state(path: Path) -> str:
         if (path / "manifest.completed.json").is_file():
             return "completed"
+        if (path / "manifest.json").is_file() and (path / "training-plan.json").is_file():
+            return "completed"
+        if (path / "training-plan.json").is_file() and (path / "result.json").is_file():
+            try:
+                training_status = json.loads((path / "result.json").read_text(encoding="utf-8")).get("status")
+            except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+                training_status = None
+            if training_status in {"failed", "interrupted"}:
+                return "aborted" if training_status == "interrupted" else "failed"
         failed = path / "manifest.failed.json"
         if failed.is_file():
             try:
@@ -196,7 +206,7 @@ class DataManager:
             return "incomplete"
         if (
             isinstance(metadata, dict)
-            and metadata.get("schema_version") == EXPORT_METADATA_SCHEMA
+            and metadata.get("schema_version") in {EXPORT_METADATA_SCHEMA, "ovlab.training-export/v1"}
             and metadata.get("export_type") == family
         ):
             return "generated"
@@ -211,23 +221,52 @@ class DataManager:
             if requested_type not in {"train", "evaluate"} or not plain:
                 raise DataSafetyError("run ID prefix must be train: or evaluate:")
         legacy_train = self.archive_root / "training-runs" if archived else self.data_root / "training-runs"
-        roots = (
-            (root / requested_type, legacy_train) if requested_type == "train" else
-            (root / requested_type,) if requested_type else
-            (root / "train", legacy_train, root / "evaluate", root)
-        )
-        try:
-            resolved = resolve_run_reference_across(roots, plain, label="run")
-        except RunReferenceUnavailableError as exc:
-            raise DataSourceUnavailableError(str(exc)) from exc
-        except (RunReferenceAmbiguousError, RunReferenceError) as exc:
-            raise DataSafetyError(str(exc)) from exc
+        if "/" in plain:
+            if any(not _IDENTIFIER.fullmatch(part) or part in {".", ".."} for part in plain.split("/")):
+                raise DataSafetyError("qualified run reference contains an invalid path segment")
+            candidate = root.joinpath(*plain.split("/"))
+            parent = root
+            for part in plain.split("/"):
+                parent = parent / part
+                if parent.is_symlink() or not parent.resolve().is_relative_to(root.resolve()):
+                    raise DataSafetyError("qualified run reference contains a symbolic link or escapes the runs root")
+            if not candidate.is_dir() or not any((candidate / marker).is_file() for marker in (
+                "manifest.started.json", "manifest.completed.json", "manifest.failed.json", "training-plan.json",
+            )):
+                raise DataSourceUnavailableError(f"run is unavailable: {identifier!r}")
+            from .run_references import ResolvedRunReference
+            resolved = ResolvedRunReference(candidate.name, run_hash(candidate.name), candidate.resolve())
+        else:
+            roots = (
+                (root / requested_type, legacy_train) if requested_type == "train" else
+                (root / requested_type,) if requested_type else
+                (root / "train", legacy_train, root / "evaluate", root)
+            )
+            try:
+                resolved = resolve_run_reference_across(roots, plain, label="run")
+            except RunReferenceUnavailableError:
+                try:
+                    resolved = resolve_run_reference_tree(root, plain, category=requested_type, label="run")
+                except RunReferenceUnavailableError as exc:
+                    raise DataSourceUnavailableError(str(exc)) from exc
+                except (RunReferenceAmbiguousError, RunReferenceError) as exc:
+                    raise DataSafetyError(str(exc)) from exc
+            except (RunReferenceAmbiguousError, RunReferenceError) as exc:
+                raise DataSafetyError(str(exc)) from exc
         DataManager._identifier(resolved.run_id, "run ID")
-        variant = requested_type or ("train" if resolved.path == legacy_train.resolve() / resolved.run_id else resolved.path.parent.name if resolved.path.parent.name in {"train", "evaluate"} else "evaluate")
+        relative = resolved.path.relative_to(root) if resolved.path.is_relative_to(root) else None
+        if relative is not None and len(relative.parts) >= 3 and relative.parts[1] in {"train", "evaluate"}:
+            variant = relative.parts[1]
+        else:
+            variant = requested_type or ("train" if resolved.path == legacy_train.resolve() / resolved.run_id else resolved.path.parent.name if resolved.path.parent.name in {"train", "evaluate"} else "evaluate")
+        if requested_type is not None and variant != requested_type:
+            raise DataSourceUnavailableError(f"run is unavailable in category {requested_type!r}: {identifier!r}")
         allowed_root = root if resolved.path.is_relative_to(root) else resolved.path.parent
         path = self._managed_directory(resolved.path, allowed_root, "run")
+        display = str(relative) if relative is not None and len(relative.parts) >= 3 and relative.parts[1] in {"train", "evaluate"} else resolved.run_id
+        archive_relative = Path("runs") / relative if relative is not None and len(relative.parts) >= 3 and relative.parts[1] in {"train", "evaluate"} else Path("runs") / variant / resolved.run_id
         return DataTarget(
-            "run", resolved.run_id, path, Path("runs") / variant / resolved.run_id,
+            "run", display, path, archive_relative,
             self._run_state(path), variant,
         )
 
@@ -249,6 +288,53 @@ class DataManager:
             if category_root.is_symlink():
                 raise DataSafetyError(f"managed export root contains a symbolic link: {category_root}")
         return root
+
+    @staticmethod
+    def _scoped_family_roots(root: Path, family: str, *, category: str | None = None) -> tuple[Path, ...]:
+        """Locate a named artifact family at any experiment-node depth."""
+        found = []
+        if not root.is_dir():
+            return ()
+        for experiment in sorted(root.iterdir()):
+            if experiment.is_symlink():
+                raise DataSafetyError(f"managed export root contains a symbolic link: {experiment}")
+            if not experiment.is_dir() or experiment.name in {"train", "evaluate", "derived", "interactive", "isolated", "grouped", "manifests"}:
+                continue
+            for kind in ((category,) if category is not None else ("train", "evaluate")):
+                branch = experiment / kind
+                if branch.is_symlink():
+                    raise DataSafetyError(f"managed export root contains a symbolic link: {branch}")
+                if not branch.is_dir():
+                    continue
+                pending = [branch]
+                while pending:
+                    parent = pending.pop()
+                    for child in sorted(parent.iterdir(), reverse=True):
+                        if child.is_symlink():
+                            raise DataSafetyError(f"managed export root contains a symbolic link: {child}")
+                        if not child.is_dir():
+                            continue
+                        if child.name == family:
+                            found.append(child)
+                        elif child.name not in {"derived", "interactive", "isolated", "grouped"}:
+                            pending.append(child)
+        return tuple(found)
+
+    @staticmethod
+    def _qualified_artifact(root: Path, relative: str, family: str) -> Path:
+        parts = relative.split("/")
+        if (len(parts) < 4 or parts[1] not in {"train", "evaluate"}
+                or parts[-2] != family or any(not _IDENTIFIER.fullmatch(part) or part in {".", ".."} for part in parts)):
+            raise DataSafetyError(f"qualified {family} reference has an invalid experiment path")
+        candidate = root.joinpath(*parts)
+        parent = root
+        for part in parts:
+            parent = parent / part
+            if parent.is_symlink() or not parent.resolve().is_relative_to(root.resolve()):
+                raise DataSafetyError(f"qualified {family} reference contains a symbolic link or escapes the exports root")
+        if not candidate.is_dir():
+            raise DataSourceUnavailableError(f"{family} is unavailable: {relative!r}")
+        return candidate
 
     @staticmethod
     def _artifact_reference(roots: tuple[Path, ...], reference: str, label: str):
@@ -274,6 +360,21 @@ class DataManager:
         plain = identifier.split(":", 1)[1] if training else identifier.removeprefix("evaluate:")
         category = "train" if training else "evaluate"
         root = self._export_layout_root(archived=archived)
+        if not legacy:
+            if "/" in plain:
+                path = self._qualified_artifact(root, plain, "interactive")
+                if path.relative_to(root).parts[1] != category and training:
+                    raise DataSourceUnavailableError(f"training report is unavailable: {plain!r}")
+            else:
+                scoped_roots = self._scoped_family_roots(root, "interactive", category=category)
+                matches = [candidate / plain for candidate in scoped_roots if (candidate / plain).is_dir()]
+                if len(matches) > 1:
+                    raise DataSafetyError(f"report ID {plain!r} is ambiguous across experiments; use its qualified path")
+                path = matches[0] if matches else None
+            if path is not None:
+                path = self._managed_directory(path, root, "report")
+                relative = path.relative_to(root)
+                return DataTarget("report", str(relative), path, Path("exports") / relative, self._report_state(path))
         roots = (root / category / "derived", root / "derived" / "training" if training else root / "derived")
         for report_root in (*roots, root / "derived"):
             if report_root.is_symlink():
@@ -315,6 +416,20 @@ class DataManager:
         if family not in {"isolated", "grouped"}:
             raise DataSafetyError("export ID must use isolated:NAME or grouped:NAME")
         root = self._export_layout_root(archived=archived)
+        if not legacy:
+            if "/" in plain:
+                scoped = self._qualified_artifact(root, plain, family)
+            else:
+                scoped_roots = self._scoped_family_roots(root, family)
+                matches = [candidate / plain for candidate in scoped_roots if (candidate / plain).is_dir()]
+                if len(matches) > 1:
+                    raise DataSafetyError(f"{family} export ID {plain!r} is ambiguous across experiments; use its qualified path")
+                scoped = matches[0] if matches else None
+            if scoped is not None:
+                path = self._managed_directory(scoped, root, "export")
+                relative = path.relative_to(root)
+                return DataTarget("export", f"{family}:{relative}", path, Path("exports") / relative,
+                                  self._export_state(path, family))
         roots = (root / "evaluate" / family, root / family)
         for family_root in roots:
             if family_root.is_symlink():
@@ -364,8 +479,31 @@ class DataManager:
         for path in sorted(root.iterdir()):
             if path.is_symlink():
                 raise DataSafetyError(f"managed run root contains a symbolic link: {path}")
-            if path.is_dir() and path.name not in {"train", "evaluate"}:
+            if path.is_dir() and path.name not in {"train", "evaluate"} and any((path / marker).is_file() for marker in (
+                "manifest.started.json", "manifest.completed.json", "manifest.failed.json",
+            )):
                 targets.append(self._run_target(path.name, archived=archived))
+            elif path.is_dir() and path.name not in {"train", "evaluate"}:
+                for category in ("train", "evaluate"):
+                    category_root = path / category
+                    if category_root.is_symlink():
+                        raise DataSafetyError(f"managed experiment run root contains a symbolic link: {category_root}")
+                    if not category_root.is_dir():
+                        continue
+                    pending = [category_root]
+                    while pending:
+                        parent = pending.pop()
+                        for candidate in sorted(parent.iterdir(), reverse=True):
+                            if candidate.is_symlink():
+                                raise DataSafetyError(f"managed experiment run root contains a symbolic link: {candidate}")
+                            if not candidate.is_dir():
+                                continue
+                            if any((candidate / marker).is_file() for marker in (
+                                "manifest.started.json", "manifest.completed.json", "manifest.failed.json", "training-plan.json",
+                            )):
+                                targets.append(self._run_target(str(candidate.relative_to(root)), archived=archived))
+                            else:
+                                pending.append(candidate)
         return targets
 
     def _list_reports(self, *, archived: bool) -> list[DataTarget]:
@@ -389,6 +527,14 @@ class DataManager:
                     category = "train" if prefix else "evaluate"
                     legacy = "legacy:" if report_root.is_relative_to(root / "derived") and (root / category / "derived" / path.name).is_dir() else ""
                     targets.append(self._report_target(f"{legacy}{prefix}{path.name}", archived=archived))
+        for family_root in self._scoped_family_roots(root, "interactive"):
+            for path in sorted(family_root.iterdir()):
+                if path.is_symlink():
+                    raise DataSafetyError(f"managed interactive report root contains a symbolic link: {path}")
+                if path.is_dir():
+                    category = path.relative_to(root).parts[1]
+                    prefix = "train:" if category == "train" else ""
+                    targets.append(self._report_target(prefix + str(path.relative_to(root)), archived=archived))
         return targets
 
     def _list_exports(self, *, archived: bool) -> list[DataTarget]:
@@ -412,6 +558,13 @@ class DataManager:
                         )
                     legacy = "legacy:" if category == root and (root / "evaluate" / family / path.name).is_dir() else ""
                     targets.append(self._export_target(f"{legacy}{family}:{path.name}", archived=archived))
+        for family in ("isolated", "grouped"):
+            for family_root in self._scoped_family_roots(root, family):
+                for path in sorted(family_root.iterdir()):
+                    if path.is_symlink():
+                        raise DataSafetyError(f"managed export root contains a symbolic link: {path}")
+                    if path.is_dir():
+                        targets.append(self._export_target(f"{family}:{path.relative_to(root)}", archived=archived))
         return targets
 
     def list(self, *, kind: str = "all", archived: bool = False, detail: bool = False) -> dict[str, object]:
@@ -609,6 +762,11 @@ class DataManager:
             **inventory,
         }
         manifest_name = target.identifier.replace(":", "--") + ".json"
+        if "/" in target.identifier:
+            # Qualified paths must stay a single filename and remain distinct
+            # even when their segments contain the visual separator "--".
+            digest = hashlib.sha256(target.identifier.encode("utf-8")).hexdigest()[:12]
+            manifest_name = target.identifier.replace(":", "--").replace("/", "--") + f"--{digest}.json"
         manifest_root = self.archive_root / "manifests" / target.kind
         if target.run_type is not None:
             entry["run_type"] = target.run_type

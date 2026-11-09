@@ -3,9 +3,9 @@ set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_paths=()
-for source_path in code/packages/*/src code/policies/*/src code/apps/*/src external/quic-peft-vla/src; do
-    if [[ -d "$repository_root/$source_path" ]]; then
-        source_paths+=("$repository_root/$source_path")
+for source_path in "$repository_root"/code/packages/*/src "$repository_root"/code/policies/*/src "$repository_root"/code/apps/*/src "$repository_root"/external/quic-peft-vla/src; do
+    if [[ -d "$source_path" ]]; then
+        source_paths+=("$source_path")
     fi
 done
 joined_paths="$(IFS=:; echo "${source_paths[*]}")"
@@ -167,15 +167,49 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
         training_runs_root="$(realpath -m -- "$model_data_root/training-runs")"
         exports_root="$(realpath -m -- "${OVLAB_EXPORTS_ROOT:-$model_data_root/exports}")"
         derived_root="$exports_root/train/derived"
-        if [[ ! -d "$runs_root/train" && ! -d "$training_runs_root" ]]; then
-            echo "ovlab: training run directories do not exist: $runs_root/train or $training_runs_root" >&2
+        if [[ ! -d "$runs_root" && ! -d "$training_runs_root" ]]; then
+            echo "ovlab: training run directories do not exist: $runs_root or $training_runs_root" >&2
             exit 4
         fi
         training_report_mounts=()
         training_report_roots=()
-        if [[ -d "$runs_root/train" ]]; then
+        training_report_args=("$@")
+        parameter_mount_added=false
+        for ((index=0; index<${#training_report_args[@]}; index++)); do
+            parameter_index=-1
+            parameter_equals=false
+            if [[ "${training_report_args[$index]}" == "--parameters" && $((index + 1)) -lt ${#training_report_args[@]} ]]; then
+                parameter_index=$((index + 1))
+                parameter_path="${training_report_args[$parameter_index]}"
+            elif [[ "${training_report_args[$index]}" == --parameters=* ]]; then
+                parameter_index=$index
+                parameter_equals=true
+                parameter_path="${training_report_args[$index]#--parameters=}"
+            fi
+            if (( parameter_index >= 0 )); then
+                configs_root="$(realpath -m -- "${OVLAB_CONFIGS_ROOT:-$repository_root/configs}")"
+                [[ "$parameter_path" == /* ]] || parameter_path="$repository_root/$parameter_path"
+                parameter_path="$(realpath -e -- "$parameter_path")" || exit 3
+                if [[ ! -f "$parameter_path" || "$parameter_path" != "$configs_root/"* ]]; then
+                    echo "ovlab: training report --parameters must name a JSON file within $configs_root." >&2
+                    exit 3
+                fi
+                parameter_path="/opt/ovlab/configs/${parameter_path#"$configs_root/"}"
+                if [[ "$parameter_equals" == true ]]; then
+                    training_report_args[$parameter_index]="--parameters=$parameter_path"
+                else
+                    training_report_args[$parameter_index]="$parameter_path"
+                fi
+                if [[ "$parameter_mount_added" == false ]]; then
+                    training_report_mounts+=(--mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly")
+                    parameter_mount_added=true
+                fi
+            fi
+        done
+        if [[ -d "$runs_root" ]]; then
             training_report_mounts+=(--mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly")
-            training_report_roots+=("$runs_root" "$runs_root/train")
+            training_report_roots+=("$runs_root")
+            [[ -d "$runs_root/train" ]] && training_report_roots+=("$runs_root/train")
         fi
         if [[ -d "$training_runs_root" ]]; then
             training_report_mounts+=(--mount "type=bind,source=$training_runs_root,target=/var/lib/ovlab/model-data/training-runs,readonly")
@@ -192,17 +226,19 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
             [[ "$argument" == "--verify" ]] && training_report_verify="true"
         done
         if [[ "$training_report_verify" == "true" ]]; then
-            if [[ ! -d "$derived_root" && -d "$exports_root/derived" ]]; then
-                derived_root="$exports_root/derived"
-            fi
-            if [[ ! -d "$derived_root" ]]; then
-                echo "ovlab: derived report directory does not exist: $derived_root" >&2
+            if [[ ! -d "$exports_root" ]]; then
+                echo "ovlab: report export directory does not exist: $exports_root" >&2
                 exit 4
             fi
             exports_mount="type=bind,source=$exports_root,target=/var/lib/ovlab/exports,readonly"
         else
-            mkdir -p -- "$derived_root" "$exports_root/train/interactive"
-            chmod 2770 -- "$exports_root" "$exports_root/train" "$derived_root" "$exports_root/train/interactive"
+            if [[ -z "${OVLAB_EXPERIMENT_ID:-}" ]]; then
+                mkdir -p -- "$derived_root" "$exports_root/train/interactive"
+                chmod 2770 -- "$exports_root" "$exports_root/train" "$derived_root" "$exports_root/train/interactive"
+            else
+                mkdir -p -- "$exports_root"
+                chmod 2770 -- "$exports_root"
+            fi
             exports_mount="type=bind,source=$exports_root,target=/var/lib/ovlab/exports"
         fi
         declare -A training_report_groups=(["$(id -g)"]=1)
@@ -223,10 +259,13 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
             --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
             --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
             --env OVLAB_ARTIFACT_UMASK=0007 \
+            --env "OVLAB_EXPERIMENT_ID=${OVLAB_EXPERIMENT_ID:-}" \
+            --env "OVLAB_EXPERIMENT_NODE=${OVLAB_EXPERIMENT_NODE:-}" \
             --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
+            --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
             "${training_report_mounts[@]}" \
             --mount "$exports_mount" \
-            "$reporting_image" "$@"
+            "$reporting_image" "${training_report_args[@]}"
     fi
 fi
 
@@ -283,11 +322,8 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 --mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly"
             )
             if [[ "$verification_kind" == "report" ]]; then
-                if [[ ! -d "$derived_root" && -d "$exports_root/derived" ]]; then
-                    derived_root="$exports_root/derived"
-                fi
-                if [[ ! -d "$derived_root" ]]; then
-                    echo "ovlab: derived report directory does not exist: $derived_root" >&2
+                if [[ ! -d "$exports_root" ]]; then
+                    echo "ovlab: report export directory does not exist: $exports_root" >&2
                     exit 4
                 fi
                 verification_mounts+=(
@@ -312,13 +348,21 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
                 --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
                 --env OVLAB_ARTIFACT_UMASK=0007 \
+                --env "OVLAB_EXPERIMENT_ID=${OVLAB_EXPERIMENT_ID:-}" \
+                --env "OVLAB_EXPERIMENT_NODE=${OVLAB_EXPERIMENT_NODE:-}" \
                 --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
                 --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
                 "${verification_mounts[@]}" \
                 "$reporting_image" "$@"
         fi
-        mkdir -p -- "$runs_root" "$exports_root/evaluate/derived" "$exports_root/evaluate/interactive" "$exports_root/evaluate/isolated" "$exports_root/evaluate/grouped"
-        if ! chmod 2770 -- "$exports_root" "$exports_root/evaluate" "$exports_root/evaluate/derived" "$exports_root/evaluate/interactive" "$exports_root/evaluate/isolated" "$exports_root/evaluate/grouped"; then
+        mkdir -p -- "$runs_root" "$exports_root"
+        if [[ -z "${OVLAB_EXPERIMENT_ID:-}" ]]; then
+            mkdir -p -- "$exports_root/evaluate/derived" "$exports_root/evaluate/interactive" "$exports_root/evaluate/isolated" "$exports_root/evaluate/grouped"
+            reporting_output_roots=("$exports_root" "$exports_root/evaluate" "$exports_root/evaluate/derived" "$exports_root/evaluate/interactive" "$exports_root/evaluate/isolated" "$exports_root/evaluate/grouped")
+        else
+            reporting_output_roots=("$exports_root")
+        fi
+        if ! chmod 2770 -- "${reporting_output_roots[@]}"; then
             echo "ovlab: cannot establish group-writable reporting output directories." >&2
             exit 6
         fi
@@ -332,6 +376,8 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
             --env OVLAB_RUNS_ROOT=/var/lib/ovlab/runs \
             --env OVLAB_EXPORTS_ROOT=/var/lib/ovlab/exports \
             --env OVLAB_ARTIFACT_UMASK=0007 \
+            --env "OVLAB_EXPERIMENT_ID=${OVLAB_EXPERIMENT_ID:-}" \
+            --env "OVLAB_EXPERIMENT_NODE=${OVLAB_EXPERIMENT_NODE:-}" \
             --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
             --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
             --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly" \

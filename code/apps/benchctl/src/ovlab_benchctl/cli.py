@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import sys
 import traceback
@@ -67,6 +68,13 @@ def _output_options(parser: argparse.ArgumentParser, *, detail: bool = True) -> 
     )
 
 
+def _primary_argument(parser, flag, dest, metavar, *, help=None, choices=None):
+    """Accept the primary operand positionally or through its established flag."""
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(f"_pos_{dest}", nargs="?", metavar=metavar, choices=choices, help=help)
+    group.add_argument(flag, dest=dest, metavar=metavar, choices=choices, help=f"alias for {metavar}")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ovlab", description="OpenVLABenchmark orchestration CLI")
     parser.add_argument(
@@ -119,6 +127,17 @@ def _parser() -> argparse.ArgumentParser:
     connect = commands.add_parser("connect", help="probe policy handshake and capability compatibility")
     connect.add_argument("config")
     _output_options(connect)
+
+    experiment = commands.add_parser("experiment", help="plan and run hierarchical JSON experiments")
+    experiment_commands = experiment.add_subparsers(dest="experiment_command", required=True)
+    for operation in ("plan", "run"):
+        command = experiment_commands.add_parser(operation, help=f"{operation} an experiment tree")
+        _primary_argument(command, "--spec", "spec", "SPEC", help="ovlab.experiment/v1 JSON file")
+        command.add_argument("--node", help="slash-separated node path; omit for the root")
+        command.add_argument("--node-only", action="store_true", help="run only the selected node, without descendants")
+        if operation == "run":
+            command.add_argument("--dry-run", action="store_true", help="resolve and validate without writing or starting workloads")
+        _output_options(command)
 
     evaluation = commands.add_parser("eval", help="run, inspect, and verify evaluation experiments")
     eval_commands = evaluation.add_subparsers(dest="eval_command", required=True)
@@ -196,7 +215,7 @@ def _parser() -> argparse.ArgumentParser:
     publish = report_commands.add_parser(
         "publish", help="publish the HTML report and isolated export for one finalized run",
     )
-    publish.add_argument("--run", dest="run_id", required=True, help="canonical run ID or displayed run hash")
+    _primary_argument(publish, "--run", "run_id", "RUN", help="canonical run ID, path or hash")
     publish.add_argument("--profile", default="libero-task-default")
     publish.add_argument(
         "--report-enabled", choices=("true", "false"), default="true",
@@ -204,10 +223,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _output_options(publish)
     verify_report = report_commands.add_parser("verify", help="verify a derived report and its canonical inputs")
-    verify_report.add_argument(
-        "--run", dest="run_id", required=True,
-        help="canonical run ID or displayed run hash",
-    )
+    _primary_argument(verify_report, "--run", "run_id", "RUN", help="canonical run ID, path or hash")
     verify_report.add_argument("--profile", default="libero-task-default")
     verify_report.add_argument("--build")
     _output_options(verify_report)
@@ -217,13 +233,16 @@ def _parser() -> argparse.ArgumentParser:
     export = commands.add_parser("export", help="generate readable isolated or grouped exports from canonical runs")
     export_commands = export.add_subparsers(dest="export_command", required=True)
     isolated = export_commands.add_parser("isolated", help="export one complete run or one episode")
-    isolated.add_argument("--run", dest="run_id", required=True, help="canonical run ID or displayed run hash")
+    _primary_argument(isolated, "--run", "run_id", "RUN", help="canonical run ID, path or hash")
+    isolated.add_argument("--category", choices=("evaluate", "train"), default="evaluate")
     isolated.add_argument("--episode", dest="episode_id", help="optional canonical episode ID")
     isolated.add_argument("--template", default="isolated-default-v1")
     _output_options(isolated)
     grouped = export_commands.add_parser("grouped", help="compare an explicitly selected group of runs")
-    grouped.add_argument("--name", required=True, help="portable group name")
-    selectors = grouped.add_mutually_exclusive_group(required=True)
+    _primary_argument(grouped, "--name", "name", "NAME", help="portable group name")
+    grouped.add_argument("run_targets", nargs="*", metavar="RUN", help="run IDs to compare")
+    grouped.add_argument("--category", choices=("evaluate", "train"), default="evaluate")
+    selectors = grouped.add_mutually_exclusive_group()
     selectors.add_argument("--all-runs", action="store_true", help="select every compatible completed run")
     selectors.add_argument("--same-model-as", metavar="RUN_REFERENCE", help="select runs with the same model/checkpoint as RUN_ID or RUN_HASH")
     selectors.add_argument("--runs", nargs="+", metavar="RUN_REFERENCE", help="select these run IDs or displayed hashes manually")
@@ -231,15 +250,15 @@ def _parser() -> argparse.ArgumentParser:
     grouped.add_argument("--template", default="grouped-default-v1")
     _output_options(grouped)
     export_generate = export_commands.add_parser("generate", help="legacy: generate a grouped export from ovlab.export-spec/v1")
-    export_generate.add_argument("--spec", required=True)
+    _primary_argument(export_generate, "--spec", "spec", "SPEC", help="export specification")
     _output_options(export_generate)
     export_verify = export_commands.add_parser("verify", help="verify an export build and source checksums")
     export_verify.add_argument("--kind", choices=("isolated", "grouped"), default="grouped")
-    export_verify.add_argument(
-        "--name", dest="export_name",
-        help="group name, or isolated run ID/displayed run hash",
-    )
-    export_verify.add_argument("--export", dest="legacy_export_id", help="legacy alias for --kind grouped --name")
+    export_verify.add_argument("--category", choices=("evaluate", "train"), default="evaluate")
+    export_selector = export_verify.add_mutually_exclusive_group(required=True)
+    export_selector.add_argument("_pos_export_name", nargs="?", metavar="NAME", help="group name or isolated run ID")
+    export_selector.add_argument("--name", dest="export_name", help="alias for NAME")
+    export_selector.add_argument("--export", dest="legacy_export_id", help="legacy grouped export alias")
     _output_options(export_verify)
 
     data = commands.add_parser(
@@ -256,7 +275,8 @@ def _parser() -> argparse.ArgumentParser:
     _output_options(data_list)
     for action in ("archive", "delete"):
         command = data_commands.add_parser(action, help=f"{action} selected canonical data")
-        selectors = command.add_mutually_exclusive_group(required=True)
+        command.add_argument("data_target", nargs="?", metavar="TARGET", help="typed selector: run:ID, report:ID or export:TYPE:ID")
+        selectors = command.add_mutually_exclusive_group()
         selectors.add_argument(
             "--run", dest="run_id", metavar="RUN_ID_OR_HASH",
             help="run ID/hash; prefix train: or evaluate: when IDs collide",
@@ -290,12 +310,12 @@ def _parser() -> argparse.ArgumentParser:
     dataset_providers = dataset_commands.add_parser("providers", help="list registered dataset bridges without model imports")
     _output_options(dataset_providers)
     dataset_resolve = dataset_commands.add_parser("resolve", help="resolve a known benchmark dataset without downloading")
-    dataset_resolve.add_argument("--benchmark", choices=("libero",), required=True)
-    dataset_resolve.add_argument("--suite", required=True)
+    _primary_argument(dataset_resolve, "--benchmark", "benchmark", "BENCHMARK", choices=("libero",))
+    _primary_argument(dataset_resolve, "--suite", "suite", "SUITE")
     _output_options(dataset_resolve)
     dataset_fetch = dataset_commands.add_parser("fetch", help="explicitly acquire and prepare a verified dataset")
-    dataset_fetch.add_argument("--source", choices=("libero", "url"), required=True)
-    dataset_fetch.add_argument("--name", required=True)
+    _primary_argument(dataset_fetch, "--source", "source", "SOURCE", choices=("libero", "url"))
+    _primary_argument(dataset_fetch, "--name", "name", "NAME")
     dataset_fetch.add_argument("--version", default="1")
     dataset_fetch.add_argument("--url")
     dataset_fetch.add_argument("--sha256")
@@ -304,22 +324,22 @@ def _parser() -> argparse.ArgumentParser:
     dataset_fetch.add_argument("--allow-local-http", action="store_true", help=argparse.SUPPRESS)
     _output_options(dataset_fetch)
     dataset_import = dataset_commands.add_parser("import", help="copy and register an existing local dataset immutably")
-    dataset_import.add_argument("--name", required=True)
-    dataset_import.add_argument("--version", required=True)
-    dataset_import.add_argument("--path", required=True)
+    _primary_argument(dataset_import, "--name", "name", "NAME")
+    _primary_argument(dataset_import, "--version", "version", "VERSION")
+    _primary_argument(dataset_import, "--path", "path", "PATH")
     dataset_import.add_argument("--format", dest="preparation")
     _output_options(dataset_import)
     dataset_prepare = dataset_commands.add_parser("prepare", help="verify the selected immutable preparation")
-    dataset_prepare.add_argument("--dataset", dest="dataset_id", required=True)
-    dataset_prepare.add_argument("--format", dest="preparation", required=True)
+    _primary_argument(dataset_prepare, "--dataset", "dataset_id", "DATASET")
+    _primary_argument(dataset_prepare, "--format", "preparation", "FORMAT")
     _output_options(dataset_prepare)
     dataset_list = dataset_commands.add_parser("list", help="list locally ready immutable datasets")
     _output_options(dataset_list)
     dataset_inspect = dataset_commands.add_parser("inspect", help="inspect one immutable dataset manifest")
-    dataset_inspect.add_argument("--dataset", dest="dataset_id", required=True)
+    _primary_argument(dataset_inspect, "--dataset", "dataset_id", "DATASET")
     _output_options(dataset_inspect)
     dataset_verify = dataset_commands.add_parser("verify", help="verify dataset bytes without network access")
-    dataset_verify.add_argument("--dataset", dest="dataset_id", required=True)
+    _primary_argument(dataset_verify, "--dataset", "dataset_id", "DATASET")
     _output_options(dataset_verify)
 
     train = commands.add_parser("train", help="validate, plan, execute, and inspect isolated training")
@@ -327,10 +347,10 @@ def _parser() -> argparse.ArgumentParser:
     train_profiles = train_commands.add_parser("profiles", help="list portable training profiles")
     _output_options(train_profiles)
     train_validate = train_commands.add_parser("validate", help="strictly validate a profile without resolving resources")
-    train_validate.add_argument("--profile", required=True)
+    _primary_argument(train_validate, "--profile", "profile", "PROFILE")
     _output_options(train_validate)
     train_plan = train_commands.add_parser("plan", help="resolve immutable resources without model initialization")
-    train_plan.add_argument("--profile", required=True)
+    _primary_argument(train_plan, "--profile", "profile", "PROFILE")
     _output_options(train_plan)
     train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
     train_run.add_argument("target", help="training YAML name/path in configs/experiments/training")
@@ -343,10 +363,10 @@ def _parser() -> argparse.ArgumentParser:
     ablate_commands = ablate.add_subparsers(dest="ablate_command", required=True)
     for operation in ("validate", "plan", "materialize", "run"):
         command = ablate_commands.add_parser(operation, help=f"{operation} an ablation suite of ordinary training profiles")
-        command.add_argument("--suite", required=True)
+        _primary_argument(command, "--suite", "suite", "SUITE")
         command.add_argument("--fit-action-normalization", action="store_true", help="fit one consistent train-only action normalization contract across all variants")
         if operation in {"materialize", "run"}:
-            command.add_argument("--output", required=True, help="new directory for immutable resolved profiles and plan")
+            _primary_argument(command, "--output", "output", "OUTPUT", help="new directory for resolved profiles and plan")
         _output_options(command)
     for command_name in ("status", "inspect", "verify"):
         command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
@@ -356,12 +376,10 @@ def _parser() -> argparse.ArgumentParser:
     train_report = train_commands.add_parser(
         "report", help="generate or verify an offline system-performance report",
     )
-    train_report.add_argument(
-        "--run", dest="run_id", required=True,
-        help="training run ID or displayed run hash",
-    )
+    _primary_argument(train_report, "--run", "run_id", "RUN", help="training run ID, path or hash")
     train_report.add_argument("--verify", action="store_true", help="verify the selected/latest build instead of generating")
     train_report.add_argument("--build", help="derived build ID used with --verify")
+    train_report.add_argument("--parameters", help="JSON configuration of highlighted training parameters")
     _output_options(train_report)
 
     checkpoint = commands.add_parser("checkpoint", help="inspect finalized immutable training checkpoints")
@@ -369,10 +387,10 @@ def _parser() -> argparse.ArgumentParser:
     checkpoint_list = checkpoint_commands.add_parser("list", help="list finalized training checkpoints")
     _output_options(checkpoint_list)
     checkpoint_inspect = checkpoint_commands.add_parser("inspect", help="inspect checkpoint identity and compatibility")
-    checkpoint_inspect.add_argument("--checkpoint", dest="checkpoint_id", required=True)
+    _primary_argument(checkpoint_inspect, "--checkpoint", "checkpoint_id", "CHECKPOINT")
     _output_options(checkpoint_inspect)
     checkpoint_verify = checkpoint_commands.add_parser("verify", help="verify checkpoint files and tensor structure")
-    checkpoint_verify.add_argument("--checkpoint", dest="checkpoint_id", required=True)
+    _primary_argument(checkpoint_verify, "--checkpoint", "checkpoint_id", "CHECKPOINT")
     _output_options(checkpoint_verify)
     return parser
 
@@ -389,7 +407,7 @@ def _application():
 def _command_name(args) -> str:
     parts = [args.command]
     for name in (
-        "config_command", "policy_command", "service_command", "eval_command", "deploy_command",
+        "config_command", "policy_command", "service_command", "experiment_command", "eval_command", "deploy_command",
         "metrics_command", "report_command", "export_command",
         "data_command", "dataset_command", "train_command", "ablate_command", "checkpoint_command",
     ):
@@ -716,6 +734,20 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
 
 
 def _compact(command: str, result) -> str:
+    if command in {"experiment plan", "experiment run"} and isinstance(result, dict):
+        lines = [f"experiment  {result.get('experiment_id', result.get('id', '-'))}"]
+        if "status" in result:
+            lines.append(f"status      {result['status']}")
+        if "nodes" in result:
+            lines.append(f"nodes       {len(result['nodes'])}")
+        if "steps" in result:
+            lines.append(f"phases      {len(result['steps'])}")
+        if "selected_node" in result:
+            lines.append(f"selection   {result['selected_node'] or '<root>'}")
+        for key in ("overview", "runs_root", "exports_root"):
+            if key in result:
+                lines.append(f"{key:<11} {result[key]}")
+        return "\n".join(lines)
     if command == "doctor":
         counts = result["counts"]
         lines = [
@@ -917,6 +949,17 @@ def _dispatch(args):
         return result, args.json, None
     if args.command == "connect":
         return _application().connect(args.config), args.json, None
+    if args.command == "experiment":
+        from .experiment_workflow import ExperimentWorkflow
+        workflow = ExperimentWorkflow(_repository_root())
+        if args.experiment_command == "plan":
+            return workflow.plan(args.spec, node=args.node, node_only=args.node_only), args.json, None
+        previous = _install_interrupt_handlers()
+        try:
+            result = workflow.run(args.spec, node=args.node, node_only=args.node_only, dry_run=args.dry_run)
+        finally:
+            _restore_handlers(previous)
+        return result, args.json, None
     if args.command == "eval":
         if args.eval_command in {"inspect", "verify"}:
             app = _application()
@@ -1009,6 +1052,56 @@ def _dispatch(args):
         return app.generate_report(args.run_path, args.output), args.json, None
     if args.command == "export":
         app = _application()
+        if getattr(args, "category", "evaluate") == "train":
+            from ovlab_core.experiment_scope import ExperimentScope
+            from ovlab_runner.training_exports import TrainingExportEngine
+            runs, _, exports = app._data_roots()
+            if args.export_command == "isolated":
+                if args.episode_id is not None or args.template != "isolated-default-v1":
+                    raise CliUsageError("training isolated exports do not accept --episode or --template")
+                selected = app._training_run(args.run_id)
+                scope = ExperimentScope.from_run_path(runs, selected.path, "train")
+                engine = TrainingExportEngine(runs, exports, scope=scope)
+                return engine.generate_isolated(selected.run_id), args.json, None
+            if args.export_command == "grouped":
+                if not args.runs or args.all_runs or args.same_model_as or args.suite or args.template != "grouped-default-v1":
+                    raise CliUsageError("training grouped exports require --runs and do not accept --suite or --template")
+                selected = [app._training_run(value) for value in args.runs]
+                run_ids = [run.run_id for run in selected]
+                scope = ExperimentScope.from_environment()
+                if scope is None:
+                    scopes = [ExperimentScope.from_run_path(runs, run.path, "train") for run in selected]
+                    if any(item is None for item in scopes) and any(item is not None for item in scopes):
+                        raise CliUsageError("training grouped export cannot mix legacy and experiment runs")
+                    if all(item is not None for item in scopes):
+                        if len({item.experiment_id for item in scopes}) != 1:
+                            raise CliUsageError("training grouped export requires runs from one experiment")
+                        common = list(scopes[0].node_parts)
+                        for item in scopes[1:]:
+                            while common and tuple(common) != item.node_parts[:len(common)]:
+                                common.pop()
+                        scope = ExperimentScope(scopes[0].experiment_id, tuple(common))
+                engine = TrainingExportEngine(runs, exports, scope=scope)
+                return engine.generate_grouped(args.name, run_ids=run_ids), args.json, None
+            if args.export_command == "verify":
+                if args.legacy_export_id is not None or args.export_name is None:
+                    raise CliUsageError("training export verify requires --name NAME")
+                scope = ExperimentScope.from_environment()
+                if scope is None and args.kind == "isolated":
+                    selected = app._training_run(args.export_name)
+                    scope = ExperimentScope.from_run_path(runs, selected.path, "train")
+                if scope is None and args.kind == "grouped":
+                    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.export_name) is None:
+                        raise CliUsageError("training grouped export name must be a portable identifier")
+                    candidates = [path for path in exports.glob(f"*/train/**/grouped/{args.export_name}/metadata.json") if path.is_file()]
+                    if len(candidates) > 1:
+                        raise CliUsageError("training grouped export name is ambiguous; set OVLAB_EXPERIMENT_ID and OVLAB_EXPERIMENT_NODE")
+                    if candidates:
+                        parts = candidates[0].parent.relative_to(exports).parts
+                        scope = ExperimentScope(parts[0], parts[2:-2])
+                engine = TrainingExportEngine(runs, exports, scope=scope)
+                return engine.verify(args.kind, args.export_name), args.json, None
+            raise CliUsageError("legacy export generate supports evaluation only")
         if args.export_command == "isolated":
             return app.export_isolated(args.run_id, episode_id=args.episode_id, template=args.template), args.json, None
         if args.export_command == "grouped":
@@ -1110,6 +1203,7 @@ def _dispatch(args):
                 raise CliUsageError("train report --build requires --verify")
             return app.train_report(
                 args.run_id, verify=args.verify, build_id=args.build,
+                **({"parameters": args.parameters} if args.parameters is not None else {}),
             ), args.json, None
         raise AssertionError("unhandled training command")
     if args.command == "checkpoint":

@@ -15,6 +15,7 @@ import shutil
 import uuid
 
 import numpy as np
+from ovlab_core.experiment_scope import ExperimentScope
 
 from .artifacts.codec import TraceCodec
 from .artifacts.layout import run_key, safe_key
@@ -231,18 +232,25 @@ def _suite(model: dict[str, object]) -> str | None:
     return None
 
 
+def _evaluation_run_paths(runs_root: Path):
+    """Yield legacy and experiment-scoped evaluation runs, including descendants."""
+    for manifest in sorted(runs_root.rglob("manifest.started.json")):
+        path = manifest.parent
+        if manifest.is_symlink() or path.is_symlink():
+            raise ArtifactError(f"canonical run contains a symbolic link: {path}")
+        relative = path.relative_to(runs_root).parts
+        if relative and relative[0] == "train":
+            continue
+        if len(relative) >= 2 and relative[1] == "train":
+            continue
+        yield _inside(path, runs_root, "candidate evaluation run")
+
+
 def _all_records(runs_root: Path) -> list[dict[str, object]]:
     records = []
     if not runs_root.is_dir():
         raise ArtifactError(f"runs root is unavailable: {runs_root}")
-    candidates = []
-    evaluate_root = runs_root / "evaluate"
-    if evaluate_root.is_dir():
-        candidates.extend(item for item in evaluate_root.iterdir() if item.is_dir())
-    candidates.extend(item for item in runs_root.iterdir() if item.is_dir() and item.name not in {"train", "evaluate"})
-    for path in sorted(set(candidates)):
-        if not (path / "manifest.started.json").is_file():
-            continue
+    for path in _evaluation_run_paths(runs_root):
         try:
             records.append(_source_record(path))
         except Exception as exc:
@@ -254,9 +262,11 @@ def _record(runs_root: Path, run_id: str) -> dict[str, object]:
     if not isinstance(run_id, str) or Path(run_id).name != run_id or not run_id:
         raise ArtifactError(f"invalid run ID: {run_id}")
     candidates = [runs_root / "evaluate" / run_key(run_id), runs_root / run_key(run_id)]
-    paths = [_inside(path, runs_root, "selected run") for path in candidates if path.is_dir()]
+    paths = [_inside(path, runs_root, "selected run") for path in candidates if (path / "manifest.started.json").is_file()]
+    paths.extend(path for path in _evaluation_run_paths(runs_root) if path.name == run_id and path not in paths)
     if len(paths) > 1:
-        raise ArtifactError(f"selected run exists in multiple run categories: {run_id}")
+        locations = ", ".join(str(path.relative_to(runs_root)) for path in paths)
+        raise ArtifactError(f"selected run ID is ambiguous across experiments: {run_id}: {locations}")
     if not paths:
         raise ArtifactError(f"selected run is unavailable: {run_id}")
     return _source_record(paths[0])
@@ -700,16 +710,22 @@ def _metric_rows(records: list[dict[str, object]]) -> list[dict[str, object]]:
 
 
 def _validate_metric_compatibility(records: list[dict[str, object]]) -> None:
-    identities: dict[str, set[tuple[object, object, object]]] = {}
-    for row in _metric_rows(records):
-        identities.setdefault(str(row["metric_id"]), set()).add((
-            row["metric_version"], row["metric_config_hash"], row["unit"],
-        ))
-    incompatible = sorted(metric_id for metric_id, values in identities.items() if len(values) > 1)
+    incompatible = _incompatible_metrics(records)
     if incompatible:
         raise ArtifactError(
             f"grouped export contains incompatible metric schemas/units: {incompatible}"
         )
+
+
+def _incompatible_metrics(records: list[dict[str, object]], task_ids: set[str] | None = None) -> list[str]:
+    identities: dict[str, set[tuple[object, object, object]]] = {}
+    for row in _metric_rows(records):
+        if task_ids is not None and row["task_id"] not in task_ids:
+            continue
+        identities.setdefault(str(row["metric_id"]), set()).add((
+            row["metric_version"], row["metric_config_hash"], row["unit"],
+        ))
+    return sorted(metric_id for metric_id, values in identities.items() if len(values) > 1)
 
 
 def _episode_summary(episodes: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -978,10 +994,14 @@ def validate_export_spec(document) -> dict[str, object]:
 class ExportEngine:
     """Generate readable exports while preserving canonical runs as read-only sources."""
 
-    def __init__(self, runs_root, exports_root):
+    def __init__(self, runs_root, exports_root, *, scope: ExperimentScope | None = None):
         self.runs_root = Path(runs_root).expanduser().resolve()
         self.exports_root = Path(exports_root).expanduser().resolve()
-        self.evaluation_root = self.exports_root / "evaluate"
+        self.scope = scope if scope is not None else ExperimentScope.from_environment()
+        self.evaluation_root = (self.scope.exports_root(self.exports_root, "evaluate")
+                                if self.scope is not None else self.exports_root / "evaluate")
+        self.runs_search_root = (self.scope.runs_root(self.runs_root, "evaluate")
+                                 if self.scope is not None else self.runs_root)
         display = os.environ.get("OVLAB_EXPORTS_DISPLAY_ROOT")
         self.display_root = Path(display).expanduser() if display else self.exports_root
 
@@ -993,7 +1013,7 @@ class ExportEngine:
     ) -> dict[str, object]:
         if template != ISOLATED_TEMPLATE:
             raise ArtifactError(f"unknown isolated export template: {template}")
-        record = _record(self.runs_root, run_id)
+        record = _record(self.runs_search_root, run_id)
         episodes = _episode_data(record, episode_id)
         target = _inside(self.evaluation_root / "isolated" / run_key(run_id), self.exports_root, "isolated export")
         stage = target.parent / f".{target.name}.{uuid.uuid4().hex}.partial"
@@ -1066,12 +1086,12 @@ class ExportEngine:
         if modes != 1:
             raise ArtifactError("grouped export requires exactly one selector: all runs, same model, or manual runs")
         if run_ids:
-            records = [_record(self.runs_root, run_id) for run_id in sorted(set(run_ids))]
+            records = [_record(self.runs_search_root, run_id) for run_id in sorted(set(run_ids))]
             selection = {"mode": "manual", "run_ids": [item["run_id"] for item in records]}
         else:
-            records = _all_records(self.runs_root)
+            records = _all_records(self.runs_search_root)
             if same_model_as is not None:
-                reference = _record(self.runs_root, same_model_as)
+                reference = _record(self.runs_search_root, same_model_as)
                 key = _model_key(reference)
                 records = [record for record in records if _model_key(record) == key]
                 selection = {"mode": "same-model", "reference_run": same_model_as, "model_key": key}
@@ -1085,7 +1105,7 @@ class ExportEngine:
         if not records:
             raise ArtifactError("grouped export selection is empty")
         suites = sorted({record["suite"] for record in records})
-        if len(suites) > 1:
+        if len(suites) > 1 and self.scope is None:
             raise ArtifactError(f"grouped export spans incompatible benchmark suites: {suites}")
         return records, selection
 
@@ -1099,8 +1119,26 @@ class ExportEngine:
         records, selection = self._group_records(
             all_runs=all_runs, run_ids=tuple(run_ids), same_model_as=same_model_as, suite=suite,
         )
-        _validate_metric_compatibility(records)
         episode_map = {record["run_id"]: _episode_data(record) for record in records}
+        task_sets = {run_id: {str(row["task_id"]) for row in episodes}
+                     for run_id, episodes in episode_map.items()}
+        shared_tasks = set.intersection(*task_sets.values()) if task_sets else set()
+        metric_conflicts = _incompatible_metrics(records, shared_tasks) if shared_tasks else []
+        suites = sorted({record["suite"] for record in records})
+        if self.scope is None:
+            _validate_metric_compatibility(records)
+            comparison_status = "comparable"
+            comparison_tasks = sorted(set.union(*task_sets.values())) if task_sets else []
+            comparison_map = episode_map
+        else:
+            comparison_status = (
+                "different_benchmark_suites" if len(suites) > 1 else
+                "no_shared_tasks" if not shared_tasks else
+                "incompatible_metrics" if metric_conflicts else "comparable"
+            )
+            comparison_tasks = sorted(shared_tasks) if comparison_status == "comparable" else []
+            comparison_map = {run_id: [row for row in episodes if row["task_id"] in comparison_tasks]
+                              for run_id, episodes in episode_map.items()}
         run_rows = _run_summary(records, episode_map)
         target = _inside(self.evaluation_root / "grouped" / group_name, self.exports_root, "grouped export")
         stage = target.parent / f".{group_name}.{uuid.uuid4().hex}.partial"
@@ -1111,16 +1149,26 @@ class ExportEngine:
             _write_csv(tables / "episode-summary.csv", [
                 row for record in records for row in _episode_summary(episode_map[record["run_id"]])
             ])
+            if self.scope is not None:
+                all_tasks = sorted(set.union(*task_sets.values())) if task_sets else []
+                _write_csv(tables / "task-coverage.csv", [
+                    {"run_id": record["run_id"], "task_id": task_id,
+                     "episode_count": sum(row["task_id"] == task_id for row in episode_map[record["run_id"]]),
+                     "included_in_comparison": task_id in comparison_tasks}
+                    for record in records for task_id in all_tasks
+                ])
+                if comparison_status == "comparable":
+                    _write_csv(tables / "comparison-summary.csv", _run_summary(records, comparison_map))
             run_statistics = [
                 row for record in records
                 for row in _aggregate_statistics(
                     episode_map[record["run_id"]], scope="run", run_id=record["run_id"],
                 )
             ]
-            group_statistics = _aggregate_statistics(
-                [episode for record in records for episode in episode_map[record["run_id"]]],
+            group_statistics = (_aggregate_statistics(
+                [episode for record in records for episode in comparison_map[record["run_id"]]],
                 scope="group", group_name=group_name,
-            )
+            ) if comparison_status == "comparable" else [])
             _write_csv(tables / "descriptive-statistics.csv", run_statistics + group_statistics)
             _write_csv(tables / "metric-summary.csv", _metric_rows(records))
             action_metric_rows = _action_metric_rows([
@@ -1131,15 +1179,22 @@ class ExportEngine:
                 action_metric_rows, scope="run",
                 group_fields=("run_id", "model_key", "model_label", "checkpoint"),
             )
+            comparable_action_rows = _action_metric_rows([
+                episode for record in records for episode in comparison_map[record["run_id"]]
+            ]) if comparison_status == "comparable" else []
             action_metric_summary.extend(_action_metric_summary(
-                action_metric_rows, scope="model",
+                comparable_action_rows, scope="model",
                 group_fields=("model_key", "model_label", "checkpoint"),
             ))
             action_metric_summary.extend(_action_metric_summary(
-                action_metric_rows, scope="group",
+                comparable_action_rows, scope="group",
             ))
             _write_csv(tables / "action-metrics-summary.csv", action_metric_summary)
-            omitted = _group_figures(records, episode_map, run_rows, figures)
+            omitted = (_group_figures(records, comparison_map,
+                _run_summary(records, comparison_map), figures)
+                if comparison_status == "comparable" else [
+                    f"comparison figures omitted: {comparison_status}"
+                ])
             model_identities = []
             checkpoint_identities = []
             for record in records:
@@ -1161,6 +1216,15 @@ class ExportEngine:
                 "experiment": [record["identity"]["experiment"] for record in records],
                 "model": model_identities,
                 "checkpoint": checkpoint_identities,
+                "comparison": {
+                    "status": comparison_status,
+                    "shared_task_ids": sorted(shared_tasks),
+                    "compared_task_ids": comparison_tasks,
+                    "task_ids_by_run": {run_id: sorted(tasks) for run_id, tasks in task_sets.items()},
+                    "incompatible_metric_ids": metric_conflicts,
+                    "benchmark_suites": suites,
+                    "comparison_basis": "shared task IDs and compatible metric schemas",
+                },
                 "config": {
                     "selection": selection,
                     "sources": {record["run_id"]: record["configuration"] for record in records},
@@ -1215,7 +1279,7 @@ class ExportEngine:
         )
         for run_id in run_ids:
             try:
-                record = _record(self.runs_root, run_id)
+                record = _record(self.runs_search_root, run_id)
             except Exception as exc:
                 raise ArtifactError(
                     f"canonical export source verification failed: {run_id}: {exc}"

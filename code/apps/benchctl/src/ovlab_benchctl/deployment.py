@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 from ovlab_core.progress import draw_progress_line, fit_progress_line
+from ovlab_core.experiment_scope import ExperimentScope
 
 from .schema import validate
 from .strict_yaml import load
@@ -423,6 +424,20 @@ class ComposeDeployment:
             path = Path(plan.compose_files[0]).parent / path
         return path.resolve()
 
+    @staticmethod
+    def _ensure_scoped_directory(base: Path, target: Path) -> None:
+        """Make each new experiment parent writable by the reporting group."""
+        if not target.is_relative_to(base):
+            raise ComposeDeploymentError(f"experiment output escapes managed root: {target}")
+        current = base
+        for part in target.relative_to(base).parts:
+            current = current / part
+            if current.is_symlink():
+                raise ComposeDeploymentError(f"experiment output cannot be a symlink: {current}")
+            current.mkdir(mode=0o2770, exist_ok=True)
+            if current.stat().st_uid == os.getuid():
+                current.chmod(0o2770)
+
     def _preflight_bind_sources(self, plan: ComposeDeploymentPlan) -> None:
         runs = self._bind_source(plan, "OVLAB_RUNS_ROOT")
         if runs is None:
@@ -440,13 +455,32 @@ class ComposeDeployment:
             exports.chmod(0o2770)
         if not exports.is_dir():
             raise ComposeDeploymentError(f"OVLAB_EXPORTS_ROOT is not a directory: {exports}")
-        for name in ("train", "evaluate", "train/derived", "train/interactive", "evaluate/derived", "evaluate/interactive", "evaluate/isolated", "evaluate/grouped"):
-            output = exports / name
+        scope = ExperimentScope.from_environment(self.environment)
+        if scope is None:
+            output_paths = (
+                exports / name for name in (
+                    "train", "evaluate", "train/derived", "train/interactive",
+                    "evaluate/derived", "evaluate/interactive", "evaluate/isolated",
+                    "evaluate/grouped",
+                )
+            )
+        else:
+            run_output = scope.runs_root(runs, "evaluate")
+            self._ensure_scoped_directory(runs, run_output)
+            output_paths = (
+                scope.exports_root(exports, category) / kind
+                for category in ("train", "evaluate")
+                for kind in ("grouped", "isolated", "interactive")
+            )
+        for output in output_paths:
             if not output.exists():
-                output.mkdir(mode=0o2770, parents=True)
-                output.chmod(0o2770)
+                if scope is None:
+                    output.mkdir(mode=0o2770, parents=True)
+                    output.chmod(0o2770)
+                else:
+                    self._ensure_scoped_directory(exports, output)
             if not output.is_dir():
-                raise ComposeDeploymentError(f"OVLAB_EXPORTS_ROOT/{name} is not a directory: {output}")
+                raise ComposeDeploymentError(f"report output path is not a directory: {output}")
 
     def _preflight_images(self, plan: ComposeDeploymentPlan) -> None:
         rebuild_roles = []
@@ -578,9 +612,12 @@ class ComposeDeployment:
         return adapter
 
     @staticmethod
-    def _run_directories(root: Path | None) -> set[Path]:
+    def _run_directories(root: Path | None, scope: ExperimentScope | None = None) -> set[Path]:
         if root is None or not root.is_dir():
             return set()
+        if scope is not None:
+            selected = scope.runs_root(root, "evaluate")
+            return {path.resolve() for path in selected.iterdir() if path.is_dir()} if selected.is_dir() else set()
         paths = {path.resolve() for path in (root / "evaluate").iterdir() if path.is_dir()} if (root / "evaluate").is_dir() else set()
         paths.update(path.resolve() for path in root.iterdir() if path.is_dir() and path.name not in {"train", "evaluate"})
         return paths
@@ -629,7 +666,12 @@ class ComposeDeployment:
             if adapter_path is not None:
                 environment["OVLAB_QUIC_ADAPTER_HOST_PATH"] = str(adapter_path)
             runs_root = self._bind_source(plan, "OVLAB_RUNS_ROOT")
-            runs_before = self._run_directories(runs_root)
+            scope = ExperimentScope.from_environment(self.environment)
+            if scope is not None:
+                environment["OVLAB_EVALUATION_OUTPUT_ROOT"] = str(
+                    scope.runs_root(Path("/var/lib/ovlab/runs"), "evaluate")
+                )
+            runs_before = self._run_directories(runs_root, scope)
             checked = self._execute(plan.config_command, environment)
             if checked.returncode != 0:
                 raise ComposeDeploymentError(
@@ -667,7 +709,7 @@ class ComposeDeployment:
             if run_error is not None:
                 raise run_error
             new_runs = sorted(
-                str(path) for path in self._run_directories(runs_root) - runs_before
+                str(path) for path in self._run_directories(runs_root, scope) - runs_before
             )
             if len(new_runs) != 1:
                 raise ComposeDeploymentError(
@@ -676,8 +718,8 @@ class ComposeDeployment:
                 )
             run_path = Path(new_runs[0])
             tracking = track_run("eval", run_path, self.environment)
-            exports_root = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (run_path.parent.parent / "exports")
-            derived_root = exports_root / "evaluate" / "derived"
+            exports_root = self._bind_source(plan, "OVLAB_EXPORTS_ROOT") or (runs_root.parent / "exports")
+            derived_root = exports_root / "evaluate" / "derived" if scope is None else scope.exports_root(exports_root, "evaluate") / "interactive"
             postprocess_environment = {
                 **environment,
                 "OVLAB_REPORT_RUN_ID": run_path.name,

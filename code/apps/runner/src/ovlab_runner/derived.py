@@ -26,7 +26,7 @@ from .artifacts.layout import run_key, safe_key
 from .errors import ArtifactError, ReportingRendererError, ReportingSourceUnavailableError
 from .inspection import verify_run
 from .interactive import publish_dashboard, verify_dashboard
-from .key_parameters import evaluation_parameters
+from .key_parameters import evaluation_parameters, load_key_parameters, validate_key_parameters
 from .permissions import MANAGED_FILE_MODE, finalize_managed_directory, finalize_managed_tree
 
 
@@ -105,13 +105,14 @@ class ReportProfile:
     charts: tuple[dict[str, str], ...]
     options: dict[str, bool]
     local_template_root: Path | None = None
+    key_parameters: dict[str, object] | None = None
 
     @classmethod
     def from_mapping(cls, document, *, template_base: str | Path | None = None) -> "ReportProfile":
         doc = _plain(document)
         if not isinstance(doc, dict) or doc.get("schema_version") != REPORT_PROFILE_SCHEMA:
             raise ArtifactError(f"report profile schema_version must equal {REPORT_PROFILE_SCHEMA}")
-        allowed = {"schema_version", "id", "template", "sections", "charts", "options"}
+        allowed = {"schema_version", "id", "template", "sections", "charts", "options", "key_parameters"}
         unknown = sorted(set(doc) - allowed)
         if unknown:
             raise ArtifactError(f"report profile contains unknown keys: {', '.join(unknown)}")
@@ -169,10 +170,23 @@ class ReportProfile:
             raise ArtifactError("report profile options must contain show_units, show_unavailable, and include_raw_provenance")
         if any(type(value) is not bool for value in options.values()):
             raise ArtifactError("report profile options must be booleans")
-        return cls(identifier, template, tuple(sections), tuple(normalized_charts), dict(options), local_template_root)
+        parameters = None
+        if "key_parameters" in doc:
+            selected = doc["key_parameters"]
+            if isinstance(selected, str):
+                if template_base is None:
+                    raise ArtifactError("a key parameter JSON path requires a profile directory")
+                base = Path(template_base).expanduser().resolve()
+                selected_path = (base / selected).resolve()
+                if not selected_path.is_relative_to(base):
+                    raise ArtifactError("key parameter JSON escapes its profile directory")
+                parameters = load_key_parameters(selected_path, "evaluate")
+            else:
+                parameters = validate_key_parameters(selected, "evaluate")
+        return cls(identifier, template, tuple(sections), tuple(normalized_charts), dict(options), local_template_root, parameters)
 
     def document(self) -> dict[str, object]:
-        return {
+        result = {
             "schema_version": REPORT_PROFILE_SCHEMA,
             "id": self.identifier,
             "template": "local-template-bundle" if self.local_template_root is not None else self.template,
@@ -180,6 +194,9 @@ class ReportProfile:
             "charts": [dict(item) for item in self.charts],
             "options": dict(self.options),
         }
+        if self.key_parameters is not None:
+            result["key_parameters"] = validate_key_parameters(self.key_parameters, "evaluate")
+        return result
 
 
 def builtin_profile(identifier: str = "libero-task-default") -> ReportProfile:
@@ -509,7 +526,7 @@ def _policy_performance_identity(connection: dict[str, object]) -> dict[str, obj
     }
 
 
-def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None) -> dict[str, object]:
+def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None, key_parameters=None) -> dict[str, object]:
     path = Path(run_path).expanduser().resolve()
     started = _json(path / "manifest.started.json")
     plan = _json(path / "plan.json")
@@ -636,7 +653,7 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
         },
         "benchmark": connection.get("benchmark"),
         "policy": connection.get("policy"),
-        "key_parameters": evaluation_parameters(plan, connection, complexity),
+        "key_parameters": evaluation_parameters(plan, connection, complexity, key_parameters),
         "performance": {
             "telemetry_schema": "ovlab.performance-telemetry/v1",
             "model_complexity": complexity,
@@ -1089,7 +1106,7 @@ class DerivedReportEngine:
         source = self.resolve_run(run)
         if not source.is_dir():
             raise ReportingSourceUnavailableError(f"canonical run is unavailable: {source.name}")
-        model = build_report_model(source, scope_task_id=task_id)
+        model = build_report_model(source, scope_task_id=task_id, key_parameters=self.profile.key_parameters)
         if model["completeness"] == "complete":
             verify_run(source)
         canonical_inputs = _canonical_inputs(source, safe_key(task_id) if task_id else None)

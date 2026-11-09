@@ -107,8 +107,9 @@
   const deliver = (key, payload) => {const request=pendingChunks.get(key);if(request){pendingChunks.delete(key);request.script.remove();request.resolve(payload);}};
   window.ovlabReceiveEpisode = (key, episode) => deliver("episode:"+key, episode);
   window.ovlabReceiveTraining = payload => deliver("training", payload);
+  window.ovlabReceiveReportModel = payload => deliver("model", payload);
   function loadChunk(path, kind) {
-    const key=kind==="training" ? kind : "episode:"+path.split("/").pop().replace(/\.js$/, "");
+    const key=kind==="training"||kind==="model" ? kind : "episode:"+path.split("/").pop().replace(/\.js$/, "");
     if(pendingChunks.has(key)) return pendingChunks.get(key).promise;
     const script=node("script");script.src=path;
     let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});
@@ -117,6 +118,33 @@
     script.onerror=()=>fail("Could not load the selected data file. Keep the complete report folder together.");
     script.onload=()=>fail("The selected data file did not contain the expected report data.");
     document.head.append(script);return promise;
+  }
+  if(data.report_model_script){
+    const host=$("report-evidence"),load=node("button","Load complete report evidence"),status=node("p","Report evidence is available on demand.","caption");
+    status.setAttribute("role","status");host.append(status,load);
+    load.addEventListener("click",async()=>{
+      load.disabled=true;status.textContent="Loading report evidence…";
+      try{
+        const model=await loadChunk(data.report_model_script,"model");
+        status.textContent="Complete report evidence loaded. Open any section to inspect its recorded values.";
+        load.remove();
+        const section=(label,value)=>{
+          const box=node("details",null,"report-evidence-section"),summary=node("summary",label.replaceAll("_"," "));
+          box.append(summary);
+          box.addEventListener("toggle",()=>{if(box.open&&box.childElementCount===1)box.append(detail(label,value));});
+          return box;
+        };
+        Object.entries(model).forEach(([key,value])=>{
+          if(key==="tasks"&&Array.isArray(value)){
+            const tasks=node("div",null,"report-evidence-tasks"),heading=node("h3",`Tasks · ${value.length}`);tasks.append(heading);
+            value.forEach(task=>{
+              const {episodes,...context}=task,box=node("details",null,"report-evidence-section"),summary=node("summary",String(task.task_id||task.task_key||"Task"));box.append(summary);
+              box.addEventListener("toggle",()=>{if(box.open&&box.childElementCount===1){box.append(detail("Task context and metrics",context));(episodes||[]).forEach(episode=>box.append(section(`Episode ${episode.rollout_index} · ${episode.episode_id}`,episode)));}});tasks.append(box);
+            });host.append(tasks);
+          }else host.append(section(key,value));
+        });
+      }catch(error){status.textContent=error.message;load.disabled=false;}
+    });
   }
   let inspectEpisode=()=>{}, renderSelectedActions=()=>{};
   if (train) {
@@ -160,6 +188,7 @@
         selectedEpisode=loaded;recordSlider.max=Math.max(0,loaded.records.length-1);recordSlider.value=0;load.disabled=false;
         $("batch").replaceChildren(node("p",`Rollout ${loaded.rollout_index} · seed ${loaded.seed} · ${loaded.terminal_status} · ${loaded.counts.predictions} calls · ${loaded.counts.executed_actions} applied actions. Every recorded policy call is selectable.`));
         contextHost.replaceChildren();const {records,...context}=loaded;contextHost.append(detail(`Episode context and metrics · ${loaded.episode_id}`,context));
+        if(loaded.video_href){const link=node("a","Open canonical episode video");link.href=(data.report_prefix||"")+loaded.video_href;link.setAttribute("aria-label",`Open canonical video for ${loaded.episode_id}`);contextHost.append(link);}
         renderRecord();renderSelectedActions(loaded);
       }catch(error){if(version!==requestVersion)return;load.disabled=false;$("batch").replaceChildren(node("p",error.message));}
     }
@@ -251,6 +280,10 @@
     else chart("Supervised action-token accuracy",series("action_token_accuracy"),"Optimizer step","fraction");
     chart("Optimizer step duration",series("step_duration_ms"),"Optimizer step","ms");
     chart("GPU allocator memory",series("gpu_memory_allocated_bytes").map(([x,y])=>[x,y==null?null:y/1048576]),"Optimizer step","MiB");
+    chart("GPU reserved memory · PyTorch allocator",series("gpu_memory_reserved_bytes").map(([x,y])=>[x,y==null?null:y/1048576]),"Optimizer step","MiB");
+    chart("GPU peak allocated memory · PyTorch allocator",series("gpu_memory_peak_bytes").map(([x,y])=>[x,y==null?null:y/1048576]),"Optimizer step","MiB");
+    chart("GPU peak reserved memory · PyTorch allocator",series("gpu_memory_peak_reserved_bytes").map(([x,y])=>[x,y==null?null:y/1048576]),"Optimizer step","MiB");
+    chart("Estimated compute · analytical proxy",series("estimated_gflops"),"Optimizer step","GFLOPs");
     $("metric-table").append(detail("Model parameter counts",data.parameter_counts),detail("System performance evidence",data.performance));
     const table=node("table"),thead=node("thead"),head=node("tr"),tbody=node("tbody"),keys=[...new Set(data.metrics.flatMap(row=>Object.keys(row)))];
     keys.forEach(key=>{const th=node("th",key.replaceAll("_"," "));th.scope="col";head.append(th);});thead.append(head);table.append(thead,tbody);
@@ -273,9 +306,19 @@
     const actionHost=node("div",null,"action-explorer"),actionStatus=node("p","Load a run to inspect its applied actions.","caption"),options=node("select");options.setAttribute("aria-label","Applied action component");
     ["tx","ty","tz","rx","ry","rz","gripper"].forEach((name,i)=>{const option=node("option",name);option.value=i;options.append(option);});
     options.disabled=true;actionHost.append(actionStatus,options);$("charts").append(actionHost);
-    let selectedActionEpisode=null,actionChart=null;
+    let selectedActionEpisode=null,actionChart=null,telemetryCharts=[];
     function drawActions(){if(actionChart){actionChart.remove();actionChart=null;}if(!selectedActionEpisode)return;const rows=selectedActionEpisode.records.flatMap(r=>(r.output?.executed||[]).map(a=>a.applied));chart(`Applied action · ${options.selectedOptions[0].textContent}`,rows.map((row,i)=>[i,row[Number(options.value)]??null]),"Executed sample index","command (see action_spec units)");actionChart=$("charts").lastChild;}
-    renderSelectedActions=episode=>{selectedActionEpisode=episode;options.disabled=!episode;actionStatus.textContent=episode?`Applied actions for rollout ${episode.rollout_index}`:"Load a run to inspect its applied actions.";drawActions();};options.addEventListener("change",drawActions);
+    renderSelectedActions=episode=>{
+      selectedActionEpisode=episode;options.disabled=!episode;actionStatus.textContent=episode?`Applied actions and telemetry for rollout ${episode.rollout_index}`:"Load a run to inspect its applied actions.";
+      telemetryCharts.forEach(item=>item.remove());telemetryCharts=[];
+      if(episode){const view=episode.trace_view||{},tracked=(title,values,unit)=>{chart(title,(values||[]).map((value,i)=>[i+1,value]),"Recorded sample",unit);telemetryCharts.push($("charts").lastChild);};
+        tracked("Policy inference latency · selected run",view.inference_latency_ms,"ms");
+        tracked("GPU allocated memory · selected run · PyTorch allocator",view.vram_allocated_mib,"MiB");
+        tracked("GPU reserved memory · selected run · PyTorch allocator",view.vram_reserved_mib,"MiB");
+        tracked("Estimated compute · selected run · analytical proxy",view.estimated_gflops,"GFLOPs");
+      }
+      drawActions();
+    };options.addEventListener("change",drawActions);
     $("metric-table").append(detail("System performance evidence",data.performance));
     const table=node("table"),head=node("tr");["Task","Rollout","Seed","Status","Calls","Applied actions","Reason","Details"].forEach(x=>head.append(node("th",x)));table.append(head);
     data.tasks.forEach((task,taskIndex)=>task.episodes.forEach((ep,episodeIndex)=>{const tr=node("tr");[task.task_id,ep.rollout_index,ep.seed,ep.terminal_status,ep.counts.predictions,ep.counts.executed_actions,ep.terminal_reason].forEach(x=>tr.append(node("td",fmt(x))));const cell=node("td"),button=node("button","Open run");button.setAttribute("aria-label",`Open run ${ep.rollout_index}, ${task.task_id}`);button.addEventListener("click",()=>inspectEpisode(taskIndex,episodeIndex));cell.append(button);tr.append(cell);table.append(tr);}));const episodesWrap=node("div",null,"table-scroll");episodesWrap.tabIndex=0;episodesWrap.setAttribute("role","region");episodesWrap.setAttribute("aria-label","Episode outcomes");episodesWrap.append(table);$("metric-table").append(node("h3","Every finalized episode"),episodesWrap);

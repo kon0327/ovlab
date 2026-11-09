@@ -26,6 +26,20 @@ def test_current_run_suffix_is_the_displayed_hash_and_legacy_alias_is_stable():
     assert len(run_hash("legacy-run")) == 8
 
 
+def test_scoped_training_run_id_keeps_readable_artifact_and_unique_lookup_key():
+    from ovlab_core.experiment_scope import ExperimentScope
+    from ovlab_benchctl.training_runs import _run_id
+    from ovlab_runner.artifacts.layout import run_key
+
+    scope = ExperimentScope("study", ("model", "ablation"))
+    first = _run_id("training-profile", "training-plan-12345678", scope)
+    second = _run_id("training-profile", "training-plan-12345678", scope)
+    assert first != second
+    assert run_key(first) == first
+    assert run_key(second) == second
+    assert run_hash(first) == first[-8:]
+
+
 def test_resolver_accepts_exact_id_or_hash_and_exact_id_wins(tmp_path):
     root = tmp_path / "runs"
     identifier = "experiment_2026-07-30_15-18-22_fd24dff0"
@@ -64,6 +78,53 @@ def test_application_resolves_benchmark_and_training_hash_namespaces(tmp_path):
     assert app._benchmark_run_id("1234abcd") == benchmark_id
     assert app._benchmark_run_path("1234abcd") == (data / "runs" / benchmark_id).resolve()
     assert app._training_run_id("9876fedc") == training_id
+
+
+def test_application_routes_nested_experiment_reports_to_interactive_only(tmp_path, monkeypatch):
+    import ovlab_runner
+
+    data = tmp_path / "data"
+    evaluation = _run(data / "runs" / "exp-1" / "evaluate" / "model-a", "eval-1")
+    (evaluation / "manifest.started.json").write_text("{}")
+    training = _run(data / "runs" / "exp-1" / "train" / "model-a", "train-1")
+    (training / "training-plan.json").write_text("{}")
+    repository = tmp_path / "repository"
+    (repository / "configs").mkdir(parents=True)
+    app = OvlabApplication(repository, environment={"OVLAB_DATA_ROOT": str(data)})
+    calls = []
+
+    def evaluation_engine(runs_root, interactive_root, profile):
+        calls.append(("evaluation-root", Path(interactive_root)))
+        return type("Engine", (), {
+            "generate": lambda self, run, task_id=None: calls.append(("evaluation-generate", Path(run))) or {"ok": True},
+            "verify": lambda self, run, build_id=None: calls.append(("evaluation-verify", Path(run))) or {"ok": True},
+        })()
+
+    def training_engine(runs_root, interactive_root):
+        calls.append(("training-root", Path(interactive_root)))
+        return type("Engine", (), {
+            "generate": lambda self, run: calls.append(("training-generate", Path(run))) or {"ok": True},
+            "verify": lambda self, run, build_id=None: calls.append(("training-verify", Path(run))) or {"ok": True},
+        })()
+
+    monkeypatch.setattr(ovlab_runner, "UnifiedInteractiveReportEngine", evaluation_engine)
+    monkeypatch.setattr(ovlab_runner, "TrainingInteractiveReportEngine", training_engine)
+    monkeypatch.setattr(app, "_report_profile", lambda _: object())
+
+    assert app.report_generate("eval-1") == {"ok": True}
+    assert app.report_verify("eval-1") == {"ok": True}
+    assert app.train_report("train-1") == {"ok": True}
+    assert app.train_report("train-1", verify=True) == {"ok": True}
+    assert calls == [
+        ("evaluation-root", data / "exports" / "exp-1" / "evaluate" / "model-a" / "interactive"),
+        ("evaluation-generate", evaluation.resolve()),
+        ("evaluation-root", data / "exports" / "exp-1" / "evaluate" / "model-a" / "interactive"),
+        ("evaluation-verify", evaluation.resolve()),
+        ("training-root", data / "exports" / "exp-1" / "train" / "model-a" / "interactive"),
+        ("training-generate", training.resolve()),
+        ("training-root", data / "exports" / "exp-1" / "train" / "model-a" / "interactive"),
+        ("training-verify", training.resolve()),
+    ]
 
 
 def test_application_resolves_hash_before_runner_reporting_and_export_calls(

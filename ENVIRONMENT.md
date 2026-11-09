@@ -13,6 +13,23 @@ still use their dedicated Docker images for model and simulator dependencies.
 
 ## Linux and macOS
 
+For the checkout's full launcher, including Docker reporting and dataset
+commands, install a user-local command once:
+
+```bash
+bash ./install-ovlab-cli.sh
+ovlab --help
+```
+
+The command is placed in `~/.local/bin`. If that directory is not on PATH,
+the installer prints the required `export PATH=...` command. Set
+`OVLAB_BIN_DIR` to choose another installation directory. The installer is
+idempotent and refuses to replace a different existing `ovlab` command. It
+does not create or activate a Python environment; the launcher uses an
+existing OVLAB environment or Python as described below. If an activated
+environment supplies its own `ovlab` entry point earlier on PATH, place
+`~/.local/bin` earlier on PATH to use the checkout launcher.
+
 From the repository root:
 
 ```bash

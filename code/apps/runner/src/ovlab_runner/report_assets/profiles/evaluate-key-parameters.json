@@ -1,0 +1,196 @@
+{
+  "schema_version": "ovlab.key-parameters/v1",
+  "mode": "evaluate",
+  "groups": [
+    {
+      "title": "Inputs",
+      "stage": "inputs",
+      "items": [
+        {
+          "label": "Benchmark",
+          "sources": [
+            {
+              "source": "connection.json",
+              "path": "benchmark.name"
+            }
+          ]
+        },
+        {
+          "label": "Camera",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "metadata.policy_configuration.input.camera"
+            }
+          ]
+        },
+        {
+          "label": "Action normalization key",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "metadata.policy_configuration.unnorm_key"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Evaluation setup",
+      "stage": "representation",
+      "items": [
+        {
+          "label": "Episodes per task",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "rollout_count_per_task"
+            }
+          ]
+        },
+        {
+          "label": "Base episode seed",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "base_episode_seed"
+            }
+          ]
+        },
+        {
+          "label": "Maximum steps per episode",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "default_maximum_episode_steps"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Model / policy",
+      "stage": "policy",
+      "items": [
+        {
+          "label": "Policy",
+          "sources": [
+            {
+              "source": "connection.json",
+              "path": "policy.name"
+            }
+          ]
+        },
+        {
+          "label": "Checkpoint",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "metadata.policy_configuration.checkpoint_id"
+            },
+            {
+              "source": "plan.json",
+              "path": "metadata.deployment.checkpoint_id"
+            }
+          ]
+        },
+        {
+          "label": "Method",
+          "sources": [
+            {
+              "source": "report.json",
+              "path": "performance.model_complexity.method_family"
+            },
+            {
+              "source": "report.json",
+              "path": "performance.model_complexity.method_id"
+            }
+          ]
+        },
+        {
+          "label": "Configured precision",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "metadata.policy_configuration.runtime.dtype"
+            }
+          ]
+        },
+        {
+          "label": "Configured quantization",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "metadata.policy_configuration.runtime.quantization"
+            },
+            {
+              "source": "report.json",
+              "path": "performance.model_complexity.quantization"
+            }
+          ]
+        },
+        {
+          "label": "Runtime parameters",
+          "sources": [
+            {
+              "source": "report.json",
+              "path": "performance.model_complexity.parameter_counts.total"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Predicted action",
+      "stage": "outputs",
+      "items": [
+        {
+          "label": "Action codec",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "metadata.policy_configuration.action.codec"
+            },
+            {
+              "source": "connection.json",
+              "path": "metadata.policy_capabilities.action_codec"
+            }
+          ]
+        },
+        {
+          "label": "Action interface",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "metadata.policy_configuration.action.interface_ref"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Action execution",
+      "stage": "result",
+      "items": [
+        {
+          "label": "Execution mode",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "action_execution_policy.mode"
+            }
+          ]
+        },
+        {
+          "label": "Replan interval",
+          "sources": [
+            {
+              "source": "plan.json",
+              "path": "action_execution_policy.replan_interval"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

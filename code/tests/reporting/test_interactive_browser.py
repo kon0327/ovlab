@@ -211,9 +211,38 @@ def test_real_training_loads_metrics_only_when_requested(tmp_path, browser):
         assert "run/training-plan.json:scientific.training.learning_rate" in result_stage.inner_text()
         assert "Unavailable" in page.locator("#flow-content").inner_text()
         page.get_by_role("button", name="Load training results").click()
-        page.wait_for_function("document.querySelectorAll('.chart-card').length === 4")
+        page.wait_for_function("document.querySelectorAll('.chart-card').length === 8")
         assert len([url for url in requests if "/data/training.js" in url]) == 1
         assert "All recorded training metrics" in page.locator("#metric-table").inner_text()
+        assert not errors
+    finally:
+        page.close()
+
+
+def test_unified_report_loads_complete_evidence_only_when_requested(tmp_path, browser):
+    from test_reports_exports import _canonical_run
+    from ovlab_runner import UnifiedInteractiveReportEngine
+
+    runs = tmp_path / "runs" / "example" / "evaluate" / "model-a"
+    run_id, _ = _canonical_run(runs, name="unified-browser", rollouts=2, maximum_steps=3)
+    generated = UnifiedInteractiveReportEngine(runs, tmp_path / "exports" / "example" / "evaluate" / "model-a" / "interactive").generate(run_id)
+    target = Path(generated["output"])
+    page = browser.new_page(viewport={"width": 390, "height": 900})
+    requests, errors = [], []
+    page.on("request", lambda request: requests.append(request.url))
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto((target / "index.html").as_uri())
+        page.wait_for_load_state("networkidle")
+        assert not any("/data/model.js" in url or "/data/episodes/" in url for url in requests)
+        page.get_by_role("button", name="Load complete report evidence").click()
+        page.wait_for_function("document.querySelectorAll('#report-evidence .report-evidence-section').length > 5")
+        assert len([url for url in requests if "/data/model.js" in url]) == 1
+        assert not any("/data/episodes/" in url for url in requests)
+        page.locator("#report-evidence .report-evidence-section").filter(has=page.locator("summary", has_text="provenance")).first.locator("summary").click()
+        page.wait_for_function("document.querySelector('#report-evidence').textContent.includes('integrity.json')")
+        assert "integrity.json" in page.locator("#report-evidence").inner_text()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert not errors
     finally:
         page.close()

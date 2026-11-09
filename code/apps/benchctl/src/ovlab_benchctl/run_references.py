@@ -144,3 +144,83 @@ def resolve_run_reference_across(
         identifiers = ", ".join(item.run_id for item in unique.values())
         raise RunReferenceAmbiguousError(f"{label} hash {requested_hash!r} is ambiguous; matching IDs: {identifiers}")
     return next(iter(unique.values()))
+
+
+def resolve_run_reference_tree(
+    runs_root: str | Path,
+    reference: str,
+    *,
+    category: str | None = None,
+    label: str = "run",
+) -> ResolvedRunReference:
+    """Find an immutable run below legacy or experiment-scoped run roots.
+
+    A bare ID or short hash must identify exactly one run. Callers can restrict
+    the search to train/evaluate, but must not silently pick one experiment when
+    the same human ID exists in several experiment trees.
+    """
+    if category not in {None, "train", "evaluate"}:
+        raise ValueError("category must be train or evaluate")
+    if not isinstance(reference, str) or not reference:
+        raise RunReferenceUnavailableError(f"{label} reference must be a run ID, hash, or absolute canonical run path")
+    root = Path(runs_root).expanduser().resolve()
+    if not root.is_dir():
+        raise RunReferenceUnavailableError(f"{label} is unavailable: {reference!r}")
+
+    def path_category(path: Path) -> str | None:
+        parts = path.relative_to(root).parts
+        if not parts:
+            return None
+        if parts[0] in {"train", "evaluate"}:
+            return parts[0]
+        if len(parts) >= 3 and parts[1] in {"train", "evaluate"}:
+            return parts[1]
+        return "evaluate" if len(parts) == 1 else None
+
+    requested_path = Path(reference).expanduser()
+    if requested_path.is_absolute():
+        if ".." in requested_path.parts or not requested_path.is_relative_to(root):
+            raise RunReferenceUnavailableError(f"{label} path is outside the configured runs root: {reference}")
+        current = root
+        for part in requested_path.relative_to(root).parts:
+            current = current / part
+            if current.is_symlink():
+                raise RunReferenceError(f"{label} path contains a forbidden symbolic link: {reference}")
+        resolved = requested_path.resolve()
+        if not resolved.is_relative_to(root):
+            raise RunReferenceUnavailableError(f"{label} path is outside the configured runs root: {reference}")
+        if (not resolved.is_dir() or
+                not any((resolved / marker).is_file() for marker in (
+                    "manifest.started.json", "manifest.completed.json", "manifest.failed.json", "training-plan.json",
+                )) or (category is not None and path_category(resolved) != category)):
+            raise RunReferenceUnavailableError(f"{label} path is not a canonical {category or ''} run: {reference}")
+        return ResolvedRunReference(resolved.name, run_hash(resolved.name), resolved)
+    if requested_path.parts != (reference,) or reference in {".", ".."}:
+        raise RunReferenceUnavailableError(f"{label} reference must be one run ID or an {RUN_HASH_LENGTH}-character hash")
+
+    matches: list[ResolvedRunReference] = []
+    pending = [root]
+    while pending:
+        parent = pending.pop()
+        for path in sorted(parent.iterdir(), reverse=True):
+            if path.is_symlink():
+                if path.name == reference:
+                    raise RunReferenceError(f"{label} reference resolves to a forbidden symbolic link: {reference}")
+                continue
+            if not path.is_dir():
+                continue
+            if any((path / marker).is_file() for marker in (
+                "manifest.started.json", "manifest.completed.json", "manifest.failed.json", "training-plan.json",
+            )):
+                if category is None or path_category(path) == category:
+                    matches.append(ResolvedRunReference(path.name, run_hash(path.name), path.resolve()))
+                continue
+            pending.append(path)
+    exact = [item for item in matches if item.run_id == reference]
+    selected = exact if exact else [item for item in matches if _RUN_HASH.fullmatch(reference) and item.run_hash == reference.lower()]
+    if not selected:
+        raise RunReferenceUnavailableError(f"{label} is unavailable: {reference!r}")
+    if len(selected) > 1:
+        locations = ", ".join(str(item.path.relative_to(root)) for item in selected)
+        raise RunReferenceAmbiguousError(f"{label} reference {reference!r} is ambiguous: {locations}")
+    return selected[0]

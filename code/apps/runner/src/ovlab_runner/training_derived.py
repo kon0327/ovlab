@@ -83,7 +83,7 @@ def _verify_training_run(root: Path) -> dict[str, object]:
     return manifest
 
 
-def build_training_performance_model(training_run: str | Path) -> dict[str, object]:
+def build_training_performance_model(training_run: str | Path, *, key_parameters=None) -> dict[str, object]:
     root = Path(training_run).expanduser().resolve()
     manifest = _verify_training_run(root)
     result = _read_json(root / "result.json")
@@ -125,7 +125,7 @@ def build_training_performance_model(training_run: str | Path) -> dict[str, obje
         "checkpoint_id": manifest.get("checkpoint_id"),
         "profile_id": plan.get("scientific", {}).get("profile", {}).get("id") if isinstance(plan.get("scientific"), dict) else None,
         "parameter_counts": parameter_counts,
-        "key_parameters": training_parameters(plan, result, manifest, evidence),
+        "key_parameters": training_parameters(plan, result, manifest, evidence, key_parameters),
         "system_metrics": {
             "schema_version": "ovlab.system-metrics-summary/v1",
             "sample_count": len(metrics),
@@ -232,12 +232,13 @@ body{{font-family:system-ui,sans-serif;background:#f2f4f7;color:#172033;margin:0
 
 
 class TrainingDerivedReportEngine:
-    def __init__(self, training_runs_root: str | Path, derived_root: str | Path):
+    def __init__(self, training_runs_root: str | Path, derived_root: str | Path, *, key_parameters=None):
         self.training_runs_root = Path(training_runs_root).expanduser().resolve()
         self.derived_root = Path(derived_root).expanduser().resolve()
         self.report_root = self.derived_root if self.derived_root.parent.name == "train" else self.derived_root / "training"
         display = os.environ.get("OVLAB_DERIVED_DISPLAY_ROOT")
         self.display_root = Path(display).expanduser() if display else self.derived_root
+        self.key_parameters = key_parameters
 
     def _display_path(self, target: Path) -> str:
         return str(self.display_root / target.relative_to(self.derived_root))
@@ -255,8 +256,10 @@ class TrainingDerivedReportEngine:
 
     def generate(self, run_id: str) -> dict[str, object]:
         source = self._source(run_id)
-        model = build_training_performance_model(source)
+        model = build_training_performance_model(source, key_parameters=self.key_parameters)
         identity = {"source": model["source"], "renderer": TRAINING_REPORT_RENDERER, "schema": TRAINING_REPORT_SCHEMA}
+        if self.key_parameters is not None:
+            identity["key_parameters"] = self.key_parameters
         build_id = _digest(identity)[:20]
         profile_root = self.report_root / run_id / "system-performance"
         target = profile_root / build_id
@@ -326,6 +329,8 @@ class TrainingDerivedReportEngine:
         recorded_source = manifest.get("identity_inputs", {}).get("source", {})
         if any(current["source"].get(key) != value for key, value in recorded_source.items()):
             raise ArtifactError("canonical training report inputs changed")
+        if manifest.get("identity_inputs", {}).get("key_parameters") != self.key_parameters:
+            raise ArtifactError("training report key parameter configuration does not match")
         expected = {"manifest.json"}
         for row in manifest.get("files", []):
             path = (target / str(row["path"])).resolve()

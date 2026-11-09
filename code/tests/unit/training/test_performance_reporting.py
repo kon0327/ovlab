@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from ovlab_runner import ArtifactError, TrainingDerivedReportEngine, build_training_performance_model
+from ovlab_runner import ArtifactError, TrainingDerivedReportEngine, TrainingInteractiveReportEngine, build_training_performance_model
 
 
 def _write_json(path, value):
@@ -98,6 +98,66 @@ def test_training_performance_report_tracks_vram_compute_and_parameter_classes(t
     (interactive / "index.html").write_text("tamper")
     with pytest.raises(ArtifactError, match="interactive report file checksum mismatch"):
         engine.verify(run.name)
+
+
+def test_unified_training_report_exposes_complete_evidence_without_derived_tree(tmp_path):
+    run = _training_run(tmp_path / "runs" / "exp-one" / "train" / "model-a" / "ablation-1")
+    root = tmp_path / "exports" / "exp-one" / "train" / "model-a" / "ablation-1" / "interactive"
+    engine = TrainingInteractiveReportEngine(run.parent, root)
+    before = (run / "manifest.json").read_bytes()
+    generated = engine.generate(run.name)
+    target = Path(generated["output"])
+    model = json.loads((target / "model.json").read_text())
+    assert model["system_metrics"]["estimated_total_gflops"] == 15.0
+    assert model["charts"]["vram_tracking"]
+    assert model["source"]["training_manifest_sha256"] == _sha(run / "manifest.json")
+    assert "Complete report evidence" in (target / "index.html").read_text()
+    assert not list((tmp_path / "exports").rglob("derived"))
+    assert engine.verify(run.name)["integrity"] == "verified"
+    assert engine.generate(run.name)["reused"] is True
+    assert before == (run / "manifest.json").read_bytes()
+
+
+def test_training_report_uses_json_parameter_configuration(tmp_path):
+    from ovlab_benchctl.application import OvlabApplication
+    from ovlab_runner.key_parameters import default_key_parameters
+
+    run = _training_run(tmp_path / "runs" / "exp-one" / "train" / "model-a")
+    parameters = default_key_parameters("train")
+    group = next(group for group in parameters["groups"] if group["stage"] == "policy")
+    group["items"] = [next(item for item in group["items"] if item["label"] == "Trainable parameters")]
+    group["items"][0]["label"] = "Selected weights"
+    parameters["groups"] = [group]
+    config = tmp_path / "training-parameters.json"
+    config.write_text(json.dumps(parameters), encoding="utf-8")
+    app = OvlabApplication(Path(__file__).resolve().parents[4], environment={"OVLAB_DATA_ROOT": str(tmp_path)})
+    default = app.train_report(run.name)
+    generated = app.train_report(run.name, parameters=str(config))
+    assert generated["interactive_build_id"] != default["interactive_build_id"]
+    model = json.loads((Path(generated["output"]) / "model.json").read_text())
+    assert model["key_parameters"][0]["items"] == [{
+        "label": "Selected weights", "value": 100,
+        "source": "run/result.json:performance.parameter_counts.trainable",
+    }]
+    assert app.train_report(run.name, verify=True, parameters=str(config))["integrity"] == "verified"
+    legacy = TrainingDerivedReportEngine(run.parent, tmp_path / "legacy-derived", key_parameters=parameters)
+    legacy_report = legacy.generate(run.name)
+    assert "Selected weights" in (Path(legacy_report["output"]) / "index.html").read_text()
+    assert legacy.verify(run.name)["integrity"] == "verified"
+
+
+def test_training_application_routes_scoped_run_to_interactive_only(tmp_path):
+    from ovlab_benchctl.application import OvlabApplication
+
+    run = _training_run(tmp_path / "runs" / "exp-one" / "train" / "model-a")
+    repository = Path(__file__).resolve().parents[4]
+    app = OvlabApplication(repository, environment={"OVLAB_DATA_ROOT": str(tmp_path)})
+    generated = app.train_report(run.name)
+    assert Path(generated["output"]).is_relative_to(
+        tmp_path / "exports" / "exp-one" / "train" / "model-a" / "interactive"
+    )
+    assert not list((tmp_path / "exports").rglob("derived"))
+    assert app.train_report(run.name, verify=True)["interactive_build_id"] == generated["interactive_build_id"]
 
 
 def test_training_application_writes_typed_exports_and_verifies_legacy_reports(tmp_path, monkeypatch):

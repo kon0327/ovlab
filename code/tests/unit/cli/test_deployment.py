@@ -545,6 +545,82 @@ def test_missing_runs_root_is_created_setgid_without_world_access(tmp_path):
     assert all(call["env"]["OVLAB_HOST_ARTIFACT_GID"] == str(os.getgid()) for call in runner.calls)
 
 
+def test_experiment_scope_preflights_nested_run_and_export_directories(tmp_path):
+    from ovlab_core.experiment_scope import ExperimentScope
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    exports = tmp_path / "exports"
+    deployment = ComposeDeployment(REPOSITORY, environment={
+        "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(exports),
+        "OVLAB_EXPERIMENT_ID": "comparison_2026-11-06_1234",
+        "OVLAB_EXPERIMENT_NODE": "model-a/task-1/ablation-b",
+    })
+    plan = deployment.plan(
+        LORA, profile="openvla", renderer="egl", env_file=ENV_FILE,
+        project_name="ovlab-test-experiment-scope",
+    )
+
+    deployment._preflight_bind_sources(plan)
+    scope = ExperimentScope.from_environment(deployment.environment)
+    assert scope is not None
+    scoped_runs = scope.runs_root(runs, "evaluate")
+    assert scoped_runs.is_dir()
+    for category in ("train", "evaluate"):
+        for kind in ("grouped", "isolated", "interactive"):
+            assert (scope.exports_root(exports, category) / kind).is_dir()
+    assert not (exports / "evaluate" / "derived").exists()
+    assert all(
+        directory.stat().st_mode & 0o7777 == 0o2770
+        for directory in (runs / scope.experiment_id, scoped_runs, exports / scope.experiment_id)
+    )
+    run = scoped_runs / "run-1"
+    run.mkdir()
+    assert deployment._run_directories(runs, scope) == {run.resolve()}
+
+
+def test_scoped_compose_run_publishes_exact_nested_canonical_path(tmp_path):
+    class ScopedRunner(_Runner):
+        def __call__(self, command, **kwargs):
+            if "up" in command:
+                self.calls.append({"command": command, **kwargs})
+                scope = kwargs["env"]["OVLAB_EXPERIMENT_ID"]
+                node = kwargs["env"]["OVLAB_EXPERIMENT_NODE"]
+                runs = Path(kwargs["env"]["OVLAB_RUNS_ROOT"])
+                (runs / scope / "evaluate" / node / "simulated-run").mkdir(parents=True)
+                return _Result(self.returncodes.pop(0) if self.returncodes else 0)
+            return super().__call__(command, **kwargs)
+
+    datasets = tmp_path / "datasets"
+    datasets.mkdir()
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    exports = tmp_path / "exports"
+    runner = ScopedRunner(0, 0, 0)
+    deployment = ComposeDeployment(REPOSITORY, environment={
+        "PATH": os.environ["PATH"],
+        "OVLAB_DATASETS_PATH": str(datasets),
+        "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(exports),
+        "OVLAB_EXPERIMENT_ID": "study-1",
+        "OVLAB_EXPERIMENT_NODE": "model-a/task-1",
+    }, runner=runner)
+    plan = deployment.plan(
+        LORA, profile="openvla", renderer="egl", env_file=ENV_FILE,
+        project_name="ovlab-test-scoped-run",
+    )
+    result = deployment.run(plan)
+
+    expected = runs / "study-1/evaluate/model-a/task-1/simulated-run"
+    assert result["run_path"] == str(expected.resolve())
+    assert all(
+        call["env"]["OVLAB_EVALUATION_OUTPUT_ROOT"] == "/var/lib/ovlab/runs/study-1/evaluate/model-a/task-1"
+        for call in runner.calls
+    )
+    assert runner.calls[-1]["env"]["OVLAB_EXPERIMENT_NODE"] == "model-a/task-1"
+
+
 def test_dry_run_has_no_docker_side_effects():
     runner = _Runner()
     deployment = ComposeDeployment(REPOSITORY, runner=runner)

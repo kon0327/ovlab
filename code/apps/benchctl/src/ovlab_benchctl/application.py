@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from enum import Enum
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -13,6 +14,7 @@ import time
 import uuid
 
 from ovlab_core.contracts import OVLAB_VERSION
+from ovlab_core.experiment_scope import ExperimentScope
 
 from .catalog import registered_policies
 from .errors import ConfigCompatibilityError, ConfigReferenceError
@@ -20,7 +22,10 @@ from .models import MockPolicySettings, ResolvedExperimentConfig
 from .resolver import ConfigResolver
 from .strict_yaml import dumps, load
 from .versioning import CLI_VERSION, repository_revision
-from .run_references import resolve_run_reference_across
+from .run_references import (
+    RunReferenceUnavailableError, resolve_run_reference_across,
+    resolve_run_reference_tree,
+)
 
 
 CLI_SCHEMA_VERSION = "ovlab-cli/1.0.0"
@@ -184,9 +189,14 @@ class OvlabApplication:
 
     def _benchmark_run(self, reference):
         runs, _, _ = self._data_roots()
-        return resolve_run_reference_across(
-            (runs / "evaluate", runs), str(reference), label="evaluation run",
-        )
+        try:
+            return resolve_run_reference_tree(
+                runs, str(reference), category="evaluate", label="evaluation run",
+            )
+        except RunReferenceUnavailableError:
+            return resolve_run_reference_across(
+                (runs / "evaluate", runs), str(reference), label="evaluation run",
+            )
 
     def _benchmark_run_id(self, reference) -> str:
         return self._benchmark_run(reference).run_id
@@ -203,9 +213,14 @@ class OvlabApplication:
     def _training_run(self, reference):
         runs, _, _ = self._data_roots()
         legacy = self._model_data_root() / "training-runs"
-        return resolve_run_reference_across(
-            (runs / "train", legacy), str(reference), label="training run",
-        )
+        try:
+            return resolve_run_reference_tree(
+                runs, str(reference), category="train", label="training run",
+            )
+        except RunReferenceUnavailableError:
+            return resolve_run_reference_across(
+                (runs / "train", legacy), str(reference), label="training run",
+            )
 
     def _model_data_root(self) -> Path:
         """Host-visible model data; never part of a scientific identity."""
@@ -235,10 +250,33 @@ class OvlabApplication:
         if not path.is_file():
             raise ConfigReferenceError(f"report profile does not exist: {path.resolve()}")
         try:
-            return ReportProfile.from_mapping(load(path.resolve()), template_base=path.resolve().parent)
-        except ArtifactError as exc:
+            def unique_pairs(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError(f"duplicate JSON key: {key}")
+                    result[key] = value
+                return result
+            document = (json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
+                        if path.suffix.lower() == ".json" else load(path.resolve()))
+            return ReportProfile.from_mapping(document, template_base=path.resolve().parent)
+        except (ArtifactError, ValueError, UnicodeError) as exc:
             from .errors import ConfigSchemaError
             raise ConfigSchemaError(f"invalid report profile: {exc}") from exc
+
+    def _training_report_parameters(self, reference):
+        from ovlab_runner import ArtifactError
+        from ovlab_runner.key_parameters import load_key_parameters
+        from .errors import ConfigSchemaError
+        path = Path(reference).expanduser()
+        if not path.is_absolute():
+            path = self.repository_root / path
+        if not path.is_file():
+            raise ConfigReferenceError(f"training report parameter JSON does not exist: {path}")
+        try:
+            return load_key_parameters(path, "train")
+        except ArtifactError as exc:
+            raise ConfigSchemaError(f"invalid training report parameters: {exc}") from exc
 
     def _quic_descriptor(self, path: Path, *, runtime: bool):
         from ovlab_openvla_quic import descriptor_from_document
@@ -573,7 +611,10 @@ class OvlabApplication:
     ) -> dict[str, object]:
         resolved = self._resolved_experiment(config, local_profile=local_profile)
         output_path = resolved.artifact_settings.root if output_root is None else str(Path(output_root).expanduser().resolve())
-        if output_root is None and Path(output_path).name == "runs":
+        scope = ExperimentScope.from_environment(self.environment)
+        if scope is not None and output_root is None:
+            output_path = str(scope.runs_root(self._data_roots()[0], "evaluate"))
+        elif output_root is None and Path(output_path).name == "runs":
             output_path = str(Path(output_path) / "evaluate")
         scientific = resolved.scientific_config
         return {
@@ -615,6 +656,7 @@ class OvlabApplication:
         )
 
         resolved = self._resolved_experiment(config, local_profile=local_profile)
+        scope = ExperimentScope.from_environment(self.environment)
         created_wall_time_utc_ns = time.time_ns()
         run_id = RunId(_readable_run_id(
             resolved.experiment_id,
@@ -631,6 +673,7 @@ class OvlabApplication:
         plan = replace(plan, metadata={
             **dict(plan.metadata),
             **({"qualification": "test-provider"} if isinstance(resolved.policy_settings, MockPolicySettings) else {}),
+            **({"experiment_scope": {"experiment_id": scope.experiment_id, "node": scope.node_path}} if scope is not None else {}),
             "cli": {
                 "schema_version": CLI_SCHEMA_VERSION,
                 "version": CLI_VERSION,
@@ -646,6 +689,8 @@ class OvlabApplication:
             "deployment": self._deployment_provenance(self.environment),
         })
         root = resolved.artifact_settings.root if output_root is None else Path(output_root).expanduser().resolve()
+        if scope is not None and output_root is None:
+            root = scope.runs_root(self._data_roots()[0], "evaluate")
         reporting = resolved.reporting_settings
         postprocessor = None
         postprocessing_mode = self.environment.get("OVLAB_POSTPROCESSING_MODE", "external")
@@ -653,9 +698,9 @@ class OvlabApplication:
             raise ConfigCompatibilityError(
                 "OVLAB_POSTPROCESSING_MODE must be 'external' or 'internal'"
             )
-        if output_root is None and root.name == "runs":
+        if scope is None and output_root is None and root.name == "runs":
             root = root / "evaluate"
-        if postprocessing_mode == "internal":
+        if postprocessing_mode == "internal" and scope is None:
             common_root = root.parent if root.name == "evaluate" else root
             _, derived_root, exports_root = self._data_roots(runs_root=common_root)
             report_engine = None
@@ -684,9 +729,12 @@ class OvlabApplication:
             runner.run()
         finally:
             runner.close()
+        run_path = FilesystemRunArtifactStore(root)._run_path(run_id)
+        if postprocessing_mode == "internal" and scope is not None:
+            self.report_publish(str(run_id), reporting.profile, report_enabled=reporting.enabled)
         return {
             "run_id": str(run_id),
-            "run_path": str(FilesystemRunArtifactStore(root)._run_path(run_id)),
+            "run_path": str(run_path),
             "compatible": report.compatibility_report.compatible,
             "scientific_config_hash": resolved.scientific_config_hash,
             "execution_config_hash": resolved.execution_config_hash,
@@ -710,22 +758,36 @@ class OvlabApplication:
         return regenerate_report(self._benchmark_run_path(path), output)
 
     def report_generate(self, run, profile="libero-task-default", *, task_id=None):
-        from ovlab_runner import DerivedReportEngine
-        runs, derived, _ = self._data_roots()
-        run_id = self._benchmark_run_id(run)
-        return DerivedReportEngine(runs, derived, self._report_profile(profile)).generate(run_id, task_id=task_id)
+        from ovlab_runner import DerivedReportEngine, UnifiedInteractiveReportEngine
+        runs, derived, exports = self._data_roots()
+        selected = self._benchmark_run(run)
+        scope = ExperimentScope.from_run_path(runs, selected.path, "evaluate")
+        selected_profile = self._report_profile(profile)
+        if scope is not None:
+            return UnifiedInteractiveReportEngine(
+                runs, scope.exports_root(exports, "evaluate") / "interactive", selected_profile,
+            ).generate(selected.path, task_id=task_id)
+        return DerivedReportEngine(runs, derived, selected_profile).generate(selected.run_id, task_id=task_id)
 
     def report_publish(self, run, profile="libero-task-default", *, report_enabled=True):
         """Publish regenerable outputs from one finalized canonical run."""
-        from ovlab_runner import DerivedReportEngine, ExportEngine
+        from ovlab_runner import DerivedReportEngine, ExportEngine, UnifiedInteractiveReportEngine
         runs, derived, exports = self._data_roots()
-        run_id = self._benchmark_run_id(run)
+        selected = self._benchmark_run(run)
+        run_id = selected.run_id
+        scope = ExperimentScope.from_run_path(runs, selected.path, "evaluate")
         report = None
         if report_enabled:
-            report = DerivedReportEngine(
-                runs, derived, self._report_profile(profile)
-            ).generate(run_id)
-        isolated = ExportEngine(runs, exports).generate_isolated(run_id)
+            if scope is not None:
+                report = UnifiedInteractiveReportEngine(
+                    runs, scope.exports_root(exports, "evaluate") / "interactive",
+                    self._report_profile(profile),
+                ).generate(selected.path)
+            else:
+                report = DerivedReportEngine(
+                    runs, derived, self._report_profile(profile)
+                ).generate(run_id)
+        isolated = ExportEngine(runs, exports, scope=scope).generate_isolated(run_id)
         return {
             "schema_version": "ovlab.postprocessing-result/v1",
             "run_id": run_id,
@@ -736,10 +798,17 @@ class OvlabApplication:
         }
 
     def report_verify(self, run, profile="libero-task-default", *, build_id=None):
-        from ovlab_runner import DerivedReportEngine
+        from ovlab_runner import DerivedReportEngine, UnifiedInteractiveReportEngine
         runs, derived, exports = self._data_roots()
-        run_id = self._benchmark_run_id(run)
+        selected = self._benchmark_run(run)
+        run_id = selected.run_id
         report_profile = self._report_profile(profile)
+        scope = ExperimentScope.from_run_path(runs, selected.path, "evaluate")
+        if scope is not None:
+            return UnifiedInteractiveReportEngine(
+                runs, scope.exports_root(exports, "evaluate") / "interactive",
+                report_profile,
+            ).verify(selected.path, build_id=build_id)
         suffix = Path(run_id) / report_profile.identifier / build_id if build_id is not None else Path(run_id)
         if not (derived / suffix).is_dir() and (exports / "derived" / suffix).is_dir():
             derived = exports / "derived"
@@ -780,9 +849,10 @@ class OvlabApplication:
     def export_isolated(self, run_id, *, episode_id=None, template="isolated-default-v1"):
         from ovlab_runner import ExportEngine
         runs, _, exports = self._data_roots()
-        run_id = self._benchmark_run_id(run_id)
-        return ExportEngine(runs, exports).generate_isolated(
-            run_id, episode_id=episode_id, template=template,
+        selected = self._benchmark_run(run_id)
+        scope = ExperimentScope.from_run_path(runs, selected.path, "evaluate")
+        return ExportEngine(runs, exports, scope=scope).generate_isolated(
+            selected.run_id, episode_id=episode_id, template=template,
         )
 
     def export_grouped(
@@ -791,10 +861,28 @@ class OvlabApplication:
     ):
         from ovlab_runner import ExportEngine
         runs, _, exports = self._data_roots()
-        run_ids = tuple(self._benchmark_run_id(value) for value in run_ids)
+        selected = tuple(self._benchmark_run(value) for value in run_ids)
+        run_ids = tuple(item.run_id for item in selected)
+        scope = ExperimentScope.from_environment(self.environment)
+        if scope is None and selected:
+            locations = [ExperimentScope.from_run_path(runs, item.path, "evaluate") for item in selected]
+            if all(item is not None for item in locations):
+                experiment_ids = {item.experiment_id for item in locations}
+                if len(experiment_ids) != 1:
+                    raise ConfigCompatibilityError("grouped comparison requires runs from one experiment")
+                common = list(locations[0].node_parts)
+                for item in locations[1:]:
+                    common = common[:next((index for index, (left, right) in enumerate(zip(common, item.node_parts))
+                                            if left != right), min(len(common), len(item.node_parts)))]
+                scope = ExperimentScope(locations[0].experiment_id, tuple(common))
+            elif any(item is not None for item in locations):
+                raise ConfigCompatibilityError("grouped comparison cannot mix legacy and scoped runs")
         if same_model_as is not None:
-            same_model_as = self._benchmark_run_id(same_model_as)
-        return ExportEngine(runs, exports).generate_grouped(
+            reference = self._benchmark_run(same_model_as)
+            same_model_as = reference.run_id
+            if scope is None:
+                scope = ExperimentScope.from_run_path(runs, reference.path, "evaluate")
+        return ExportEngine(runs, exports, scope=scope).generate_grouped(
             group_name, all_runs=all_runs, run_ids=run_ids,
             same_model_as=same_model_as, suite=suite, template=template,
         )
@@ -802,9 +890,21 @@ class OvlabApplication:
     def export_verify(self, kind, name):
         from ovlab_runner import ExportEngine
         runs, _, exports = self._data_roots()
+        scope = ExperimentScope.from_environment(self.environment)
         if kind == "isolated":
-            name = self._benchmark_run_id(name)
-        return ExportEngine(runs, exports).verify(kind, name)
+            selected = self._benchmark_run(name)
+            name = selected.run_id
+            scope = ExperimentScope.from_run_path(runs, selected.path, "evaluate")
+        elif scope is None:
+            if not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is None:
+                raise ConfigCompatibilityError("grouped export name must be a portable identifier")
+            candidates = [path for path in exports.glob(f"*/evaluate/**/grouped/{name}/metadata.json") if path.is_file()]
+            if len(candidates) > 1:
+                raise ConfigCompatibilityError("grouped export name is ambiguous across experiments")
+            if candidates:
+                parts = candidates[0].parent.relative_to(exports).parts
+                scope = ExperimentScope(parts[0], parts[2:-2])
+        return ExportEngine(runs, exports, scope=scope).verify(kind, name)
 
     def data_list(self, *, kind="all", archived=False, detail=False):
         return self._data_manager().list(kind=kind, archived=archived, detail=detail)
@@ -949,17 +1049,28 @@ class OvlabApplication:
         resolved = self._training_run(run_id)
         return TrainingRunStore(self._model_data_root(), training_runs_root=resolved.path.parent).verify(resolved.run_id)
 
-    def train_report(self, run_id, *, verify=False, build_id=None):
-        from ovlab_runner import TrainingDerivedReportEngine
-        _, _, exports = self._data_roots()
+    def train_report(self, run_id, *, verify=False, build_id=None, parameters=None):
+        from ovlab_runner import TrainingDerivedReportEngine, TrainingInteractiveReportEngine
+        runs, _, exports = self._data_roots()
         derived = exports / "train" / "derived"
         training_run = self._training_run(run_id)
+        configuration = self._training_report_parameters(parameters) if parameters is not None else None
+        scope = (ExperimentScope.from_run_path(runs, training_run.path, "train")
+                 if training_run.path.is_relative_to(runs) else None)
+        if scope is not None:
+            engine = TrainingInteractiveReportEngine(
+                runs, scope.exports_root(exports, "train") / "interactive",
+                **({"key_parameters": configuration} if configuration is not None else {}),
+            )
+            return (engine.verify(training_run.path, build_id=build_id) if verify
+                    else engine.generate(training_run.path))
         suffix = Path(training_run.run_id) / "system-performance" / build_id if build_id is not None else Path(training_run.run_id)
         legacy_suffix = Path("training") / suffix
         if verify and not (derived / suffix).is_dir() and (exports / "derived" / legacy_suffix).is_dir():
             derived = exports / "derived"
         engine = TrainingDerivedReportEngine(
             training_run.path.parent, derived,
+            **({"key_parameters": configuration} if configuration is not None else {}),
         )
         if derived == exports / "derived" and engine.display_root.parent.name == "train":
             engine.display_root = engine.display_root.parent.parent / "derived"

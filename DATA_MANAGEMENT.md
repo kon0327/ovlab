@@ -1,6 +1,6 @@
 # OVLAB data management
 
-The `ovlab data` command manages canonical benchmark runs, regenerable derived
+The `ovlab data` command manages canonical benchmark runs, interactive
 reports, and publication exports from the host. It does not start Docker and
 does not require a Conda environment.
 
@@ -9,13 +9,14 @@ The default roots are:
 ```text
 OVLAB_DATA_ROOT/
 ├── runs/
-│   ├── train/    # canonical training runs
-│   └── evaluate/ # canonical evaluation runs
+│   └── <experiment-id>/
+│       ├── train/<node-path>/<run-id>/
+│       └── evaluate/<node-path>/<run-id>/
 ├── exports/
-│   ├── isolated/   # per-run publication exports
-│   ├── grouped/    # comparison exports
-│   ├── derived/    # benchmark and training reports
-│   └── interactive/ # report dashboards
+│   └── <experiment-id>/{train,evaluate}/<node-path>/
+│       ├── isolated/   # per-run data and figures
+│       ├── grouped/    # comparison exports
+│       └── interactive/ # complete HTML reports
 └── archive/
     ├── runs/
     ├── exports/
@@ -26,6 +27,8 @@ OVLAB_DATA_ROOT/
 `OVLAB_RUNS_ROOT` and `OVLAB_EXPORTS_ROOT` may override the canonical roots.
 Reports, dashboards and publication exports use the same `OVLAB_EXPORTS_ROOT`.
 `OVLAB_ARCHIVE_ROOT` may override only the archive destination.
+Older flat `runs/{train,evaluate}` and `exports/{train,evaluate}` layouts remain
+readable for migration and archival operations.
 
 ## List data
 
@@ -217,3 +220,40 @@ final tree to these modes before reporting success.
 If a benchmark or reporting process is running, let it finish before invoking
 data management. The artifact-state checks are a safety guard, not a substitute
 for coordinating concurrent operators.
+
+# Migrating legacy runs into experiment folders
+
+The migration utility assigns **one experiment to each existing legacy run**.
+It never guesses which runs belong in a comparison. Existing grouped exports
+are preserved under `exports/legacy-comparisons/{train,evaluate}/grouped`.
+Old isolated exports are copied as `isolated/<run-id>--legacy`, leaving the
+normal `isolated/<run-id>` name available for a fresh export.
+
+Run the four phases from an environment with the OVLAB packages installed:
+
+```bash
+python -m ovlab_benchctl.experiment_migration preview --data-root /path/to/ovlab-data
+python -m ovlab_benchctl.experiment_migration apply --data-root /path/to/ovlab-data
+python -m ovlab_benchctl.experiment_migration finalize --data-root /path/to/ovlab-data
+python -m ovlab_benchctl.experiment_migration cleanup --data-root /path/to/ovlab-data
+```
+
+`preview` is read-only and prints the exact source and destination mapping.
+`apply` copies every run and associated export, verifies byte inventories and
+completed canonical runs, writes `experiment-migration-v1.json`, and leaves
+all originals in place. Each migrated run receives `.experiment` metadata and
+an export `index.html` with its status. The manifest lists absolute destination
+run paths, report requirements, source export paths, and the expected
+interactive roots. Generate and verify the new interactive reports for every
+entry with `report_required: true` before `finalize`.
+
+`finalize` rechecks source and destination inventories and verifies required
+interactive reports. It then moves only the listed legacy directories into a
+migration quarantine; if a move fails, it restores the earlier moves. `cleanup`
+rechecks the new artifacts and removes the quarantine. The original run and
+export directories are never removed during `preview` or `apply`. If the
+manifest lists unmatched legacy reports, `finalize` stops for explicit review.
+
+Use `--manifest /path/to/manifest.json` on every command to choose a different
+manifest path. Keep that path identical across `apply`, `finalize`, and
+`cleanup`.

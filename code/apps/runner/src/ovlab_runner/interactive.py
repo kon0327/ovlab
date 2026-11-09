@@ -1,4 +1,4 @@
-"""Offline dashboard companions with the same hierarchy as derived HTML reports."""
+"""Self-contained offline dashboards and legacy derived-report companions."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import uuid
@@ -18,11 +19,14 @@ import zlib
 import numpy as np
 
 from .errors import ArtifactError
+from .artifacts.layout import run_key
 from .permissions import MANAGED_FILE_MODE, finalize_managed_directory, finalize_managed_tree
 
 
 SCHEMA = "ovlab.interactive-report/v1"
 RENDERER = "ovlab-interactive-dashboard@1.3.0"
+UNIFIED_RENDERER = "ovlab-interactive-dashboard@2.0.0"
+_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _clean(value):
@@ -210,19 +214,23 @@ def build_train_dashboard(source, model):
     }
 
 
-def _page(data, prefix, links, source_href):
+def _page(data, prefix, links, source_href=None):
     payload = _bytes(data).decode("utf-8").replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     navigation = "".join(f'<a href="{html.escape(href, quote=True)}">{html.escape(label)}</a>' for label, href in links)
+    source_link = '' if source_href is None else f'<a href="{html.escape(source_href, quote=True)}">Full HTML report</a>'
+    evidence_link = f'<a href="{prefix}model.json">Complete report evidence</a>' if data.get("report_model_script") else ''
+    evidence_nav = '<a href="#evidence">Complete evidence</a>' if data.get("report_model_script") else ''
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OVLAB · {html.escape(data["run_id"])} · {data["mode"]}</title><link rel="stylesheet" href="{prefix}assets/dashboard.css"></head>
-<body><a class="skip-link" href="#overview">Skip to report</a><aside><a class="brand" href="{prefix}index.html">OVLAB<span>Interactive reports</span></a><nav aria-label="Report sections"><a href="#overview">Overview &amp; outcome</a><a href="#flow">Interactive model</a><a href="#explorer">Batch &amp; record explorer</a><a href="#performance">Performance &amp; metrics</a><a href="#parameters">Hyperparameters</a></nav><div class="related"><p>Report navigation</p>{navigation}<a href="{html.escape(source_href, quote=True)}">Full HTML report</a><a href="{prefix}report.json">Complete dashboard JSON</a></div></aside>
+<body><a class="skip-link" href="#overview">Skip to report</a><aside><a class="brand" href="{prefix}index.html">OVLAB<span>Interactive reports</span></a><nav aria-label="Report sections"><a href="#overview">Overview &amp; outcome</a><a href="#flow">Interactive model</a><a href="#explorer">Batch &amp; record explorer</a><a href="#performance">Performance &amp; metrics</a><a href="#parameters">Hyperparameters</a>{evidence_nav}</nav><div class="related"><p>Report navigation</p>{navigation}{source_link}<a href="{prefix}report.json">Complete dashboard JSON</a>{evidence_link}</div></aside>
 <main><header><p class="eyebrow">OVLAB / {"Train" if data["mode"] == "train" else "Evaluate"} / {html.escape(data.get("scope_label", "Run overview"))}</p><div class="heading-row"><h1>Model evidence dashboard</h1><span class="badge" data-status="{html.escape(str(data["status"]), quote=True)}">{html.escape(str(data["status"]))}</span></div><p class="identity">{html.escape(data["run_id"])}</p><p>Follow the evidence from model inputs to measured results.</p></header>
-<noscript><p>Enable JavaScript for record selection and charts. Full evidence is available in report.json and the existing HTML report.</p></noscript>
+<noscript><p>Enable JavaScript for record selection and charts. Full evidence is available in report.json{', model.json' if data.get('report_model_script') else ' and the existing HTML report'}.</p></noscript>
 <section id="overview"><h2>Run at a glance</h2><div id="outcome" class="outcome"></div><div id="highlights" class="grid highlights"></div><div id="kpis" class="grid count-grid"></div><div class="evidence-notes"><h3>Evidence &amp; interpretation</h3><div id="notes" class="notes"></div></div></section>
 <section id="flow"><h2>Inside the model data flow</h2><p id="model-help">Select a stage to trace its connections and highlight its evidence. Every stage description stays visible. This schematic describes the recorded data contract; it does not infer unrecorded model internals. Parameter sources starting with run/ refer to canonical run evidence.</p><div id="model-illustration" tabindex="0" role="region" aria-label="Interactive model diagram" aria-describedby="model-help"></div><div id="flow-content" class="flow"></div></section>
 <section id="explorer"><h2>Inspect a batch or policy call</h2><div id="selectors" class="toolbar"></div><div id="batch" class="notes" aria-live="polite"></div><div id="record" class="grid detail"></div></section>
 <section id="performance"><h2>Performance &amp; full metrics</h2><p>Inspect exact samples, zoom a chart, or read its complete recorded series below.</p><div id="charts" class="grid charts"></div><div id="metric-table" class="metric-tables"></div></section>
 <section id="parameters"><h2>Hyperparameters &amp; model settings</h2><label for="parameter-search">Find a setting</label><input id="parameter-search" type="search" placeholder="learning rate, rank, precision…"><p id="parameter-count" class="caption" role="status"></p><div class="table-scroll" tabindex="0" role="region" aria-label="Hyperparameters"><table><thead><tr><th scope="col">Setting / canonical path</th><th scope="col">Value</th></tr></thead><tbody id="parameter-rows"></tbody></table></div></section>
+{'<section id="evidence"><h2>Complete report evidence</h2><p>Open the recorded benchmark, policy, provenance, metric semantics and each task or training statistic. Large evidence loads only when requested.</p><div id="report-evidence"></div></section>' if data.get('report_model_script') else ''}
 <footer>Offline · canonical evidence stays read-only · missing values remain unavailable · <a href="{prefix}manifest.json">Integrity manifest</a></footer></main>
 <script id="dashboard-data" type="application/json">{payload}</script><script src="{prefix}assets/dashboard.js" defer></script></body></html>'''
 
@@ -242,6 +250,8 @@ def _episode_summary(episode, script):
 
 
 def _dashboard_summary(data, prefix=""):
+    if data.get("report_model_script"):
+        data = {**data, "report_model_script": prefix + "data/model.js", "report_prefix": prefix}
     if data["mode"] == "train":
         evidence = data.get("evidence")
         last = {}
@@ -336,9 +346,29 @@ def publish_dashboard(report: Path, derived_root: Path, source: Path, *, trainin
 
 def verify_dashboard(report: Path, derived_root: Path):
     target = dashboard_path(report, derived_root)
+    current_identity = _identity(report)
+    if not target.is_dir() and target.parent.is_dir():
+        # Renderer assets can change while an immutable legacy build remains
+        # valid. Locate that build by its recorded canonical source identity.
+        for candidate in sorted(target.parent.iterdir(), reverse=True):
+            if not candidate.is_dir() or not (candidate / "manifest.json").is_file():
+                continue
+            try:
+                prior = _read(candidate / "manifest.json")
+            except ArtifactError:
+                continue
+            recorded = prior.get("identity_inputs", {}) if isinstance(prior, dict) else {}
+            if all(recorded.get(key) == current_identity[key] for key in
+                   ("schema_version", "source_report_sha256", "source_build_id", "source_identity")):
+                target = candidate
+                break
     manifest = _read(target / "manifest.json")
     digest = manifest.pop("manifest_payload_sha256", None)
-    if digest != hashlib.sha256(_bytes(manifest)).hexdigest() or manifest.get("identity_inputs") != _identity(report):
+    identity = manifest.get("identity_inputs", {})
+    source_matches = all(identity.get(key) == current_identity[key] for key in
+                         ("schema_version", "source_report_sha256", "source_build_id", "source_identity"))
+    if (digest != hashlib.sha256(_bytes(manifest)).hexdigest() or not source_matches
+            or hashlib.sha256(_bytes(identity)).hexdigest()[:20] != target.name):
         raise ArtifactError("interactive report manifest checksum or identity mismatch")
     if manifest.get("schema_version") != SCHEMA or manifest.get("derived_build_id") != target.name:
         raise ArtifactError("interactive report build identity mismatch")
@@ -351,3 +381,140 @@ def verify_dashboard(report: Path, derived_root: Path):
     if expected != {str(path.relative_to(target)) for path in target.rglob("*") if path.is_file()}:
         raise ArtifactError("interactive report contains missing or unexpected files")
     return target
+
+
+def _unified_identity(model, source_identity):
+    return {
+        "schema_version": SCHEMA,
+        "renderer": UNIFIED_RENDERER,
+        "source_identity": source_identity,
+        "model_sha256": hashlib.sha256(_bytes(model)).hexdigest(),
+        "assets": {name: hashlib.sha256(value).hexdigest() for name, value in _assets().items()},
+    }
+
+
+def _unified_target(root: Path, model, profile_id: str, identity) -> Path:
+    if profile_id in {".", ".."} or not _SAFE_SEGMENT.fullmatch(profile_id):
+        raise ArtifactError("interactive report profile ID is not a safe path component")
+    run_id = model.get("training_run_id") if "training_run_id" in model else model.get("run", {}).get("run_id")
+    if not isinstance(run_id, str):
+        raise ArtifactError("interactive report model has no run ID")
+    target = root / run_key(run_id) / profile_id / hashlib.sha256(_bytes(identity)).hexdigest()[:20]
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise ArtifactError("interactive report target escapes its root")
+    return target
+
+
+def verify_unified_dashboard(source: Path, root: Path, model, *, source_identity, profile_id: str,
+                             build_id: str | None = None) -> Path:
+    """Verify one public interactive bundle and its current canonical inputs."""
+    source, root = Path(source).resolve(), Path(root).resolve()
+    identity = _unified_identity(model, source_identity)
+    target = _unified_target(root, model, profile_id, identity)
+    if build_id is not None and build_id != target.name:
+        raise ArtifactError("interactive report build does not match current canonical evidence")
+    manifest = _read(target / "manifest.json")
+    recorded = manifest.pop("manifest_payload_sha256", None)
+    if recorded != hashlib.sha256(_bytes(manifest)).hexdigest():
+        raise ArtifactError("interactive report manifest checksum mismatch")
+    if manifest.get("schema_version") != SCHEMA or manifest.get("build_id") != target.name or manifest.get("identity_inputs") != identity:
+        raise ArtifactError("interactive report identity mismatch")
+    expected = {"manifest.json"}
+    for row in manifest.get("files", []):
+        relative = row.get("path")
+        if not isinstance(relative, str):
+            raise ArtifactError("interactive report manifest has an invalid file path")
+        path = (target / relative).resolve()
+        if not path.is_relative_to(target) or not path.is_file() or path.stat().st_size != row.get("size_bytes") or _sha(path) != row.get("sha256"):
+            raise ArtifactError(f"interactive report file checksum mismatch: {relative}")
+        expected.add(relative)
+    actual = {str(path.relative_to(target)) for path in target.rglob("*") if path.is_file()}
+    if expected != actual:
+        raise ArtifactError("interactive report contains missing or unexpected files")
+    if _read(target / "model.json") != _clean(model):
+        raise ArtifactError("interactive report model differs from current canonical evidence")
+    return target
+
+
+def publish_unified_dashboard(source: Path, root: Path, model, *, source_identity,
+                              profile_id: str, training: bool = False) -> tuple[Path, bool]:
+    """Publish one complete interactive report, without a public derived sibling."""
+    source, root = Path(source).resolve(), Path(root).resolve()
+    identity = _unified_identity(model, source_identity)
+    target = _unified_target(root, model, profile_id, identity)
+    def update_latest():
+        latest = target.parent / f".latest.{uuid.uuid4().hex}.tmp"
+        latest.write_bytes(_bytes({"schema_version": SCHEMA, "build_id": target.name}))
+        latest.chmod(MANAGED_FILE_MODE)
+        latest.replace(target.parent / "latest.json")
+    if target.exists():
+        verify_unified_dashboard(source, root, model, source_identity=source_identity, profile_id=profile_id)
+        update_latest()
+        return target, True
+    target.parent.mkdir(parents=True, exist_ok=True)
+    owner = getattr(os, "geteuid", lambda: None)()
+    parent = target.parent
+    while parent != root:
+        if owner is not None and parent.stat().st_uid == owner:
+            finalize_managed_directory(parent)
+        parent = parent.parent
+    stage = target.parent / f".{target.name}.{uuid.uuid4().hex}.partial"
+    (stage / "assets").mkdir(parents=True)
+    try:
+        data = build_train_dashboard(source, model) if training else build_eval_dashboard(source, model)
+        data["report_model_script"] = "data/model.js"
+        if not training:
+            for task in data["tasks"]:
+                for episode in task["episodes"]:
+                    video = episode.get("video") or {}
+                    if video.get("status") == "available" and video.get("path"):
+                        canonical = (source / episode["canonical_episode_path"] / str(video["path"])).resolve()
+                        if not canonical.is_relative_to(source) or not canonical.is_file():
+                            raise ArtifactError("interactive report references an unavailable canonical video")
+                        episode["video_href"] = os.path.relpath(canonical, target)
+        for name, content in _assets().items():
+            (stage / "assets" / name).write_bytes(content)
+        (stage / "report.json").write_bytes(_bytes(data))
+        (stage / "model.json").write_bytes(_bytes(model))
+        (stage / "data").mkdir()
+        (stage / "data" / "model.js").write_text(
+            "window.ovlabReceiveReportModel(" + _script_payload(model) + ");\n", encoding="utf-8",
+        )
+        if training:
+            (stage / "data" / "training.js").write_text(
+                "window.ovlabReceiveTraining(" + _script_payload({"metrics": data["metrics"], "evidence": data["evidence"]}) + ");\n",
+                encoding="utf-8",
+            )
+        else:
+            (stage / "data" / "episodes").mkdir()
+            for task in data["tasks"]:
+                for episode in task["episodes"]:
+                    key = hashlib.sha256(_bytes([task["task_key"], episode["episode_id"]])).hexdigest()
+                    (stage / "data" / "episodes" / f"{key}.js").write_text(
+                        "window.ovlabReceiveEpisode(" + _script_payload(key) + "," + _script_payload(episode) + ");\n",
+                        encoding="utf-8",
+                    )
+        links = []
+        for task in data["tasks"]:
+            task_dir = stage / "tasks" / task["task_key"]
+            task_dir.mkdir(parents=True)
+            scoped = {**data, "tasks": [task], "outcome": task["outcome"], "scope_label": task["task_id"],
+                "counts": {"tasks": 1, "episodes": len(task["episodes"]), **{
+                    key: sum(episode["counts"][key] for episode in task["episodes"])
+                    for key in ("observations", "predictions", "predicted_actions", "executed_actions")}}}
+            (task_dir / "index.html").write_text(_page(_dashboard_summary(scoped, "../../"), "../../", [("Run overview", "../../index.html")]), encoding="utf-8")
+            links.append((task["task_id"], f'tasks/{task["task_key"]}/index.html'))
+        (stage / "index.html").write_text(_page(_dashboard_summary(data), "", links), encoding="utf-8")
+        files = [{"path": str(path.relative_to(stage)), "size_bytes": path.stat().st_size, "sha256": _sha(path)}
+                 for path in sorted(stage.rglob("*")) if path.is_file()]
+        manifest = {"schema_version": SCHEMA, "build_id": target.name, "identity_inputs": identity, "files": files}
+        manifest["manifest_payload_sha256"] = hashlib.sha256(_bytes(manifest)).hexdigest()
+        (stage / "manifest.json").write_bytes(_bytes(manifest))
+        stage.rename(target)
+        update_latest()
+        finalize_managed_tree(target)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    verify_unified_dashboard(source, root, model, source_identity=source_identity, profile_id=profile_id)
+    return target, False

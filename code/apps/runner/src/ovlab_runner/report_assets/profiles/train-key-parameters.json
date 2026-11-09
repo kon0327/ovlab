@@ -1,0 +1,259 @@
+{
+  "schema_version": "ovlab.key-parameters/v1",
+  "mode": "train",
+  "groups": [
+    {
+      "title": "Inputs",
+      "stage": "inputs",
+      "items": [
+        {
+          "label": "Dataset",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.dataset.ref"
+            }
+          ]
+        },
+        {
+          "label": "Dataset ID",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.dataset.dataset_id"
+            }
+          ]
+        },
+        {
+          "label": "Dataset split",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.dataset.split"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Batch & supervision",
+      "stage": "representation",
+      "items": [
+        {
+          "label": "Batch size per device",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.per_device_batch_size"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.per_device_batch_size"
+            }
+          ]
+        },
+        {
+          "label": "Gradient accumulation steps",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.gradient_accumulation_steps"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.gradient_accumulation_steps"
+            }
+          ]
+        },
+        {
+          "label": "Configured precision",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.precision"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.precision"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Model / policy",
+      "stage": "policy",
+      "items": [
+        {
+          "label": "Base checkpoint",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.base_checkpoint.resource_id"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.model.base_checkpoint"
+            }
+          ]
+        },
+        {
+          "label": "Adaptation method",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.peft.method"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.peft.method"
+            }
+          ]
+        },
+        {
+          "label": "Configured quantization",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.quantization"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.quantization"
+            }
+          ]
+        },
+        {
+          "label": "Total parameters",
+          "sources": [
+            {
+              "source": "result.json",
+              "path": "performance.parameter_counts.total"
+            },
+            {
+              "source": "result.json",
+              "path": "total_parameter_count"
+            }
+          ]
+        },
+        {
+          "label": "Trainable parameters",
+          "sources": [
+            {
+              "source": "result.json",
+              "path": "performance.parameter_counts.trainable"
+            },
+            {
+              "source": "result.json",
+              "path": "trainable_parameter_count"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Prediction & objective",
+      "stage": "outputs",
+      "items": [
+        {
+          "label": "Training objective",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.trainer_contract.objective"
+            },
+            {
+              "source": "data-flow.json",
+              "path": "objective"
+            }
+          ]
+        },
+        {
+          "label": "Action horizon",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.trainer_contract.action_semantics.horizon"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.model_variant.action_head.horizon"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Optimizer & checkpoint",
+      "stage": "result",
+      "items": [
+        {
+          "label": "Learning rate",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.learning_rate"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.learning_rate"
+            }
+          ]
+        },
+        {
+          "label": "Captured optimizer LR",
+          "sources": [
+            {
+              "source": "data-flow.json",
+              "path": "optimizer.lr"
+            }
+          ]
+        },
+        {
+          "label": "Optimizer",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.trainer_contract.optimizer"
+            }
+          ]
+        },
+        {
+          "label": "Maximum optimizer steps",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.max_steps"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.max_steps"
+            }
+          ]
+        },
+        {
+          "label": "Training seed",
+          "sources": [
+            {
+              "source": "training-plan.json",
+              "path": "scientific.training.seed"
+            },
+            {
+              "source": "training-plan.json",
+              "path": "scientific.profile.training.seed"
+            }
+          ]
+        },
+        {
+          "label": "Output checkpoint",
+          "sources": [
+            {
+              "source": "manifest.json",
+              "path": "checkpoint_id"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -7,7 +7,23 @@ evidence from `runs/` and writes all generated outputs below `exports/`.
 Reporting never starts LIBERO, loads a policy checkpoint, or performs model
 inference. Canonical run artifacts remain authoritative and read-only.
 
-## Storage contract
+## Experiment-scoped reports
+
+The current JSON experiment workflow writes
+`runs/<experiment-id>/{train,evaluate}/<node-path>/<run-id>/` and
+`exports/<experiment-id>/{train,evaluate}/<node-path>/`. Each experiment has a
+lightweight navigable `exports/<experiment-id>/index.html`; each completed node
+has `isolated/` data and one complete `interactive/` HTML report. Parents with
+multiple completed child branches also get `grouped/` comparisons. There is no
+public `derived/` directory for these new experiment-scoped reports. The
+[experiment workflow guide](docs/EXPERIMENT_WORKFLOW.md) describes the JSON
+schema, commands, inheritance and comparison rules.
+
+The paths and `derived` commands in the remaining sections document legacy
+standalone `train`, `eval`, `report` and `export` calls. Existing legacy outputs
+remain readable and are not moved by the experiment workflow.
+
+## Legacy standalone storage contract
 
 The recommended host workspace is outside the source repository:
 
@@ -363,18 +379,20 @@ canonical training evidence contract.
 
 ## Report profiles and templates
 
-The built-in profile uses schema `ovlab.report-profile/v1`. Its packaged source
-is:
+The built-in profile uses schema `ovlab.report-profile/v1`. The default
+highlighted parameters are separate JSON documents for evaluation and training:
 
 ```text
 code/apps/runner/src/ovlab_runner/report_assets/
 ├── profiles/libero-task-default.yaml
+├── profiles/evaluate-key-parameters.json
+├── profiles/train-key-parameters.json
 ├── templates/benchmark/run-v1.html
 ├── templates/benchmark/task-v1.html
 └── static/style.css
 ```
 
-A local profile may be passed as a YAML path:
+A local evaluation profile may be passed as a YAML or JSON path:
 
 ```bash
 ./ovlab report generate \
@@ -387,6 +405,49 @@ Path traversal, unsupported builders, unknown fields, executable YAML, and
 remote templates are rejected. Keep reusable portable profiles in the
 repository and machine-specific experiments in the gitignored `configs/local/`
 tree.
+
+### Highlighted parameters
+
+Each parameter document uses `ovlab.key-parameters/v1`, a `mode` of `train`
+or `evaluate`, and an ordered `groups` array. A group has a `title`, a unique
+diagram `stage` (`inputs`, `representation`, `policy`, `outputs`, or `result`),
+and ordered `items`. Each item has a `label` and a list of `sources`; the first
+recorded scalar wins. A source names one of the allowed canonical documents
+and a dotted path within it. Unrecorded values remain visible as unavailable;
+zero and `false` are retained. Source paths are declarative lookups, not code.
+The complete underlying evidence and other settings remain available in the
+interactive report.
+
+For example, copy the default files into a local configuration directory and
+edit them without changing Python:
+
+```bash
+mkdir -p configs/local/reporting
+cp code/apps/runner/src/ovlab_runner/report_assets/profiles/libero-task-default.yaml configs/local/reporting/evaluation-profile.json
+cp code/apps/runner/src/ovlab_runner/report_assets/profiles/evaluate-key-parameters.json configs/local/reporting/evaluate-key-parameters.json
+cp code/apps/runner/src/ovlab_runner/report_assets/profiles/train-key-parameters.json configs/local/reporting/train-key-parameters.json
+```
+
+Set a distinct `id` such as `my-evaluation` and add
+`"key_parameters": "evaluate-key-parameters.json"` to the copied JSON
+evaluation profile, then adjust its parameter file. A distinct ID keeps its
+latest-build pointer separate from the built-in profile. The reference must
+remain within the profile directory. Alternatively, place the parameter
+document inline as the profile's `key_parameters` object. Then select it:
+
+```bash
+./ovlab report generate --run "$EVALUATION_RUN_ID" --profile configs/local/reporting/evaluation-profile.json
+./ovlab report verify --run "$EVALUATION_RUN_ID" --profile configs/local/reporting/evaluation-profile.json
+./ovlab train report --run "$TRAINING_RUN_ID" --parameters configs/local/reporting/train-key-parameters.json
+./ovlab train report --run "$TRAINING_RUN_ID" --parameters configs/local/reporting/train-key-parameters.json --verify
+```
+
+With Docker reporting, training parameter files must be under `configs/`
+(`OVLAB_CONFIGS_ROOT` if overridden). Evaluation sources are `plan.json`,
+`connection.json` and computed `report.json`; training sources are
+`training-plan.json`, `result.json`, `manifest.json` and `data-flow.json`.
+Custom configuration is recorded in the report identity: changing it creates
+a distinct build. Verify a customized build with the same configuration.
 
 ## Isolated and grouped exports
 
