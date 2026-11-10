@@ -1,0 +1,62 @@
+# Reference workflow: ovlab experiment plan experiments/workflows/example.yaml
+# Running without --dry-run creates runs and reports; the default plan contains two evaluations.
+# Optional concurrency control: --sequential or --max-workers N (1–32; default 2).
+schema_version: ovlab.experiment/v1 # Required workflow schema version.
+kind: workflow # Required root document type.
+id: example-workflow # Required portable experiment identifier.
+name: Example hierarchical experiment # Required human-readable experiment name.
+
+config: # Optional shared configuration inherited by descendants.
+  train: # Optional configuration for the training phase.
+    profile: example.yaml # Profile relative to experiments/training/.
+    patch: # Optional changes to fields of the resolved training profile.
+      training: # Example nested change; other values are inherited.
+        max_steps: 3 # Number of training steps after applying the patch.
+  evaluate: # Optional configuration for the evaluation phase.
+    profile: example.yaml # Profile relative to experiments/evaluation/.
+    patch: # Optional changes to the evaluation scenario; see evaluation/example.yaml for fields.
+      experiment: # Example change to the recorded evaluation scenario name.
+        name: Example workflow evaluation # New scenario name for descendants.
+    component_patches: # Optional changes to loaded components, not their paths.
+      benchmark: # Available components: benchmark, policy, metrics, protocol, artifacts.
+        settings: # Fields here follow the selected benchmark component's schema.
+          task_indices: [0] # Select only the first task for this smoke example.
+      protocol: # Override the selected protocol.
+        id: example-workflow-smoke-v1 # Identity for the modified protocol.
+        execution: # Protocol execution settings.
+          rollouts_per_task: 1 # One episode per task.
+          maximum_episode_steps: 2 # Two steps; the result is not a measure of task success.
+
+# execute: [train, evaluate] # Optionally run phases here too; execute is not inherited.
+# depends_on: # Optionally wait for other nodes' phases; dependencies control order only.
+#   - node: branch/path # Node path from the root; an empty string "" denotes the root.
+#     phase: train # train or evaluate; the phase must be included in the selection.
+children: # Optional subexperiments; nodes can be nested up to 12 levels.
+  - id: model # Required ID unique among siblings; this node's full path is model.
+    name: Model and task group # Optional human-readable node name.
+    children: # Next level; inherits shared configuration from ancestors.
+      - id: task-0 # This node's path is model/task-0.
+        name: First task # Optional task group description.
+        children: # Two evaluation variants for a grouped report.
+          - id: four-bit # Node path: model/task-0/four-bit.
+            name: 4-bit inference # Human-readable variant name.
+            execute: [evaluate] # train, evaluate or both; this field is not inherited.
+          - id: eight-bit # Node path: model/task-0/eight-bit.
+            name: 8-bit inference # Human-readable name of the second variant.
+            config: # Optional override of inherited configuration.
+              evaluate: # Changes apply only to the evaluation phase.
+                component_patches: # Patches are inherited and recursively merged.
+                  policy: # The selected policy component determines the field schema.
+                    settings: # Policy settings.
+                      runtime: # Inference settings.
+                        quantization: 8bit # Overrides the default policy's 4bit value.
+            execute: [evaluate] # Evaluate this variant.
+            depends_on: # Optional example of an explicit dependency on a sibling.
+              - node: model/task-0/four-bit # Dependency path from the workflow root.
+                phase: evaluate # Wait for evaluation of the specified node to finish.
+# The same node can use execute: [train, evaluate]; its evaluation waits for training.
+# A dependency does not attach the new checkpoint: the evaluation policy must select it explicitly.
+# With --node, the selection must include every explicit dependency of the selected phases.
+# Mappings are merged; lists and scalars replace their original values. A new profile
+# does not remove inherited patches. Patches to benchmark/policy/metrics/protocol/artifacts
+# must match the selected component's schema after merging.

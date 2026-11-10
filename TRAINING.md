@@ -1,6 +1,6 @@
 # Training operations
 
-Training scenarios live in `configs/experiments/training/`. Use
+Training scenarios live in `experiments/training/`. Use
 `ovlab train run TARGET`, `ovlab train inspect RUN_REFERENCE`, and
 `ovlab train verify RUN_REFERENCE`. `train run TARGET --dry-run` resolves the
 training plan without starting a trainer; resource planning may require prepared
@@ -107,8 +107,9 @@ training; without it a missing dataset is an actionable error.
 
 ## Profiles and planning
 
-Portable YAML profiles live in `configs/experiments/training/` and use
-`ovlab.training-profile/v1`. They contain immutable logical model and dataset
+Portable YAML profiles live in `experiments/training/` and use
+`ovlab.training-profile/v1` and require `kind: training` in every file,
+including files using `extends`. They contain immutable logical model and dataset
 selectors, a seed, bounded hyperparameters, precision, training mode and output
 semantics. Relative `extends` composes a shared base with variant overrides; mappings
 merge and sequences replace. Absolute host paths, shell commands, unknown keys
@@ -116,16 +117,16 @@ and unresolved aliases are rejected.
 
 ```bash
 ./ovlab train profiles
-./ovlab train validate --profile configs/experiments/training/openvla-libero10-lora-smoke.yaml
+./ovlab train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
 ./ovlab train run openvla-libero10-quic-smoke.yaml
 ./ovlab train plan --profile openvla-libero10-quic-hard.yaml
-./ovlab train plan --profile configs/experiments/training/openvla-libero10-lora-smoke.yaml
+./ovlab train plan --profile experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
-`model.revision` accepts a pinned 40-character commit, `local/main`, or
-`remote/main`. Omitting it means `local/main`: both `train plan` and `train run`
+`model.revision` accepts a pinned 40-character commit, `local/main`,
+`remote/main`, or `latest`. Omitting it means `local/main`: both `train plan` and `train run`
 read the cached Hugging Face `refs/main` and require that snapshot locally,
-without a network request. `remote/main` queries Hugging Face for the current
+without a network request. `remote/main` and its alias `latest` query Hugging Face for the current
 commit; `train run` downloads its snapshot when needed, while `train plan`
 requires it to be cached already. The selected commit and observed file hashes
 are recorded in the training plan. If the registry also pins a commit, an
@@ -159,9 +160,9 @@ inherited action statistics, explicit deterministic episode train/validation
 partition, and adapter-only output:
 
 ```bash
-./ovlab train validate --profile configs/experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab train plan --profile configs/experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab train run configs/experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train plan --profile experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train run experiments/training/openvla-libero10-quic-smoke.yaml
 ./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
 ./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-run
@@ -187,7 +188,7 @@ adapter through reload and inference.
 Teacher-forced validation remains separate from benchmark rollout evaluation.
 
 ```bash
-./ovlab train run configs/experiments/training/openvla-libero10-quic-smoke.yaml \
+./ovlab train run experiments/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
 ./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --fit-action-normalization --output /tmp/quic-placement-fitted-run
@@ -215,7 +216,7 @@ Then start a bounded run:
 
 ```bash
 ./ovlab train run \
-  configs/experiments/training/openvla-libero10-lora-smoke.yaml
+  experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
 The trainer has one requested GPU, no network, a read-only prepared dataset, a

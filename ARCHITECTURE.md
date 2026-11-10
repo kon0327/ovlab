@@ -720,6 +720,6 @@ repair source evidence while rendering.
 | Metrics | `code/packages/ovlab-metrics/src/ovlab_metrics/` |
 | Reporting and exports | `code/apps/runner/src/ovlab_runner/derived.py`, `exports.py` |
 | Runtime topology | `deploy/compose/compose.yaml` |
-| Portable experiments | `configs/experiments/evaluation/` |
+| Portable experiments | `experiments/evaluation/` |
 | Resource identities | `configs/resources/registry.yaml` |
 | External source pins | `.gitmodules` and root Git submodule gitlinks |

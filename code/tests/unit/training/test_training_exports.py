@@ -50,6 +50,12 @@ def test_training_isolated_and_grouped_exports_are_scoped_and_verified(tmp_path)
     assert isolated_root == scope.exports_root(tmp_path / "exports", "train") / "isolated/run-1"
     assert (isolated_root / "metrics.csv").is_file()
     assert (isolated_root / "figures/training-loss.svg").is_file()
+    html = (isolated_root / "index.html").read_text(encoding="utf-8")
+    assert 'figures/training-loss.svg' in html
+    assert 'metrics.csv' in html
+    assert 'metadata.json' in html
+    metadata = json.loads((isolated_root / "metadata.json").read_text(encoding="utf-8"))
+    assert any(item["path"] == "index.html" for item in metadata["files"])
     assert isolated_root.parent.stat().st_mode & 0o7777 == 0o2770
     assert isolated_root.stat().st_mode & 0o7777 == 0o2770
     assert (isolated_root / "metrics.csv").stat().st_mode & 0o777 == 0o640
@@ -83,6 +89,28 @@ def test_training_grouped_marks_mismatched_datasets_noncomparable(tmp_path):
     assert comparison["status"] == "not_comparable"
     assert comparison["paired_final_loss"] is None
     assert {row["dataset_id"] for row in comparison["dataset_coverage"]} == {"dataset-a", "dataset-b"}
+
+
+def test_existing_training_export_gains_checksum_verified_browser_without_losing_data(tmp_path):
+    scope = ExperimentScope("study-a")
+    runs = tmp_path / "runs"
+    _run(scope.runs_root(runs, "train"), "old-run")
+    engine = TrainingExportEngine(runs, tmp_path / "exports", scope=scope)
+    root = Path(engine.generate_isolated("old-run")["output"])
+    metadata = json.loads((root / "metadata.json").read_text())
+    (root / "index.html").unlink()
+    metadata["files"] = [item for item in metadata["files"] if item["path"] != "index.html"]
+    _json(root / "metadata.json", metadata)
+    before = {item["path"]: (root / item["path"]).read_bytes() for item in metadata["files"]}
+    assert engine.verify("isolated", "old-run")["integrity"] == "verified"
+
+    upgraded = engine.generate_isolated("old-run")
+    assert upgraded["reused"] and upgraded["index_added"]
+    assert engine.verify("isolated", "old-run")["integrity"] == "verified"
+    assert all((root / name).read_bytes() == contents for name, contents in before.items())
+    assert "figures/training-loss.svg" in (root / "index.html").read_text()
+    assert not list(root.parent.glob(".old-run.*"))
+    assert "index_added" not in engine.generate_isolated("old-run")
 
 
 def test_host_cli_train_report_publishes_and_verifies_inside_experiment(tmp_path):

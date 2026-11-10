@@ -20,6 +20,7 @@ RUN python -m pip install --no-cache-dir --no-deps \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab
 COPY code /opt/ovlab/code
 COPY configs /opt/ovlab/configs
+COPY experiments /opt/ovlab/experiments
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 RUN bash /tmp/install-ovlab-packages.sh \

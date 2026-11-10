@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[4]
 def _experiment(tmp_path: Path, selector: str) -> Path:
     root = tmp_path / "repository"
     shutil.copytree(ROOT / "configs", root / "configs")
+    shutil.copytree(ROOT / "experiments", root / "experiments")
     registry = root / "configs/resources/registry.yaml"
     content = registry.read_text(encoding="utf-8")
     start = content.index("  openvla-7b:\n")
@@ -34,7 +35,7 @@ def _plan(root: Path, tmp_path: Path, *, offline: bool):
     env_file = tmp_path / "empty.env"
     env_file.write_text("", encoding="utf-8")
     return SimpleNamespace(
-        experiment="configs/experiments/evaluation/libero-vanilla-smoke.yaml",
+        experiment="experiments/evaluation/libero-vanilla-smoke.yaml",
         local_profile=None,
         offline=offline,
         env_file=str(env_file),

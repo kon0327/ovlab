@@ -15,7 +15,7 @@ import sys
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 SUITES = ("libero10", "libero-object", "libero-spatial", "libero-goal")
-PROFILE_ROOT = Path("configs/experiments/training/quic/lora-coverage")
+PROFILE_ROOT = Path("experiments/training/quic/lora-coverage")
 
 
 class StudyError(RuntimeError):

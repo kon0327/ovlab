@@ -1,0 +1,96 @@
+# Reference LoRA profile: ovlab train validate experiments/training/example.yaml
+# Execution performs real training. The LoRA VRAM estimate is 27 GiB; 24 GiB may be insufficient.
+# Training profiles use kind: training; kind: workflow is reserved for workflows.
+schema_version: ovlab.training-profile/v1 # Required training profile schema version.
+kind: training # Required in every training file, including inherited variants.
+# extends: openvla-lora-libero10-smoke.yaml # Optional parent relative to this file; must remain inside experiments/.
+id: example-openvla-lora # Required portable profile identifier.
+
+trainer: # Required trainer implementation.
+  id: openvla # Supported trainer identifier.
+  implementation: openvla-reference # openvla-reference for LoRA/full; openvla-quic for QuIC.
+
+model: # Required host model.
+  base_checkpoint: openvla-7b # Logical checkpoint identifier, not an absolute path.
+  revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f" # Optional: 40-character commit, local/main, remote/main or latest (remote main).
+  processor: inherited # Required: inherited.
+  adaptation_state: none # Optional: none or merged; active adapters are unsupported.
+  # action_head: # Optional continuous head for QuIC only; the whole block is commented out.
+  #   type: mlp_chunk # Supported head type.
+  #   horizon: 8 # Number of actions: 1–256.
+  #   hidden_dim: 512 # Hidden layer dimension: 1–16384.
+
+dataset: # Required training data source.
+  ref: libero/libero_10 # Portable logical or immutable dataset identity.
+  preparation: openvla-rlds # Required preparation format.
+  split: train # Supported input split.
+  partition: # Optional deterministic episode selection and split; required by QuIC.
+    seed: 42 # Required split seed, independent of training.seed.
+    validation_fraction: 0.2 # Required validation fraction, greater than 0 and less than 1.
+    # groups: [group-id] # Optional list of exact, unique dataset group IDs.
+    max_episodes_per_group: 2 # Optional limit on selected episodes per group.
+    frame_stride: 8 # Optional frame sampling stride; defaults to 1.
+    max_frames_per_episode: 4 # Optional frame limit per episode.
+    action_normalization: train-q99 # train-q99 or host; reference partitions require train-q99.
+
+training: # Required optimization settings.
+  mode: peft # peft for LoRA/QuIC; full for full fine-tuning without a peft block.
+  peft: # Required only in peft mode; the LoRA variant is shown below.
+    method: lora # lora or quic; the QuIC structure is shown in comments below.
+    target_modules: [all-linear] # Reference LoRA supports only this value.
+    rank: 32 # LoRA rank, 1–256.
+    alpha: 16 # Must equal min(rank, 16).
+    dropout: 0.0 # Value between 0 and 1.
+  seed: 7 # Training seed, 0 to 2^63−1.
+  max_steps: 3 # Number of optimization steps, 1 to 10000000.
+  per_device_batch_size: 1 # Batch size per device, 1 to 4096.
+  gradient_accumulation_steps: 4 # Number of accumulation steps, 1 to 65536.
+  learning_rate: 0.0005 # Learning rate in the interval (0, 1].
+  precision: bf16 # bf16 or fp32.
+  gradient_checkpointing: true # true or false.
+  quantization: none # Only none is supported; this is not QLoRA.
+  validation_batches: 4 # Optional; requires dataset.partition and is required for QuIC.
+  # normalization: # QuIC only: explicit host normalization.
+  #   unnorm_key: libero_10 # Required nonempty statistics key for QuIC.
+
+checkpointing: # Required output settings.
+  save_strategy: final # Only final is supported.
+  save_optimizer_state: false # true or false.
+  output_kind: adapter # adapter for peft; full for mode: full.
+
+resources: # Required resource limits.
+  accelerator: cuda # cuda or cpu; actual availability depends on the trainer.
+  gpu_count: 1 # 0–64; CUDA requires at least 1 and CPU exactly 0.
+  max_vram_gib: 32 # Configured limit in GiB, 0–1024; does not guarantee GPU capacity.
+  network: disabled # Only disabled is supported.
+
+# Full alternative: set mode: full, remove the entire peft block and set output_kind: full.
+# QuIC alternative: use implementation: openvla-quic, mode: peft, partition and validation_batches;
+# add normalization.unnorm_key and replace the entire peft block with the following:
+#   peft: # QuIC settings; this block replaces LoRA peft rather than being added beside it.
+#     method: quic # Required method selection.
+#     placement: # Required adapter placement selection.
+#       id: A3 # custom or A1 through A9.
+#       action_proximal_last_n: 4 # Optional number of final layers.
+#       allow_action_proximal: false # Optionally allow placement near actions.
+#     adapter: # Required adapter configuration; individual fields have defaults.
+#       profile: QP2 # custom or QP1 through QP4; named profiles restrict other choices.
+#       operation: determinant # determinant is supported.
+#       orders: [1, 2] # Unique ascending orders 1–3; QP2 requires [1, 2].
+#       block_count: 8 # Optional number of blocks.
+#       block_size: 16 # Optional block size; must match the target layer geometry.
+#       base_size: largest_feasible # largest_feasible or an integer of at least 2.
+#       share_across_blocks: false # Block sharing; QP1/QP2 require false, QP4 true.
+#       orthogonal: true # Named profiles require true.
+#       orientation: output # output is supported.
+#       construction_dtype: float32 # float32 or float64.
+#     targets: # Required nonempty list of selectors.
+#       - names: [language_model.model.layers.4.self_attn.o_proj] # Exact names or pattern, never both.
+#         # pattern: '.*o_proj' # Alternative regular expression in place of names.
+#         region: language # Optionally vision, projector, language or action.
+#         # layers: [4] # Optional list of nonnegative layer indices.
+#         # profile: QP2 # Optional profile for this selector.
+#         # adapter: # Optional adapter override with the same fields as adapter above.
+#         #   profile: QP2 # Example local override.
+#         policy_active_only: true # Optional filter for active policy modules.
+#     max_trainable_parameters: 1000000 # Optional parameter count limit.

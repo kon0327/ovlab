@@ -2,12 +2,14 @@
 
 from dataclasses import replace
 import csv
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from types import MappingProxyType, SimpleNamespace
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -25,6 +27,41 @@ from ovlab_runner.unified_reports import UnifiedInteractiveReportEngine
 
 
 REPOSITORY = Path(__file__).resolve().parents[3]
+
+
+class _LocalReferences(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.references = []
+
+    def handle_starttag(self, tag, attributes):
+        for name, value in attributes:
+            if name in {"href", "src"} and value:
+                self.references.append(value)
+
+
+def _assert_isolated_page_covers_export(target, metadata):
+    page = target / "index.html"
+    markup = page.read_text(encoding="utf-8")
+    parser = _LocalReferences()
+    parser.feed(markup)
+    references = set()
+    for link in parser.references:
+        parsed = urlsplit(link)
+        assert not parsed.scheme and not parsed.netloc
+        if not parsed.path:
+            continue
+        relative = unquote(parsed.path)
+        destination = (target / relative).resolve()
+        assert destination.is_relative_to(target.resolve())
+        assert destination.is_file(), link
+        references.add(relative)
+    assert "metadata.json" in references
+    for item in metadata["files"]:
+        if Path(item["path"]).suffix in {".png", ".pdf", ".csv", ".svg"}:
+            assert item["path"] in references
+    assert any(item["path"] == "index.html" for item in metadata["files"])
+    assert "fetch(" not in markup
 
 
 def test_key_parameters_preserve_recorded_zero_and_mark_missing_values():
@@ -627,6 +664,7 @@ def test_isolated_episode_and_run_exports_are_readable_atomic_units(tmp_path):
     assert metadata["export_type"] == "isolated"
     assert metadata["source"]["scope"] == "episode"
     assert metadata["source"]["episodes"] == [episode_id]
+    _assert_isolated_page_covers_export(target, metadata)
     assert set(metadata) >= {"source", "experiment", "model", "checkpoint", "config", "template", "datetime"}
     assert len(list((target / "episodes/tables").glob("*__statistics.csv"))) == 1
     assert len(list((target / "episodes/tables").glob("*__timeseries.csv"))) == 1
@@ -643,6 +681,7 @@ def test_isolated_episode_and_run_exports_are_readable_atomic_units(tmp_path):
     metadata = json.loads((target / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["source"]["scope"] == "run"
     assert len(metadata["source"]["episodes"]) == 2
+    _assert_isolated_page_covers_export(target, metadata)
     assert (target / "overview/tables/episode-summary.csv").is_file()
     assert (target / "overview/tables/descriptive-statistics.csv").is_file()
     assert (target / "overview/tables/metric-summary.csv").is_file()
@@ -667,6 +706,12 @@ def test_isolated_episode_and_run_exports_are_readable_atomic_units(tmp_path):
     assert any(line.startswith("run,") for line in statistics_text.splitlines()[1:])
     assert engine.verify("isolated", run_id)["integrity"] == "verified"
 
+    page = target / "index.html"
+    original_page = page.read_bytes()
+    page.write_bytes(original_page + b"tamper")
+    with pytest.raises(ArtifactError, match="checksum mismatch"):
+        engine.verify("isolated", run_id)
+    page.write_bytes(original_page)
     table = target / "overview/tables/episode-summary.csv"
     table.write_bytes(table.read_bytes() + b"tamper")
     with pytest.raises(ArtifactError, match="checksum mismatch"):
@@ -856,3 +901,16 @@ def test_unified_cli_report_and_export_json_workflows(tmp_path):
     assert Path(group_result["output"]) == data / "exports/evaluate/grouped/cli-group"
     checked = invoke("export", "verify", "--kind", "grouped", "--name", "cli-group", "--json")
     assert checked.returncode == 0 and json.loads(checked.stdout)["result"]["integrity"] == "verified"
+
+    for arguments in (
+        ("report", "generate", run_id),
+        ("report", "publish", run_id),
+        ("report", "verify", run_id),
+        ("export", "isolated", run_id),
+        ("export", "verify", run_id, "--kind", "isolated"),
+        ("export", "verify", "cli-group", "--kind", "grouped"),
+        ("export", "grouped", "positional-group", run_id),
+    ):
+        positional = invoke(*arguments, "--json")
+        assert positional.returncode == 0, positional.stdout + positional.stderr
+        assert json.loads(positional.stdout)["status"] == "success"

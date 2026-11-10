@@ -207,13 +207,13 @@ class ComposeDeployment:
             kind="experiment configuration",
         )
         config_root = self.repository_root / "configs"
-        if not experiment_path.is_relative_to(config_root / "experiments/evaluation"):
-            raise ValueError("Docker deployment requires an experiment below configs/experiments/evaluation/")
+        if not (experiment_path.is_relative_to(self.repository_root / "experiments/evaluation") or experiment_path.is_relative_to(config_root / "experiments/evaluation")):
+            raise ValueError("Docker deployment requires an experiment below experiments/evaluation/")
         experiment_reference = str(experiment_path.relative_to(self.repository_root))
 
         resolver = ConfigBundleBuilder(self.repository_root)
         experiment_doc = resolver.load_component(
-            str(experiment_path.relative_to(config_root)), "experiment"
+            (str(experiment_path.relative_to(self.repository_root)) if experiment_path.is_relative_to(self.repository_root / "experiments") else str(experiment_path.relative_to(config_root))), "experiment"
         )
         configured = experiment_doc.get("deployment")
         if configured is None:
@@ -596,7 +596,7 @@ class ComposeDeployment:
         else:
             resolver = ConfigBundleBuilder(self.repository_root)
             experiment = resolver.load_component(
-                str(Path(plan.experiment).relative_to("configs")), "experiment"
+                plan.experiment.removeprefix("configs/"), "experiment"
             )
             policy = resolver.load_component(experiment["components"]["policy"], "policy")
             adapter = Path(policy["settings"]["quic"]["adapter_path"]).expanduser()

@@ -60,11 +60,11 @@ The intended workflow is Config -> Connect -> Run -> Inspect:
 ```bash
 export OVLAB_LOCAL_PROFILE=configs/local/profile.yaml
 
-./ovlab config validate configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --mode runtime
-./ovlab policy describe configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab service serve configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab connect configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab run configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --dry-run
+./ovlab config validate experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --mode runtime
+./ovlab policy describe experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab service serve experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab connect experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --dry-run
 ./ovlab eval inspect RUN_PATH
 ./ovlab eval verify RUN_PATH
 ./ovlab metrics recompute RUN_PATH

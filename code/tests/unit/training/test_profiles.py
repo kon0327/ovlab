@@ -14,11 +14,11 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def _lora():
-    return load(ROOT / "configs/experiments/training/openvla-libero10-lora-smoke.yaml")
+    return load(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml")
 
 
 def _full():
-    return load(ROOT / "configs/experiments/training/openvla-full-reference.yaml")
+    return load(ROOT / "experiments/training/openvla-full-reference.yaml")
 
 
 def test_lora_and_full_profiles_are_strict_and_deterministic():
@@ -29,6 +29,17 @@ def test_lora_and_full_profiles_are_strict_and_deterministic():
     assert first.document["training"]["mode"] == "peft"
     assert full.document["training"]["mode"] == "full"
     assert full.document["checkpointing"]["output_kind"] == "full"
+
+
+@pytest.mark.parametrize("kind", [None, "training-profile", "workflow", "experiment", "", 1])
+def test_training_profile_kind_is_required_and_must_match(kind):
+    value = _lora()
+    if kind is None:
+        del value["kind"]
+    else:
+        value["kind"] = kind
+    with pytest.raises(TrainingProfileError, match="kind"):
+        TrainingProfile.from_document(value)
 
 
 def test_unknown_field_and_quic_settings_are_rejected():
@@ -64,7 +75,7 @@ def test_model_revision_is_optional_but_explicit_revision_must_be_full_commit():
     value = _lora()
     value["model"].pop("revision")
     assert "revision" not in TrainingProfile.from_document(value).document["model"]
-    for selector in ("local/main", "remote/main"):
+    for selector in ("local/main", "remote/main", "latest"):
         value["model"]["revision"] = selector
         assert TrainingProfile.from_document(value).document["model"]["revision"] == selector
     value["model"]["revision"] = "main"

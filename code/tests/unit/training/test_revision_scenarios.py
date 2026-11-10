@@ -17,7 +17,7 @@ from ovlab_benchctl.training_profiles import TrainingPlanner, TrainingProfile
 
 
 ROOT = Path(__file__).resolve().parents[4]
-PROFILE_PATH = ROOT / "configs/experiments/training/openvla-libero10-quic-smoke.yaml"
+PROFILE_PATH = ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml"
 
 
 def _write_registry(repository: Path, selector: str | None, *, pinned: tuple[str, str] | None = None) -> None:
@@ -101,7 +101,8 @@ def test_train_plan_uses_cached_main_when_revision_is_omitted_or_local(selector,
     assert len(base["aggregate_sha256"]) == 64
 
 
-def test_train_run_remote_main_resolves_downloaded_commit_and_records_hashes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("selector", ["remote/main", "latest"])
+def test_train_run_remote_main_resolves_downloaded_commit_and_records_hashes(tmp_path, monkeypatch, selector):
     repository = tmp_path / "repository"
     _write_registry(repository, "remote/main")
     revision = "c" * 40
@@ -114,19 +115,20 @@ def test_train_run_remote_main_resolves_downloaded_commit_and_records_hashes(tmp
             lambda _repo, _revision, directory, progress=None: (directory / "model.bin").write_bytes(b"tiny-model-bytes"),
         )
         plan = _plan(
-            TrainingPlanner(repository, tmp_path / "model-data"), _profile("remote/main"), allow_download=True,
+            TrainingPlanner(repository, tmp_path / "model-data"), _profile(selector), allow_download=True,
         )
 
     remote.assert_called_once()
     base = plan["scientific"]["base_checkpoint"]
     assert base["revision"] == revision
-    assert base["revision_selection"] == "remote/main"
+    assert base["revision_selection"] == selector
     assert base["aggregate_sha256"] == hashlib.sha256(
         f"model.bin 16 {hashlib.sha256(b'tiny-model-bytes').hexdigest()}\n".encode()
     ).hexdigest()
 
 
-def test_train_plan_remote_main_queries_but_does_not_download(tmp_path, monkeypatch):
+@pytest.mark.parametrize("selector", ["remote/main", "latest"])
+def test_train_plan_remote_main_queries_but_does_not_download(tmp_path, monkeypatch, selector):
     repository = tmp_path / "repository"
     _write_registry(repository, "remote/main")
     revision = "e" * 40
@@ -135,9 +137,30 @@ def test_train_plan_remote_main_queries_but_does_not_download(tmp_path, monkeypa
     with patch.object(checkpointing, "urlopen", return_value=response):
         with pytest.raises(CheckpointResolutionError, match="unavailable locally"):
             _plan(
-                TrainingPlanner(repository, tmp_path / "model-data"), _profile("remote/main"),
+                TrainingPlanner(repository, tmp_path / "model-data"), _profile(selector),
                 allow_download=False,
             )
+
+
+def test_latest_queries_remote_even_with_pinned_registry_and_stale_local_main(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    digest = hashlib.sha256(b"tiny-model-bytes").hexdigest()
+    aggregate = hashlib.sha256(f"model.bin 16 {digest}\n".encode()).hexdigest()
+    _write_registry(repository, None, pinned=("a" * 40, aggregate))
+    cache = tmp_path / "cache"
+    _snapshot(cache, "a" * 40)
+    newest = "f" * 40
+    newest_snapshot = cache / "hub/models--owner--scenario-model/snapshots" / newest
+    newest_snapshot.mkdir(parents=True)
+    (newest_snapshot / "model.bin").write_bytes(b"tiny-model-bytes")
+    monkeypatch.setenv("OVLAB_GLOBAL_HF_CACHE", str(cache))
+    response = io.BytesIO(json.dumps({"sha": newest}).encode())
+    with patch.object(checkpointing, "urlopen", return_value=response) as remote:
+        plan = _plan(TrainingPlanner(repository, tmp_path / "model-data"), _profile("latest"), allow_download=False)
+    remote.assert_called_once()
+    base = plan["scientific"]["base_checkpoint"]
+    assert base["revision"] == newest
+    assert base["revision_selection"] == "latest"
 
 
 def test_train_plan_explicit_pinned_revision_uses_registered_file_manifest(tmp_path, monkeypatch):

@@ -315,7 +315,7 @@ class ExperimentMigration:
             directory.mkdir(parents=True, exist_ok=True)
             if directory.stat().st_uid == os.getuid():
                 directory.chmod(0o2770)
-        spec = {"schema_version": "ovlab.experiment/v1", "id": experiment_id,
+        spec = {"schema_version": "ovlab.experiment/v1", "kind": "workflow", "id": experiment_id,
                 "name": f"Migrated {run['category']} run {run['run_id']}", "execute": []}
         plan = {"schema_version": "ovlab.experiment-plan/v1", "experiment_id": experiment_id,
                 "name": spec["name"], "nodes": [{"path": "", "id": experiment_id}], "steps": [],

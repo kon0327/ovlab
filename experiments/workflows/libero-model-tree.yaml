@@ -1,0 +1,52 @@
+schema_version: ovlab.experiment/v1
+kind: workflow
+id: libero-model-tree
+name: LIBERO model, task and quantization comparison
+
+# Settings at this level are inherited by all descendants.
+config:
+  train:
+    profile: openvla-lora-libero10-smoke.yaml
+    patch:
+      dataset:
+        ref: libero/libero_10
+  evaluate:
+    profile: libero10-lora-4bit-three-per-task.yaml
+
+children:
+  - id: lora
+    name: Merged OpenVLA LoRA
+    execute: [train, evaluate]
+    children:
+      - id: task-0
+        name: First LIBERO-10 task
+        config:
+          evaluate:
+            component_patches:
+              benchmark:
+                settings:
+                  task_indices: [0]
+        children:
+          - id: four-bit
+            execute: [evaluate]
+          - id: eight-bit
+            config:
+              evaluate:
+                component_patches:
+                  policy:
+                    settings:
+                      runtime:
+                        quantization: 8bit
+            execute: [evaluate]
+  - id: vanilla
+    name: Vanilla OpenVLA
+    config:
+      evaluate:
+        patch:
+          components:
+            policy: policies/openvla-vanilla/4bit.yaml
+        component_patches:
+          benchmark:
+            settings:
+              task_indices: [0, 1]
+    execute: [evaluate]

@@ -21,6 +21,7 @@ from .training_identity import canonical_json, identity
 
 
 TRAINING_PROFILE_SCHEMA = "ovlab.training-profile/v1"
+TRAINING_PROFILE_KIND = "training"
 TRAINING_PLAN_SCHEMA = "ovlab.training-plan/v1"
 OPENVLA_TRAINER_VERSION = "1.0.0"
 
@@ -66,12 +67,14 @@ class TrainingProfile:
         document = _mapping(value, "training profile")
         _keys(
             document,
-            {"schema_version", "id", "trainer", "model", "dataset", "training", "checkpointing", "resources"},
-            {"schema_version", "id", "trainer", "model", "dataset", "training", "checkpointing", "resources"},
+            {"schema_version", "kind", "id", "trainer", "model", "dataset", "training", "checkpointing", "resources"},
+            {"schema_version", "kind", "id", "trainer", "model", "dataset", "training", "checkpointing", "resources"},
             "training profile",
         )
         if document["schema_version"] != TRAINING_PROFILE_SCHEMA:
             raise TrainingProfileError(f"training profile schema_version must be {TRAINING_PROFILE_SCHEMA}")
+        if document["kind"] != TRAINING_PROFILE_KIND:
+            raise TrainingProfileError(f"training profile kind must be {TRAINING_PROFILE_KIND}")
         profile_id = document["id"]
         if not isinstance(profile_id, str) or not profile_id or "/" in profile_id or ".." in profile_id:
             raise TrainingProfileError("training profile id must be a portable non-empty identifier")
@@ -99,10 +102,10 @@ class TrainingProfile:
             raise TrainingProfileError("model.base_checkpoint must not be an absolute path")
         revision = model.get("revision", "local/main")
         if not isinstance(revision, str) or (
-            revision not in {"local/main", "remote/main"}
+            revision not in {"local/main", "remote/main", "latest"}
             and (len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision))
         ):
-            raise TrainingProfileError("model.revision must be local/main, remote/main, or a full 40-character commit digest")
+            raise TrainingProfileError("model.revision must be local/main, remote/main, latest, or a full 40-character commit digest")
         if model["processor"] != "inherited":
             raise TrainingProfileError("Gate I OpenVLA profiles require processor: inherited")
 
@@ -257,13 +260,14 @@ class TrainingPlanner:
         resource_id = str(model["base_checkpoint"])
         spec = checkpoint_spec_by_id(self.repository_root, resource_id)
         selector = model.get("revision", "local/main")
-        if selector in {"local/main", "remote/main"}:
+        if selector in {"local/main", "remote/main", "latest"}:
             from .checkpointing import CheckpointResolver, default_global_cache
             global_cache = Path(os.environ.get("OVLAB_GLOBAL_HF_CACHE", default_global_cache(os.environ))).expanduser().resolve()
             resolved = CheckpointResolver(
                 global_cache=global_cache,
                 managed_cache=self.model_data_root / "checkpoints" / "huggingface",
-            ).resolve_latest(resource_id, spec.repo_id, mode=selector, allow_download=allow_checkpoint_download)
+            ).resolve_latest(resource_id, spec.repo_id, mode="remote/main" if selector == "latest" else selector,
+                             allow_download=allow_checkpoint_download)
             return {
                 "resource_id": resource_id,
                 "repository": spec.repo_id,
@@ -362,7 +366,9 @@ class TrainingPlanner:
                 )
             if available_vram_gib is not None and estimated_vram > available_vram_gib:
                 raise TrainingResourceError(
-                    f"estimated {estimated_vram:.1f} GiB VRAM exceeds detected device memory {available_vram_gib:.1f} GiB"
+                    f"estimated {estimated_vram:.1f} GiB VRAM exceeds detected device memory {available_vram_gib:.1f} GiB; "
+                    "this estimate is for one training run, so sequential execution will not lower it; "
+                    "choose a compatible training profile or a GPU with more memory"
                 )
         scientific = {
             "schema_version": TRAINING_PLAN_SCHEMA,
@@ -388,7 +394,7 @@ class TrainingPlanner:
             },
             "base_checkpoint": {
                 **{key: model[key] for key in ("resource_id", "repository", "revision", "aggregate_sha256")},
-                **({"revision_selection": model["revision_selection"]} if model.get("revision_selection") in {"local/main", "remote/main"} else {}),
+                **({"revision_selection": model["revision_selection"]} if model.get("revision_selection") in {"local/main", "remote/main", "latest"} else {}),
             },
             "dataset": {
                 "dataset_id": dataset["dataset_id"],

@@ -18,17 +18,25 @@ contract. Canonical camera names are checked in the same way.
 
 ## Scenario directories
 
-- `experiments/workflows/`: hierarchical JSON experiments selected by
+- `../experiments/workflows/`: hierarchical YAML or JSON experiments selected by
   `ovlab experiment plan|run --spec FILE`; see the
   [experiment workflow guide](../docs/EXPERIMENT_WORKFLOW.md).
-- `experiments/training/`: training scenarios selected by `ovlab train run TARGET`.
-- `experiments/evaluation/`: evaluation scenarios selected by `ovlab eval run TARGET`.
+- `../experiments/training/`: training scenarios selected by `ovlab train run TARGET`.
+- `../experiments/evaluation/`: evaluation scenarios selected by `ovlab eval run TARGET`.
 - `deploy/`: policy-only deployment configs selected by `ovlab deploy run TARGET`.
 
-Each accepts a YAML name or path and supports `--dry-run`. Training/evaluation
-`inspect` and `verify` take run references; deployment uses service IDs or config
-names. See [`../DEPLOYMENT.md`](../DEPLOYMENT.md) for deployment schema, image
-building, ports, quantization, readiness, and service lifecycle.
+Commented reference files: [`evaluation/example.yaml`](../experiments/evaluation/example.yaml),
+[`training/example.yaml`](../experiments/training/example.yaml) and
+[`workflows/example.yaml`](../experiments/workflows/example.yaml). Each contains a
+valid example plus commented alternatives; validate with `ovlab eval run --dry-run`,
+`ovlab train validate` or `ovlab experiment plan`, respectively.
+
+Workflow specs accept YAML or JSON paths. Training, evaluation and deployment
+scenarios accept YAML names or paths; their run commands support `--dry-run`.
+Training/evaluation `inspect` and `verify` take run references; deployment
+uses service IDs or config names. See [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
+for deployment schema, image building, ports, quantization, readiness, and
+service lifecycle.
 
 ## LIBERO renderer execution profiles
 
@@ -89,13 +97,14 @@ OVLAB-managed cache in that order. The policy always sees the selected artifact
 at `/checkpoints/resolved/<checkpoint-id>` and cannot observe its host location.
 
 Model-family policy owners validate their own deployment and artifact contracts.
-QuIC adapter-only training and placement studies live under `experiments/training/` and
+QuIC adapter-only training and placement studies live under `../experiments/training/` and
 `ablations/`; benchmark experiments continue to select policies and benchmarks
 independently.
 
 ## Training and ablation profiles
 
-`experiments/training/` uses `ovlab.training-profile/v1` with the same explicit relative
+`../experiments/training/` uses `ovlab.training-profile/v1` and requires
+`kind: training` in every file, including extending profiles, with the same explicit relative
 `extends` merge rules. `ablations/` uses `ovlab.training-ablation/v1` and references
 a common training base plus ordinary variant profiles. Declared method factor
 paths may differ; checkpoint/data identities, episode split, normalization, seed,
@@ -113,7 +122,7 @@ through the normal isolated training/checkpoint/report lifecycle. See
 [`../docs/ABLATIONS.md`](../docs/ABLATIONS.md) for the episode partition contract
 and source-project migration audit.
 
-The [`quic/lora-coverage`](experiments/training/quic/lora-coverage/)
+The [`quic/lora-coverage`](../experiments/training/quic/lora-coverage/)
 profiles select the active dense linear and convolutional modules matching the
 explicit LoRA suffix list, including the vision patch projections and `lm_head`.
 They provide smoke and 50,000-update recipes for LIBERO-10, Object, Spatial and
@@ -121,6 +130,6 @@ Goal with a 5% whole-episode validation split and physical batch size 4. The
 [coverage experiment guide](../docs/QUIC_LORA_COVERAGE.md) explains the staged
 launcher, inactive vision exclusions, resource budget and recorded evidence.
 
-OpenVLA QuIC action-chunk ablations under `experiments/training/quic/action-chunks/`
+OpenVLA QuIC action-chunk ablations under `../experiments/training/quic/action-chunks/`
 include the token baseline with the head disabled plus H=1 and H=8 chunk-head
 smokes. See [action chunk contracts](../docs/QUIC_ACTION_CHUNKS.md).

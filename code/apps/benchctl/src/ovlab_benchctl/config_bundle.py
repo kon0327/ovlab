@@ -94,8 +94,17 @@ class ConfigBundleBuilder:
         if not self.config_root.is_dir():
             raise ValueError(f"config root does not exist: {self.config_root}")
 
+    def _source(self, reference: str) -> Path:
+        path = Path(reference)
+        external = self.repository_root / path
+        if path.parts and path.parts[0] == "experiments" and (self.repository_root / "experiments").is_dir():
+            return external
+        return self.config_root / path
+
     def _relative(self, path: Path) -> str:
         resolved = path.resolve()
+        if resolved.is_relative_to(self.repository_root / "experiments"):
+            return resolved.relative_to(self.repository_root).as_posix()
         if not resolved.is_relative_to(self.config_root):
             raise ValueError(f"configuration escapes configs/: {path}")
         return resolved.relative_to(self.config_root).as_posix()
@@ -107,7 +116,7 @@ class ConfigBundleBuilder:
         selected: set[str],
         stack: tuple[Path, ...] = (),
     ) -> dict[str, object]:
-        path = (self.config_root / reference).resolve()
+        path = self._source(reference).resolve()
         relative = self._relative(path)
         if path in stack:
             chain = " -> ".join(self._relative(item) for item in (*stack, path))
@@ -127,6 +136,9 @@ class ConfigBundleBuilder:
             if not isinstance(parent, str) or not parent:
                 raise ValueError(f"{relative}.extends must be a non-empty string")
             parent_path = (path.parent / parent).resolve()
+            parent_root = self.repository_root / "experiments" if path.is_relative_to(self.repository_root / "experiments") else self.config_root
+            if not parent_path.is_relative_to(parent_root):
+                raise ValueError(f"configuration extends escapes its root: {parent_path}")
             parent_document = self._extends_closure(
                 self._relative(parent_path), expected_kind, selected, (*stack, path)
             )
@@ -182,13 +194,13 @@ class ConfigBundleBuilder:
                 "path": relative,
                 "size": (
                     len(overlays[relative].encode("utf-8"))
-                    if relative in overlays else (self.config_root / relative).stat().st_size
+                    if relative in overlays else self._source(relative).stat().st_size
                 ),
                 "sha256": (
                     hashlib.sha256(overlays[relative].encode("utf-8")).hexdigest()
-                    if relative in overlays else _sha256(self.config_root / relative)
+                    if relative in overlays else _sha256(self._source(relative))
                 ),
-                **({"source_sha256": _sha256(self.config_root / relative)} if relative in overlays else {}),
+                **({"source_sha256": _sha256(self._source(relative))} if relative in overlays else {}),
             }
             for relative in sorted(selected)
         )
@@ -220,7 +232,7 @@ class ConfigBundleBuilder:
             overlays = dict(bundle.overlays)
             for item in bundle.files:
                 relative = str(item["path"])
-                source = self.config_root / relative
+                source = self._source(relative)
                 target = root / relative
                 target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
                 if relative in overlays:

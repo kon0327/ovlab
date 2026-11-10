@@ -1,0 +1,31 @@
+# Reference evaluation scenario: ovlab eval run experiments/evaluation/example.yaml --dry-run
+# Execution requires the appropriate local resources, checkpoint and images; it runs a real evaluation.
+schema_version: "0.1.0" # Required evaluation scenario schema version.
+kind: experiment # Required evaluation scenario type; this is not a workflow.
+# extends: libero10-lora-4bit-three-per-task.yaml # Optional parent, relative to this file.
+
+deployment: # Optional; without this block the scenario does not use managed Docker deployment.
+  profile: openvla # openvla, oft or quic; must match the selected policy.
+  renderer: egl # egl for headless execution; glfw for interactive display.
+
+experiment: # Required description recorded in the run evidence.
+  id: example-lora-4bit-eval # Nonempty scenario identifier.
+  name: Example OpenVLA LoRA 4-bit evaluation # Human-readable name.
+  tags: [example, libero-10, lora, 4bit] # Nonempty list of nonempty tags.
+
+components: # Required references relative to configs/; contents are defined in separate files.
+  benchmark: benchmarks/libero/libero10.yaml # Task suite; see configs/benchmarks/ for alternatives.
+  policy: policies/openvla-lora/merged-libero10-4bit.yaml # Model and inference; see configs/policies/.
+  metrics: metrics/action-safe-v1.yaml # Metric set; see configs/metrics/.
+  protocol: protocols/libero-three-episodes-v1.yaml # Episodes, limits and recording; see configs/protocols/.
+  artifacts: artifacts/filesystem.yaml # Artifact store; see configs/artifacts/.
+
+resources: # Required references to logical resources.
+  registry: resources/registry.yaml # Checkpoint and repository registry relative to configs/.
+
+reporting: # Optional block; when present, all five fields are required.
+  enabled: true # Enable reporting; workflows require true.
+  profile: libero-task-default # Built-in or local reporting profile name.
+  on_task_finalize: true # Process results after each task completes.
+  on_run_finalize: true # Process results after the entire run completes.
+  failure_policy: warn # The supported value is warn.

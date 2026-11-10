@@ -145,7 +145,7 @@ Preview the resolved orchestration without starting containers:
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
+  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --profile openvla \
   --renderer egl \
   --dry-run
@@ -177,7 +177,7 @@ EGL is the supported backend for headless and automated LIBERO execution:
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
+  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --profile openvla \
   --renderer egl
 ```
@@ -186,7 +186,7 @@ Run OpenVLA-OFT separately:
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
+  experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
   --profile oft \
   --renderer egl
 ```
@@ -201,7 +201,7 @@ strictly offline run, require an already verified artifact:
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
+  experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
   --profile oft \
   --renderer egl \
   --offline
@@ -214,7 +214,7 @@ headless backend; hiding a window does not remove the display-server dependency.
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
+  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --profile openvla \
   --renderer glfw
 ```

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import errno
@@ -432,6 +433,21 @@ class CheckpointBundleStore:
         self.model_data_root = Path(model_data_root).expanduser().resolve()
         self.root = self.model_data_root / "checkpoints"
 
+    @contextmanager
+    def _publication_lock(self, checkpoint_id: str):
+        # Finalizers in separate containers may publish identical checkpoint
+        # content at the same time. Lock only the atomic publication step.
+        import fcntl
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self.root / f".{checkpoint_id}.lock"
+        descriptor = os.open(path, os.O_CREAT | os.O_RDONLY, 0o644)
+        with os.fdopen(descriptor, "rb") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
     def finalize(self, context: TrainingRunContext) -> dict[str, object]:
         plan = context.plan
         scientific = plan.get("scientific")
@@ -539,8 +555,19 @@ class CheckpointBundleStore:
             for path in sorted(temporary.rglob("*"), reverse=True):
                 path.chmod(0o444 if path.is_file() else 0o555)
             temporary.chmod(0o555)
-            os.replace(temporary, final)
-            final.chmod(0o555)
+            with self._publication_lock(checkpoint_id):
+                if final.exists():
+                    existing = self.inspect(checkpoint_id)
+                    self.verify(checkpoint_id)
+                    temporary.chmod(0o755)
+                    for path in temporary.rglob("*"):
+                        if path.is_dir():
+                            path.chmod(0o755)
+                    shutil.rmtree(temporary)
+                    result = self._complete_run(context, staged_result, checkpoint_id, final)
+                    return {**result, "checkpoint": existing["checkpoint"], "reused": True}
+                os.replace(temporary, final)
+                final.chmod(0o555)
         except Exception:
             shutil.rmtree(temporary, ignore_errors=True)
             raise

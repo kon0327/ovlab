@@ -1,0 +1,24 @@
+schema_version: ovlab.experiment/v1
+kind: workflow
+id: libero10-lora-4bit-smoke
+name: LIBERO-10 OpenVLA LoRA 4-bit smoke test
+
+config:
+  evaluate:
+    profile: libero10-lora-4bit-three-per-task.yaml
+    patch:
+      experiment:
+        id: libero10-lora-4bit-smoke
+        name: 4-bit merged OpenVLA-LoRA smoke test
+        tags: [libero-10, lora, merged-full-weights, 4bit, nf4, rpc, smoke]
+    component_patches:
+      benchmark:
+        settings:
+          task_indices: [0]
+      protocol:
+        id: libero10-lora-4bit-smoke-v1
+        execution:
+          rollouts_per_task: 1
+          maximum_episode_steps: 2
+
+execute: [evaluate]

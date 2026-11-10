@@ -226,7 +226,7 @@ Python 3, not an activated Conda environment:
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
 The CLI passes the selected experiment to both runtime services, performs checkpoint

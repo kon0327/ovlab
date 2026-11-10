@@ -1,7 +1,7 @@
 # QuIC coverage of the LoRA target modules
 
 The profiles in
-[`configs/experiments/training/quic/lora-coverage/`](../configs/experiments/training/quic/lora-coverage/)
+[`experiments/training/quic/lora-coverage/`](../experiments/training/quic/lora-coverage/)
 adapt the active OpenVLA modules selected by the literal LoRA suffix list:
 
 ```yaml
@@ -193,8 +193,8 @@ For one stage, the ordinary CLI remains available:
 
 ```bash
 ./ovlab train validate \
-  --profile configs/experiments/training/quic/lora-coverage/libero10-smoke.yaml
-./ovlab train run configs/experiments/training/quic/lora-coverage/libero10-smoke.yaml
+  --profile experiments/training/quic/lora-coverage/libero10-smoke.yaml
+./ovlab train run experiments/training/quic/lora-coverage/libero10-smoke.yaml
 ```
 
 Record offline action-token CE, accuracy, decoded normalized action L1, invalid

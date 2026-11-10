@@ -9,8 +9,8 @@ All three domains accept a YAML name or explicit path as `run TARGET` and suppor
 
 | Domain | Default configuration directory | Inspect/verify target |
 | --- | --- | --- |
-| `train` | `configs/experiments/training/` | Training run path, ID, or hash |
-| `eval` | `configs/experiments/evaluation/` | Evaluation run path, ID, or hash |
+| `train` | `experiments/training/` | Training run path, ID, or hash |
+| `eval` | `experiments/evaluation/` | Evaluation run path, ID, or hash |
 | `deploy` | `configs/deploy/` | Deployment ID or deployment YAML name/path |
 
 ## Starting and managing a service

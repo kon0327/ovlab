@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import errno
 import os
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 import struct
 import shutil
+import threading
 
 import pytest
 
@@ -139,6 +142,34 @@ def test_reusing_checkpoint_finalizes_new_training_run_and_preserves_original(tm
     repeated = CheckpointBundleStore(tmp_path).finalize(second_context)
     assert repeated["reused"] is True
     assert repeated["run_id"] == "run-2"
+
+
+def test_parallel_finalizers_publish_identical_checkpoint_once(tmp_path, monkeypatch):
+    first = _context(tmp_path)
+    second_root = tmp_path / "training-runs" / "run-2"
+    second_root.mkdir()
+    shutil.copytree(first.staging_checkpoint, second_root / "staging-checkpoints/final")
+    for name in ("events.jsonl", "metrics.jsonl", "training-plan.json"):
+        shutil.copyfile(first.root / name, second_root / name)
+    second = TrainingRunContext("run-2", second_root, first.plan)
+    barrier = threading.Barrier(2, timeout=10)
+    original = CheckpointBundleStore._publication_lock
+
+    @contextmanager
+    def synchronized(store, checkpoint_id):
+        barrier.wait()
+        with original(store, checkpoint_id):
+            yield
+
+    monkeypatch.setattr(CheckpointBundleStore, "_publication_lock", synchronized)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda context: CheckpointBundleStore(tmp_path).finalize(context), (first, second)))
+    assert results[0]["checkpoint_id"] == results[1]["checkpoint_id"]
+    assert sorted(result["reused"] for result in results) == [False, True]
+    assert CheckpointBundleStore(tmp_path).verify(results[0]["checkpoint_id"])["status"] == "verified"
+    assert all(TrainingRunStore(tmp_path, training_runs_root=context.root.parent).verify(context.run_id)["status"] == "verified"
+               for context in (first, second))
+    assert not list((tmp_path / "checkpoints").glob("*.staging"))
 
 
 def test_incompatible_adapter_configuration_is_rejected(tmp_path):

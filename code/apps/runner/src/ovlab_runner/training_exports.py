@@ -14,6 +14,7 @@ import uuid
 from ovlab_core.experiment_scope import ExperimentScope
 
 from .errors import ArtifactError
+from .isolated_index import render_isolated_index
 from .permissions import finalize_managed_directory, finalize_managed_tree
 from .training_derived import build_training_performance_model, _read_json, _read_metrics, _sha256
 
@@ -115,6 +116,34 @@ class TrainingExportEngine:
             verified = self.verify(kind, name)
             if verified["source_integrity"] != source:
                 raise ArtifactError(f"existing {kind} export has different canonical sources: {target}")
+            if kind == "isolated" and not (target / "index.html").is_file():
+                # Preserve all previously verified bytes while adding the new,
+                # checksum-covered browser page to an older isolated export.
+                if any(path.is_symlink() for path in target.rglob("*")):
+                    raise ArtifactError("cannot upgrade an isolated export containing symbolic links")
+                stage = target.parent / f".{name}.{uuid.uuid4().hex}.partial"
+                backup = target.parent / f".{name}.{uuid.uuid4().hex}.previous"
+                try:
+                    shutil.copytree(target, stage)
+                    metadata = _read_json(stage / "metadata.json")
+                    (stage / "metadata.json").unlink()
+                    (stage / "index.html").write_text(
+                        render_isolated_index(stage, category="train", metadata=metadata), encoding="utf-8",
+                    )
+                    metadata["files"] = _files(stage)
+                    (stage / "metadata.json").write_bytes(_canonical(metadata))
+                    finalize_managed_tree(stage)
+                    target.rename(backup)
+                    try:
+                        stage.rename(target)
+                    except BaseException:
+                        backup.rename(target)
+                        raise
+                    shutil.rmtree(backup)
+                finally:
+                    if stage.exists():
+                        shutil.rmtree(stage, ignore_errors=True)
+                return {**self.verify(kind, name), "reused": True, "index_added": True}
             return {**verified, "reused": True}
         self.exports_root.mkdir(parents=True, exist_ok=True)
         current = self.exports_root
@@ -133,7 +162,12 @@ class TrainingExportEngine:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(payload)
             metadata = {"schema_version": SCHEMA, "export_type": kind, "name": name,
-                        "source_integrity": source, "files": _files(stage)}
+                        "source_integrity": source}
+            if kind == "isolated":
+                (stage / "index.html").write_text(
+                    render_isolated_index(stage, category="train", metadata=metadata), encoding="utf-8",
+                )
+            metadata["files"] = _files(stage)
             (stage / "metadata.json").write_bytes(_canonical(metadata))
             stage.rename(target)
             finalize_managed_tree(target)

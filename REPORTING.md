@@ -9,7 +9,7 @@ inference. Canonical run artifacts remain authoritative and read-only.
 
 ## Experiment-scoped reports
 
-The current JSON experiment workflow writes
+The current YAML or JSON experiment workflow writes
 `runs/<experiment-id>/{train,evaluate}/<node-path>/<run-id>/` and
 `exports/<experiment-id>/{train,evaluate}/<node-path>/`. Each experiment has a
 lightweight navigable `exports/<experiment-id>/index.html`; each completed node
@@ -94,7 +94,7 @@ with the completed canonical run path and cannot change its status or contents.
 Use the normal deployment command; no separate reporting command is required:
 
 ```bash
-./ovlab eval run configs/experiments/evaluation/EXPERIMENT.yaml
+./ovlab eval run experiments/evaluation/EXPERIMENT.yaml
 ```
 
 Reporting configuration affects only derived identity; it does not affect
@@ -451,9 +451,10 @@ a distinct build. Verify a customized build with the same configuration.
 
 ## Isolated and grouped exports
 
-Exports are intentionally simpler than derived HTML reports. They contain
-ordinary CSV tables, PNG/PDF figures, and one readable `metadata.json`. They
-never scrape report HTML and never modify their canonical run sources.
+Exports contain ordinary CSV tables, PNG/PDF figures, and a readable
+`metadata.json`. Isolated exports also have an offline `index.html` for
+browsing figures, tables and metadata directly in a browser. They never scrape
+report HTML and never modify their canonical run sources.
 
 ### Isolated export
 
@@ -463,6 +464,12 @@ It can also be regenerated explicitly:
 ```bash
 ./ovlab export isolated --run RUN_ID
 ```
+
+Open `index.html` inside the isolated export to browse image previews, PDFs,
+CSV tables and recorded reasons for unavailable figures. The page works from
+the local filesystem without a web server. Training isolated exports provide
+the same entry point for their SVG plots and CSV data. The page is included in
+the export's integrity checks.
 
 To export exactly one episode instead of the full run:
 
@@ -474,6 +481,7 @@ The layout is:
 
 ```text
 exports/evaluate/isolated/<run-name>/
+├── index.html                         # offline browser for this export
 ├── episodes/
 │   ├── tables/
 │   │   ├── <episode>__statistics.csv

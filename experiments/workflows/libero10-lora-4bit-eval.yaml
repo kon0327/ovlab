@@ -1,0 +1,10 @@
+schema_version: ovlab.experiment/v1
+kind: workflow
+id: libero10-lora-4bit-eval
+name: LIBERO-10 OpenVLA LoRA 4-bit evaluation
+
+config:
+  evaluate:
+    profile: libero10-lora-4bit-three-per-task.yaml
+
+execute: [evaluate]

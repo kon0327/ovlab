@@ -15,7 +15,7 @@ def test_user_launcher_runs_from_other_directory_and_preserves_local_specs(tmp_p
     subprocess.run(installer, env=env, check=True, capture_output=True, text=True)
     subprocess.run(installer, env=env, check=True, capture_output=True, text=True)
     env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
-    reference = "configs/experiments/workflows/libero-model-tree.json"
+    reference = "experiments/workflows/libero-model-tree.json"
     command = ["ovlab", "experiment", "plan", "--spec", reference, "--json"]
     completed = subprocess.run(command, cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
     result = json.loads(completed.stdout)["result"]
@@ -23,7 +23,7 @@ def test_user_launcher_runs_from_other_directory_and_preserves_local_specs(tmp_p
     assert Path(result["spec"]) == ROOT / reference
 
     local_spec = tmp_path / "local.json"
-    local_spec.write_text(json.dumps({"schema_version": "ovlab.experiment/v1", "id": "local", "name": "Local"}))
+    local_spec.write_text(json.dumps({"schema_version": "ovlab.experiment/v1", "kind": "workflow", "id": "local", "name": "Local"}))
     completed = subprocess.run(["ovlab", "experiment", "plan", "--spec", "local.json", "--json"],
                                cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
     assert json.loads(completed.stdout)["result"]["spec"] == str(local_spec)

@@ -1,0 +1,10 @@
+extends: libero10-deep.yaml
+kind: training
+id: openvla-quic-lora-coverage-libero-object-deep
+
+dataset:
+  ref: libero/libero_object
+
+training:
+  normalization:
+    unnorm_key: libero_object

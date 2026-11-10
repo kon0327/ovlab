@@ -49,7 +49,7 @@ def test_partition_rejects_duplicate_records_small_groups_and_tampering():
 
 
 def test_training_profile_inheritance_and_quic_yaml_roundtrip():
-    profile = load_training_profile(ROOT / "configs/experiments/training/quic/libero10-a9-qp2.yaml", config_root=ROOT / "configs")
+    profile = load_training_profile(ROOT / "experiments/training/quic/libero10-a9-qp2.yaml", config_root=ROOT / "experiments")
     assert profile.document["training"]["peft"]["placement"]["id"] == "A9"
     assert len(profile.document["training"]["peft"]["targets"]) == 2
     assert loads(dumps(profile.document)) == profile.document
@@ -61,19 +61,36 @@ def test_training_extends_cannot_escape_root_or_cycle(tmp_path):
     outside = tmp_path / "outside.yaml"
     outside.write_text("id: outside\n")
     child = root / "child.yaml"
-    child.write_text("extends: ../outside.yaml\n")
+    child.write_text("kind: training\nextends: ../outside.yaml\n")
     with pytest.raises(TrainingProfileError, match="escapes"):
         load_training_profile(child, config_root=root)
-    child.write_text("extends: parent.yaml\n")
-    (root / "parent.yaml").write_text("extends: child.yaml\n")
+    child.write_text("kind: training\nextends: parent.yaml\n")
+    (root / "parent.yaml").write_text("kind: training\nextends: child.yaml\n")
     with pytest.raises(TrainingProfileError, match="cycle"):
+        load_training_profile(child, config_root=root)
+
+
+def test_training_kind_is_required_in_each_inheritance_layer(tmp_path):
+    root = tmp_path / "configs"
+    root.mkdir()
+    base = load_training_profile(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml").as_dict()
+    (root / "base.yaml").write_text(dumps(base))
+    child = root / "child.yaml"
+    child.write_text("extends: base.yaml\nid: child\n")
+    with pytest.raises(TrainingProfileError, match="kind"):
+        load_training_profile(child, config_root=root)
+    child.write_text("kind: training\nextends: base.yaml\nid: child\n")
+    assert load_training_profile(child, config_root=root).profile_id == "child"
+    del base["kind"]
+    (root / "base.yaml").write_text(dumps(base))
+    with pytest.raises(TrainingProfileError, match="kind"):
         load_training_profile(child, config_root=root)
 
 
 def _suite_copy(tmp_path, mutate):
     root = tmp_path / "configs"
     root.mkdir()
-    base = load_training_profile(ROOT / "configs/experiments/training/openvla-libero10-quic-smoke.yaml").as_dict()
+    base = load_training_profile(ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml").as_dict()
     first = deepcopy(base)
     first["id"] = "first"
     first["training"]["peft"]["adapter"]["block_count"] = 4
@@ -126,7 +143,7 @@ def test_ablation_runner_keeps_failure_evidence_for_partition_drift(tmp_path):
 
 def test_fit_override_changes_training_identity_without_mutating_profile_or_files(monkeypatch, tmp_path):
     from ovlab_benchctl.training_profiles import TrainingPlanner, with_fitted_action_normalization
-    path = ROOT / "configs/experiments/training/openvla-libero10-quic-smoke.yaml"
+    path = ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml"
     source = path.read_bytes()
     host_profile = load_training_profile(path)
     original = deepcopy(host_profile.document)
@@ -155,13 +172,13 @@ def test_fit_override_changes_training_identity_without_mutating_profile_or_file
 
 def test_fit_override_requires_explicit_partition():
     from ovlab_benchctl.training_profiles import with_fitted_action_normalization
-    profile = load_training_profile(ROOT / "configs/experiments/training/openvla-libero10-lora-smoke.yaml")
+    profile = load_training_profile(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml")
     with pytest.raises(TrainingProfileError, match="requires dataset.partition"):
         with_fitted_action_normalization(profile, True)
 
 
 def test_fit_ablation_override_is_shared_materialized_and_separate_from_host_plan(tmp_path):
-    source_paths = [SUITE, ROOT / "configs/experiments/training/openvla-libero10-quic-smoke.yaml", *(ROOT / "configs/experiments/training/quic").glob("*.yaml")]
+    source_paths = [SUITE, ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml", *(ROOT / "experiments/training/quic").glob("*.yaml")]
     source_bytes = {path: path.read_bytes() for path in source_paths}
     host = TrainingAblation(SUITE, config_root=ROOT / "configs")
     fitted = TrainingAblation(SUITE, config_root=ROOT / "configs", fit_action_normalization=True)

@@ -11,11 +11,12 @@ boundaries and current scope limits.
 The complete system design, runtime boundaries, data flows and extension points
 are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-OVLAB follows a **Define experiment → Plan → Run → Report** workflow: a JSON
+OVLAB follows a **Define experiment → Plan → Run → Report** workflow: a YAML or JSON
 experiment tree can contain models, tasks and ablations at any depth. Each node
 can run independently and produces immutable canonical evidence plus a
 hierarchical report. See the [experiment workflow guide](docs/EXPERIMENT_WORKFLOW.md)
-and [example JSON](configs/experiments/workflows/libero-model-tree.json).
+and example [YAML](experiments/workflows/libero-model-tree.yaml) or
+[JSON](experiments/workflows/libero-model-tree.json).
 
 The experiment runner and benchmark adapter execute together in a runner process or container. Each VLA implementation runs independently as a policy service, communicating through a dependency-light policy protocol. This separation allows Vanilla, LoRA, OFT, and QuIC implementations to keep distinct dependency environments.
 
@@ -55,13 +56,29 @@ environment, install it once into `~/.local/bin`:
 ```bash
 bash ./install-ovlab-cli.sh
 ovlab --help
-ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json --dry-run
+ovlab experiment run experiments/workflows/libero-model-tree.json --dry-run
 ```
 
 The installer prints a PATH instruction if `~/.local/bin` is not already on
 PATH. It never replaces an unrelated command. The launcher uses the same
 Docker routing and Python selection as `./ovlab`; repository-relative
 experiment specifications also work from another directory.
+
+The principal target can be positional across reporting, exports and training:
+
+```bash
+ovlab report generate RUN_ID
+ovlab report verify RUN_ID
+ovlab export isolated RUN_ID
+ovlab export grouped GROUP_NAME RUN_ID_1 RUN_ID_2
+ovlab train report TRAINING_RUN_ID
+ovlab dataset inspect DATASET_ID
+ovlab checkpoint verify CHECKPOINT_ID
+```
+
+The existing named forms such as `--spec`, `--run`, and `--name` remain
+available. For data archive and delete, use an explicit typed target such as
+`run:ID`, `report:ID`, or `export:isolated:ID` to avoid ambiguity.
 
 For a dedicated host Python environment, use the environment installer. It
 prefers Conda and uses `venv` when Conda is unavailable; see
@@ -79,11 +96,11 @@ environment when available:
 
 ```bash
 ./ovlab --help
-./ovlab experiment plan --spec configs/experiments/workflows/libero-model-tree.json
-./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json --dry-run
-./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json
+./ovlab experiment plan --spec experiments/workflows/libero-model-tree.json
+./ovlab experiment run --spec experiments/workflows/libero-model-tree.json --dry-run
+./ovlab experiment run --spec experiments/workflows/libero-model-tree.json
 ./ovlab doctor
-./ovlab doctor --experiment configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab doctor --experiment experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ./ovlab eval run libero10-lora-merged-rpc-smoke
 ./ovlab eval run libero10-lora-merged-rpc-smoke --quantization 4bit
 ./ovlab train run openvla-libero10-lora-smoke
@@ -111,7 +128,7 @@ environment when available:
 ./ovlab data list
 ./ovlab data archive --run RUN_ID
 ./ovlab dataset resolve --benchmark libero --suite libero_10
-./ovlab train validate --profile configs/experiments/training/openvla-libero10-lora-smoke.yaml
+./ovlab train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
 ./ovlab train report --run TRAINING_RUN_ID
 ./ovlab checkpoint list
 ```
@@ -130,7 +147,7 @@ mounted read-only and publishes all generated outputs below `exports/`. It needs
 Docker and the host CLI environment.
 
 `train run`, `eval run`, and `deploy run` select YAML by name or path from
-`configs/experiments/training`, `configs/experiments/evaluation`, and `configs/deploy`.
+`experiments/training`, `experiments/evaluation`, and `configs/deploy`.
 Each supports `--dry-run`; `inspect TARGET` and `verify TARGET` inspect their runs
 or services. `deploy run` builds and retains only the model service, with optional
 RPC ports and quantization; see [model deployment](DEPLOYMENT.md).

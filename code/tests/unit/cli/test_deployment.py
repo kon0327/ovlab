@@ -20,8 +20,8 @@ from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 REPOSITORY = Path(__file__).resolve().parents[4]
 OVLAB = REPOSITORY / "ovlab"
 ENV_FILE = "deploy/compose/.env.example"
-LORA = "configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
-OFT = "configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml"
+LORA = "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
+OFT = "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml"
 _PREFLIGHT_IMAGES = ComposeDeployment._preflight_images
 
 
@@ -307,7 +307,7 @@ def test_quantization_override_is_validated_and_recorded_in_plan():
     assert (plan.quantization, plan.quantization_source) == ("4bit", "cli")
     with pytest.raises(ValueError, match="QuIC supports dense hosts only"):
         deployment.plan(
-            "configs/experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml",
+            "experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml",
             quantization="4bit", env_file=ENV_FILE,
         )
     with pytest.raises(ValueError, match="quantization must be one of"):
@@ -696,9 +696,10 @@ def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
     source = REPOSITORY / "configs"
     destination = copied / "configs"
     shutil.copytree(source, destination)
+    shutil.copytree(REPOSITORY / "experiments", copied / "experiments")
     builder = ConfigBundleBuilder(copied)
     before = builder.build(LORA, "profiles/libero-bench-egl.yaml")
-    experiment = destination / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
+    experiment = copied / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
     experiment.write_text(
         experiment.read_text(encoding="utf-8").replace(
             "methodological reference", "methodological reference changed"
@@ -711,7 +712,7 @@ def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
 
 def test_deployment_rejects_non_experiment_configuration():
     deployment = ComposeDeployment(REPOSITORY)
-    with pytest.raises(ValueError, match="configs/experiments"):
+    with pytest.raises(ValueError, match="experiments/evaluation"):
         deployment.plan(
             "configs/policies/openvla-vanilla/base.yaml",
             profile="openvla",
@@ -804,3 +805,21 @@ def test_deploy_dry_run_needs_only_system_python_and_standard_library():
 
     assert completed.returncode == 0 and completed.stderr == ""
     assert json.loads(completed.stdout)["result"]["deployment"] == "docker-compose"
+
+
+def test_experiment_bundle_rejects_inheritance_outside_experiments(tmp_path):
+    repository = tmp_path / "repository"
+    (repository / "configs").mkdir(parents=True)
+    evaluation = repository / "experiments" / "evaluation"
+    evaluation.mkdir(parents=True)
+    (evaluation / "escape.yaml").write_text(
+        'kind: experiment\nextends: ../../configs/parent.yaml\n', encoding="utf-8"
+    )
+    (repository / "configs" / "parent.yaml").write_text(
+        'kind: experiment\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="extends escapes its root"):
+        ConfigBundleBuilder(repository).load_component(
+            "experiments/evaluation/escape.yaml", "experiment"
+        )

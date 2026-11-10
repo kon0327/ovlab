@@ -23,7 +23,8 @@ def resolve_config_path(reference: str | Path, repository_root: Path, section: s
     if not path.suffix:
         names.append(path.with_suffix(".yaml"))
     for name in names:
-        candidate = (root / "configs" / section / name).resolve()
-        if candidate.is_relative_to((root / "configs" / section).resolve()) and candidate.is_file():
+        base = root / section if section.startswith("experiments/") and (root / "experiments").is_dir() else root / "configs" / section
+        candidate = (base / name).resolve()
+        if candidate.is_relative_to(base.resolve()) and candidate.is_file():
             return candidate
     return direct

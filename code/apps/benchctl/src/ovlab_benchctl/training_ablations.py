@@ -104,14 +104,14 @@ class TrainingAblation:
         if not isinstance(reference, str) or not reference or Path(reference).is_absolute():
             raise TrainingProfileError("ablation profile/evaluation references must be nonempty relative paths")
         path = (self.path.parent / reference).resolve()
-        if not path.is_relative_to(self.config_root):
-            raise TrainingProfileError("ablation reference escapes configuration root")
+        if not (path.is_relative_to(self.config_root) or path.is_relative_to(self.config_root.parent / "experiments")):
+            raise TrainingProfileError("ablation reference escapes configuration and experiment roots")
         return path
 
     def _profile(self, reference):
         path = self._reference(reference)
         from .training_profiles import with_fitted_action_normalization
-        return path, with_fitted_action_normalization(load_training_profile(path, config_root=self.config_root), self.fit_action_normalization)
+        return path, with_fitted_action_normalization(load_training_profile(path, config_root=(self.config_root.parent / "experiments" if path.is_relative_to(self.config_root.parent / "experiments") else self.config_root)), self.fit_action_normalization)
 
     def plan(self, planner=None, **planner_kwargs) -> dict:
         scientific = {
@@ -133,7 +133,7 @@ class TrainingAblation:
             scientific["resolved_data"] = next(iter(resolved.values()))["scientific"]["dataset"]
             scientific["resolved_host"] = next(iter(resolved.values()))["scientific"]["base_checkpoint"]
         if self.evaluation is not None:
-            scientific["evaluation"] = load_training_document(self.evaluation, config_root=self.config_root)
+            scientific["evaluation"] = load_training_document(self.evaluation, config_root=(self.config_root.parent / "experiments" if self.evaluation.is_relative_to(self.config_root.parent / "experiments") else self.config_root))
         return {
             "schema_version": ABLATION_PLAN_SCHEMA,
             "ablation_id": identity("training-ablation", scientific, 32),

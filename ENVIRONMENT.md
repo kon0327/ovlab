@@ -101,5 +101,5 @@ training or evaluation container:
 
 ```bash
 ovlab policy list --json
-ovlab eval run configs/experiments/evaluation/libero10-openvla-vanilla-4bit-rpc-smoke.yaml --dry-run --json
+ovlab eval run experiments/evaluation/libero10-openvla-vanilla-4bit-rpc-smoke.yaml --dry-run --json
 ```

@@ -85,7 +85,9 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     doctor = commands.add_parser("doctor", help="diagnose host deployment readiness without changing files")
-    doctor.add_argument("--experiment", help="also check one deployable experiment and its images")
+    doctor_experiment = doctor.add_mutually_exclusive_group()
+    doctor_experiment.add_argument("_pos_experiment", nargs="?", metavar="EXPERIMENT", help="also check one deployable experiment and its images")
+    doctor_experiment.add_argument("--experiment", help="alias for EXPERIMENT")
     doctor.add_argument("--env-file", default="deploy/compose/.env", help="Compose environment file")
     _output_options(doctor)
 
@@ -128,13 +130,16 @@ def _parser() -> argparse.ArgumentParser:
     connect.add_argument("config")
     _output_options(connect)
 
-    experiment = commands.add_parser("experiment", help="plan and run hierarchical JSON experiments")
+    experiment = commands.add_parser("experiment", help="plan and run hierarchical YAML or JSON experiments")
     experiment_commands = experiment.add_subparsers(dest="experiment_command", required=True)
     for operation in ("plan", "run"):
         command = experiment_commands.add_parser(operation, help=f"{operation} an experiment tree")
-        _primary_argument(command, "--spec", "spec", "SPEC", help="ovlab.experiment/v1 JSON file")
+        _primary_argument(command, "--spec", "spec", "SPEC", help="ovlab.experiment/v1 YAML or JSON file")
         command.add_argument("--node", help="slash-separated node path; omit for the root")
         command.add_argument("--node-only", action="store_true", help="run only the selected node, without descendants")
+        execution = command.add_mutually_exclusive_group()
+        execution.add_argument("--sequential", action="store_true", help="run one phase at a time")
+        execution.add_argument("--max-workers", type=int, metavar="N", help="maximum concurrent phases (default: 2; 1–32)")
         if operation == "run":
             command.add_argument("--dry-run", action="store_true", help="resolve and validate without writing or starting workloads")
         _output_options(command)
@@ -142,7 +147,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluation = commands.add_parser("eval", help="run, inspect, and verify evaluation experiments")
     eval_commands = evaluation.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_commands.add_parser("run", help="run one experiment through Docker Compose")
-    eval_run.add_argument("target", help="evaluation YAML name/path in configs/experiments/evaluation")
+    eval_run.add_argument("target", help="evaluation YAML name/path in experiments/evaluation")
     eval_run.add_argument(
         "--renderer", choices=("egl", "glfw"),
         help="override deployment.renderer from the experiment",
@@ -154,7 +159,7 @@ def _parser() -> argparse.ArgumentParser:
     eval_run.add_argument(
         "--offline",
         action="store_true",
-        help="reject a missing checkpoint instead of downloading a pinned or remote/main revision",
+        help="reject a missing checkpoint instead of downloading a pinned, remote/main or latest revision",
     )
     eval_run.add_argument("--project-name")
     eval_run.add_argument("--dry-run", action="store_true")
@@ -183,7 +188,7 @@ def _parser() -> argparse.ArgumentParser:
         _output_options(command)
 
     run = commands.add_parser("run", help="execute, inspect, or verify a run")
-    run.add_argument("target", nargs="?", help="evaluation YAML in configs/experiments/evaluation, or 'inspect'/'verify'")
+    run.add_argument("target", nargs="?", help="evaluation YAML in experiments/evaluation, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH, RUN_ID, or RUN_HASH for inspect or verify")
     run.add_argument(
         "--profile", help="local machine YAML (overrides OVLAB_LOCAL_PROFILE and configs/local/profile.yaml)",
@@ -205,7 +210,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     generate.add_argument(
         "run_path", nargs="?",
-        help="legacy canonical RUN_PATH, RUN_ID, or displayed RUN_HASH",
+        help="canonical run path, ID, or displayed hash",
     )
     generate.add_argument("--run", dest="run_id", help="canonical run ID or displayed run hash")
     generate.add_argument("--task", help="optional canonical task ID")
@@ -239,8 +244,8 @@ def _parser() -> argparse.ArgumentParser:
     isolated.add_argument("--template", default="isolated-default-v1")
     _output_options(isolated)
     grouped = export_commands.add_parser("grouped", help="compare an explicitly selected group of runs")
-    _primary_argument(grouped, "--name", "name", "NAME", help="portable group name")
-    grouped.add_argument("run_targets", nargs="*", metavar="RUN", help="run IDs to compare")
+    grouped.add_argument("group_targets", nargs="*", metavar="TARGET", help="group name followed by run IDs")
+    grouped.add_argument("--name", help="group name; otherwise the first positional target")
     grouped.add_argument("--category", choices=("evaluate", "train"), default="evaluate")
     selectors = grouped.add_mutually_exclusive_group()
     selectors.add_argument("--all-runs", action="store_true", help="select every compatible completed run")
@@ -268,9 +273,9 @@ def _parser() -> argparse.ArgumentParser:
     data_list = data_commands.add_parser(
         "list", help="list active or archived runs, reports, and exports"
     )
-    data_list.add_argument(
-        "--kind", choices=("runs", "reports", "exports", "all"), default="all"
-    )
+    data_kind = data_list.add_mutually_exclusive_group()
+    data_kind.add_argument("_pos_kind", nargs="?", metavar="KIND", choices=("runs", "reports", "exports", "all"))
+    data_kind.add_argument("--kind", choices=("runs", "reports", "exports", "all"), default="all")
     data_list.add_argument("--archived", action="store_true", help="list OVLAB_DATA_ROOT/archive instead of active data")
     _output_options(data_list)
     for action in ("archive", "delete"):
@@ -310,11 +315,11 @@ def _parser() -> argparse.ArgumentParser:
     dataset_providers = dataset_commands.add_parser("providers", help="list registered dataset bridges without model imports")
     _output_options(dataset_providers)
     dataset_resolve = dataset_commands.add_parser("resolve", help="resolve a known benchmark dataset without downloading")
-    _primary_argument(dataset_resolve, "--benchmark", "benchmark", "BENCHMARK", choices=("libero",))
+    dataset_resolve.add_argument("--benchmark", choices=("libero",), required=True)
     _primary_argument(dataset_resolve, "--suite", "suite", "SUITE")
     _output_options(dataset_resolve)
     dataset_fetch = dataset_commands.add_parser("fetch", help="explicitly acquire and prepare a verified dataset")
-    _primary_argument(dataset_fetch, "--source", "source", "SOURCE", choices=("libero", "url"))
+    dataset_fetch.add_argument("--source", choices=("libero", "url"), required=True)
     _primary_argument(dataset_fetch, "--name", "name", "NAME")
     dataset_fetch.add_argument("--version", default="1")
     dataset_fetch.add_argument("--url")
@@ -324,14 +329,14 @@ def _parser() -> argparse.ArgumentParser:
     dataset_fetch.add_argument("--allow-local-http", action="store_true", help=argparse.SUPPRESS)
     _output_options(dataset_fetch)
     dataset_import = dataset_commands.add_parser("import", help="copy and register an existing local dataset immutably")
-    _primary_argument(dataset_import, "--name", "name", "NAME")
-    _primary_argument(dataset_import, "--version", "version", "VERSION")
+    dataset_import.add_argument("--name", required=True)
+    dataset_import.add_argument("--version", required=True)
     _primary_argument(dataset_import, "--path", "path", "PATH")
     dataset_import.add_argument("--format", dest="preparation")
     _output_options(dataset_import)
     dataset_prepare = dataset_commands.add_parser("prepare", help="verify the selected immutable preparation")
     _primary_argument(dataset_prepare, "--dataset", "dataset_id", "DATASET")
-    _primary_argument(dataset_prepare, "--format", "preparation", "FORMAT")
+    dataset_prepare.add_argument("--format", dest="preparation", required=True)
     _output_options(dataset_prepare)
     dataset_list = dataset_commands.add_parser("list", help="list locally ready immutable datasets")
     _output_options(dataset_list)
@@ -353,7 +358,7 @@ def _parser() -> argparse.ArgumentParser:
     _primary_argument(train_plan, "--profile", "profile", "PROFILE")
     _output_options(train_plan)
     train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
-    train_run.add_argument("target", help="training YAML name/path in configs/experiments/training")
+    train_run.add_argument("target", help="training YAML name/path in experiments/training")
     train_run.add_argument("--allow-dataset-download", action="store_true")
     train_run.add_argument("--dry-run", action="store_true", help="resolve the training plan without starting a trainer")
     for command in (train_validate, train_plan, train_run):
@@ -366,7 +371,7 @@ def _parser() -> argparse.ArgumentParser:
         _primary_argument(command, "--suite", "suite", "SUITE")
         command.add_argument("--fit-action-normalization", action="store_true", help="fit one consistent train-only action normalization contract across all variants")
         if operation in {"materialize", "run"}:
-            _primary_argument(command, "--output", "output", "OUTPUT", help="new directory for resolved profiles and plan")
+            command.add_argument("--output", required=True, help="new directory for immutable resolved profiles and plan")
         _output_options(command)
     for command_name in ("status", "inspect", "verify"):
         command = train_commands.add_parser(command_name, help=f"{command_name} a canonical training run")
@@ -744,6 +749,9 @@ def _compact(command: str, result) -> str:
             lines.append(f"phases      {len(result['steps'])}")
         if "selected_node" in result:
             lines.append(f"selection   {result['selected_node'] or '<root>'}")
+        if isinstance(result.get("execution"), dict):
+            execution = result["execution"]
+            lines.append(f"execution   {execution.get('mode', '-')} (max {execution.get('max_workers', '-')} workers)")
         for key in ("overview", "runs_root", "exports_root"):
             if key in result:
                 lines.append(f"{key:<11} {result[key]}")
@@ -873,7 +881,7 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.POLICY_UNAVAILABLE, "policy_unavailable"
     if name.startswith("RemotePolicy") or name in {"ContractCompatibilityError", "ConnectionError"}:
         return ExitCode.SERVICE, "service_or_capability_error"
-    if name.startswith("Config") or name in {"StrictYamlError", "ResolvedConfigWriteError"}:
+    if name.startswith("Config") or name in {"StrictYamlError", "ResolvedConfigWriteError", "ExperimentSpecError"}:
         return ExitCode.CONFIGURATION, "configuration_error"
     if "benchmark" in module or name in {"ExperimentExecutionError", "RunnerLifecycleError"}:
         return ExitCode.RUNTIME, "runtime_error"
@@ -913,6 +921,32 @@ def _confirm_data_operation(args, preview: dict[str, object]) -> bool:
 
 
 def _dispatch(args):
+    for name, value in vars(args).copy().items():
+        if name.startswith("_pos_") and value is not None:
+            setattr(args, name[len("_pos_"):], value)
+    if args.command == "export" and args.export_command == "grouped":
+        targets = list(args.group_targets)
+        if args.name is None:
+            if not targets:
+                raise CliUsageError("export grouped requires a group NAME")
+            args.name = targets.pop(0)
+        if targets:
+            if args.runs or args.all_runs or args.same_model_as:
+                raise CliUsageError("use positional RUNs or a selector flag, not both")
+            args.runs = targets
+        if not (args.runs or args.all_runs or args.same_model_as):
+            raise CliUsageError("export grouped requires RUNs or a selector flag")
+    if args.command == "data" and args.data_command in {"archive", "delete"}:
+        selected = (args.run_id, args.report_id, args.export_id, args.all_data)
+        if args.data_target is not None:
+            if any(selected):
+                raise CliUsageError("use a typed TARGET or a selector flag, not both")
+            kind, separator, value = args.data_target.partition(":")
+            if not separator or not value or kind not in {"run", "report", "export"}:
+                raise CliUsageError("data TARGET must be run:ID, report:ID or export:TYPE:ID")
+            setattr(args, {"run": "run_id", "report": "report_id", "export": "export_id"}[kind], value)
+        elif not any(selected):
+            raise CliUsageError("data operation requires a typed TARGET, a selector flag or --all")
     if args.command == "doctor":
         from .doctor import Doctor
         return Doctor(_repository_root()).run(experiment=args.experiment, env_file=args.env_file), args.json, None
@@ -953,10 +987,12 @@ def _dispatch(args):
         from .experiment_workflow import ExperimentWorkflow
         workflow = ExperimentWorkflow(_repository_root())
         if args.experiment_command == "plan":
-            return workflow.plan(args.spec, node=args.node, node_only=args.node_only), args.json, None
+            return workflow.plan(args.spec, node=args.node, node_only=args.node_only,
+                                 sequential=args.sequential, max_workers=args.max_workers), args.json, None
         previous = _install_interrupt_handlers()
         try:
-            result = workflow.run(args.spec, node=args.node, node_only=args.node_only, dry_run=args.dry_run)
+            result = workflow.run(args.spec, node=args.node, node_only=args.node_only, dry_run=args.dry_run,
+                                  sequential=args.sequential, max_workers=args.max_workers)
         finally:
             _restore_handlers(previous)
         return result, args.json, None
@@ -1045,8 +1081,10 @@ def _dispatch(args):
             if args.run_path is not None or args.output is not None:
                 raise CliUsageError("report generate --run cannot be combined with legacy RUN_PATH/--output")
             return app.report_generate(args.run_id, args.profile, task_id=args.task), args.json, None
-        if args.run_path is None or args.output is None:
-            raise CliUsageError("report generate requires --run RUN_ID or legacy RUN_PATH --output PATH")
+        if args.run_path is None:
+            raise CliUsageError("report generate requires RUN, --run RUN or legacy RUN_PATH --output PATH")
+        if args.output is None:
+            return app.report_generate(args.run_path, args.profile, task_id=args.task), args.json, None
         if args.task is not None or args.profile != "libero-task-default":
             raise CliUsageError("--task/--profile require the --run form")
         return app.generate_report(args.run_path, args.output), args.json, None

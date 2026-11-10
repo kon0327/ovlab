@@ -86,7 +86,8 @@ class ConfigResolver:
         return self._inside(self.config_root / path, self.config_root, label)
 
     def _load_composed(self, path: Path, expected_kind: str, stack=()) -> dict[str, Any]:
-        path = self._inside(path, self.config_root, "configuration")
+        root = self.repository_root / "experiments" if expected_kind == "experiment" and path.resolve().is_relative_to(self.repository_root / "experiments") else self.config_root
+        path = self._inside(path, root, "configuration")
         if path in stack:
             chain = " -> ".join(str(item) for item in stack + (path,))
             raise ConfigReferenceError(f"extends cycle detected: {chain}")
@@ -102,7 +103,7 @@ class ConfigResolver:
         else:
             if not isinstance(reference, str) or not reference:
                 raise ConfigSchemaError(f"{path}.extends must be a non-empty relative path")
-            parent_path = self._inside(path.parent / reference, self.config_root, "extends")
+            parent_path = self._inside(path.parent / reference, root, "extends")
             parent = self._load_composed(parent_path, expected_kind, stack + (path,))
             if raw.get("type") != parent.get("type"):
                 raise ConfigSchemaError(f"{path}.type must match its parent")
@@ -112,6 +113,9 @@ class ConfigResolver:
 
     def load_component(self, reference: str, expected_kind: str) -> dict[str, Any]:
         """Load, inherit, and validate one root-relative component document."""
+        if expected_kind == "experiment" and reference.startswith("experiments/"):
+            root = self.repository_root / "experiments"
+            return self._load_composed(self._inside(self.repository_root / reference, root, "experiment"), expected_kind)
         return self._load_composed(self._root_reference(reference, "component"), expected_kind)
 
     @staticmethod
@@ -138,7 +142,8 @@ class ConfigResolver:
     ) -> ResolvedExperimentConfig:
         experiment_path = Path(experiment)
         if not experiment_path.is_absolute(): experiment_path = self.repository_root / experiment_path
-        experiment_path = self._inside(experiment_path, self.config_root, "experiment")
+        experiment_root = self.repository_root / "experiments" if experiment_path.resolve().is_relative_to(self.repository_root / "experiments") else self.config_root
+        experiment_path = self._inside(experiment_path, experiment_root, "experiment")
         experiment_doc = self._load_composed(experiment_path, "experiment")
 
         kinds = {

@@ -11,7 +11,7 @@ import subprocess
 
 
 EXCLUDED_PREFIXES = (
-    ".git/", "configs/", "runs/", "checkpoints/", "datasets/",
+    ".git/", "configs/", "experiments/", "runs/", "checkpoints/", "datasets/",
     "docs/", "notebooks/", "code/tests/",
 )
 

@@ -64,6 +64,7 @@ def test_migration_preview_apply_finalize_cleanup_preserves_and_verifies(tmp_pat
     assert (data / "runs/legacy-train-train-1/train/train-1/training-plan.json").read_text() == "{}"
     spec = json.loads((data / "runs/legacy-train-train-1/.experiment/spec.json").read_text())
     assert spec["schema_version"] == "ovlab.experiment/v1"
+    assert spec["kind"] == "workflow"
     assert spec["id"] == "legacy-train-train-1"
     assert json.loads((data / "exports/legacy-train-train-1/experiment.json").read_text())["status"] == "migrating"
     assert "Migrated train run" in (data / "exports/legacy-train-train-1/index.html").read_text()

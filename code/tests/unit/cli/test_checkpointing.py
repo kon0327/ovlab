@@ -28,7 +28,7 @@ from ovlab_benchctl.resolver import ConfigResolver
 
 
 REPOSITORY = Path(__file__).resolve().parents[4]
-EXPERIMENT = "configs/experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml"
+EXPERIMENT = "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml"
 
 
 def _spec(payload: bytes = b"immutable checkpoint") -> CheckpointSpec:
@@ -61,7 +61,7 @@ def test_portable_experiment_resolves_pinned_registry_identity():
 
 def test_vanilla_base_checkpoint_is_also_pinned_and_verifiable():
     spec = checkpoint_spec(
-        REPOSITORY, "configs/experiments/evaluation/libero-vanilla-smoke.yaml"
+        REPOSITORY, "experiments/evaluation/libero-vanilla-smoke.yaml"
     )
 
     assert spec.resource_id == "openvla-7b"
@@ -116,6 +116,7 @@ def test_registry_accepts_unpinned_selector_without_hashes():
 def test_direct_eval_revision_scenarios_resolve_to_content_identity(tmp_path, selector):
     root = tmp_path / "project"
     shutil.copytree(REPOSITORY / "configs", root / "configs")
+    shutil.copytree(REPOSITORY / "experiments", root / "experiments")
     registry = root / "configs/resources/registry.yaml"
     document = registry.read_text()
     start = document.index("  openvla-7b:\n")
@@ -144,7 +145,7 @@ def test_direct_eval_revision_scenarios_resolve_to_content_identity(tmp_path, se
     )
     with remote:
         resolved = ConfigResolver(root / "configs", repository_root=root).resolve(
-            "configs/experiments/evaluation/libero-vanilla-smoke.yaml", local_profile=profile,
+            "experiments/evaluation/libero-vanilla-smoke.yaml", local_profile=profile,
             environment={"OVLAB_GLOBAL_HF_CACHE": str(tmp_path / "cache")},
         )
     assert resolved.policy_settings.model.revision == revision

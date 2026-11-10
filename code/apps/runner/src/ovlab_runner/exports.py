@@ -30,6 +30,7 @@ from .derived import (
 )
 from .errors import ArtifactError
 from .inspection import verify_run
+from .isolated_index import render_isolated_index
 from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
@@ -1070,8 +1071,11 @@ class ExportEngine:
                 "template": {"id": template, "engine_version": EXPORT_ENGINE_VERSION},
                 "datetime": {"source_run_created_utc": record["created_at_utc"], "exported_at_utc": _utc_now()},
                 "omitted_figures": omitted,
-                "files": _file_inventory(stage),
             }
+            (stage / "index.html").write_text(
+                render_isolated_index(stage, category="evaluate", metadata=metadata), encoding="utf-8",
+            )
+            metadata["files"] = _file_inventory(stage)
             _atomic_json(stage / "metadata.json", metadata)
             _publish(stage, target)
         except Exception:

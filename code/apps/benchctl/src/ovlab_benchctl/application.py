@@ -143,8 +143,8 @@ class OvlabApplication:
         path = path.resolve()
         if not path.is_file():
             raise ConfigReferenceError(f"configuration does not exist: {path}")
-        if not path.is_relative_to(self.config_root):
-            raise ConfigReferenceError("CLI configurations must be inside configs/")
+        if not (path.is_relative_to(self.config_root) or path.is_relative_to(self.repository_root / "experiments")):
+            raise ConfigReferenceError("CLI configurations must be inside configs/ or experiments/")
         return path
 
     def _relative(self, path: Path) -> str:
@@ -238,7 +238,7 @@ class OvlabApplication:
         path = resolve_config_path(reference, self.repository_root, "experiments/training")
         if not path.is_file():
             raise ConfigReferenceError(f"training profile does not exist: {path.resolve()}")
-        return path.resolve(), load_training_profile(path, config_root=self.config_root)
+        return path.resolve(), load_training_profile(path, config_root=(self.repository_root / "experiments" if path.is_relative_to(self.repository_root / "experiments") else self.config_root))
 
     def _report_profile(self, reference):
         from ovlab_runner import ArtifactError, ReportProfile, builtin_profile
@@ -973,9 +973,9 @@ class OvlabApplication:
     def train_profiles(self):
         from .training_composition import load_training_profile
         profiles = []
-        for path in sorted((self.config_root / "experiments/training").rglob("*.yaml")):
+        for path in sorted((self.repository_root / "experiments/training").rglob("*.yaml")):
             try:
-                profile = load_training_profile(path, config_root=self.config_root)
+                profile = load_training_profile(path, config_root=(self.repository_root / "experiments" if path.is_relative_to(self.repository_root / "experiments") else self.config_root))
             except Exception as exc:
                 profiles.append({"path": str(path), "valid": False, "error": str(exc)})
             else:

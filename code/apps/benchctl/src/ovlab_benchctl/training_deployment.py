@@ -48,7 +48,7 @@ class TrainingDeployment:
         if not path.is_file():
             raise TrainingRuntimeError(f"training profile does not exist: {path.resolve()}")
         from .training_ablations import load_training_profile
-        return path.resolve(), load_training_profile(path.resolve(), config_root=self.repository_root / "configs")
+        return path.resolve(), load_training_profile(path.resolve(), config_root=(self.repository_root / "experiments" if path.resolve().is_relative_to(self.repository_root / "experiments") else self.repository_root / "configs"))
 
     def _gpu(self) -> tuple[int, float]:
         completed = self.runner(

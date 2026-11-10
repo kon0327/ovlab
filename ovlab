@@ -35,6 +35,24 @@ if ! command -v "$python_executable" >/dev/null 2>&1; then
     exit 127
 fi
 
+# Translate canonical host paths when reporting runs inside its data mount.
+_ovlab_translate_run_paths() {
+    local host_root="$1" index argument prefix value
+    local -n command_args="$2"
+    for ((index=0; index<${#command_args[@]}; index++)); do
+        argument="${command_args[$index]}"
+        prefix=""
+        value="$argument"
+        if [[ "$argument" == --*=/* ]]; then
+            prefix="${argument%%=*}="
+            value="${argument#*=}"
+        fi
+        if [[ "$value" == "$host_root/"* ]]; then
+            command_args[$index]="${prefix}/var/lib/ovlab/runs/${value#"$host_root/"}"
+        fi
+    done
+}
+
 # Dataset mutation is always isolated from checkpoints, benchmark runs, and
 # reporting. Only the explicit `dataset fetch` command receives network access.
 if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; then
@@ -85,21 +103,50 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
         mkdir -p -- "$datasets_root"
         chmod 2770 -- "$datasets_root"
     fi
-    if [[ "$help_requested" == "false" && "$dataset_command" == "fetch" ]]; then
-        for ((index=0; index<${#args[@]}; index++)); do
-            if [[ "${args[$index]}" == "--source" && $((index + 1)) -lt ${#args[@]} ]]; then
-                dataset_source="${args[$((index + 1))]}"
-            elif [[ "${args[$index]}" == "--name" && $((index + 1)) -lt ${#args[@]} ]]; then
-                dataset_name="${args[$((index + 1))]}"
-            fi
+    dataset_target_index=-1
+    dataset_path_index=-1
+    dataset_path_equals=false
+    if [[ "$help_requested" == "false" && ( "$dataset_command" == "fetch" || "$dataset_command" == "import" ) ]]; then
+        [[ "$dataset_command" == "import" ]] && dataset_source="local"
+        for ((index=2; index<${#args[@]}; index++)); do
+            argument="${args[$index]}"
+            case "$argument" in
+                --source|--name|--path|--version|--url|--sha256|--archive|--format)
+                    if (( index + 1 < ${#args[@]} )); then
+                        index=$((index + 1))
+                        case "$argument" in
+                            --source) dataset_source="${args[$index]}" ;;
+                            --name) dataset_name="${args[$index]}" ;;
+                            --path) dataset_path_index=$index ;;
+                        esac
+                    fi ;;
+                --source=*) dataset_source="${argument#--source=}" ;;
+                --name=*) dataset_name="${argument#--name=}" ;;
+                --path=*) dataset_path_index=$index; dataset_path_equals=true ;;
+                --*) ;;
+                *)
+                    if (( dataset_target_index >= 0 )); then
+                        echo "ovlab: dataset $dataset_command accepts one positional target." >&2
+                        exit 2
+                    fi
+                    dataset_target_index=$index ;;
+            esac
         done
-    elif [[ "$help_requested" == "false" && "$dataset_command" == "import" ]]; then
-        dataset_source="local"
-        for ((index=0; index<${#args[@]}; index++)); do
-            if [[ "${args[$index]}" == "--name" && $((index + 1)) -lt ${#args[@]} ]]; then
-                dataset_name="${args[$((index + 1))]}"
+        if (( dataset_target_index >= 0 )); then
+            if [[ "$dataset_command" == "fetch" ]]; then
+                if [[ -n "$dataset_name" ]]; then
+                    echo "ovlab: dataset fetch accepts NAME or --name, not both." >&2
+                    exit 2
+                fi
+                dataset_name="${args[$dataset_target_index]}"
+            else
+                if (( dataset_path_index >= 0 )); then
+                    echo "ovlab: dataset import accepts PATH or --path, not both." >&2
+                    exit 2
+                fi
+                dataset_path_index=$dataset_target_index
             fi
-        done
+        fi
     fi
     if [[ -n "$dataset_source" || -n "$dataset_name" ]]; then
         if [[ ! "$dataset_source" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || ! "$dataset_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
@@ -117,13 +164,16 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
     fi
     if [[ "$dataset_command" == "import" && "$help_requested" == "false" ]]; then
         source_path=""
-        for ((index=0; index<${#args[@]}; index++)); do
-            if [[ "${args[$index]}" == "--path" && $((index + 1)) -lt ${#args[@]} ]]; then
-                source_path="$(realpath -- "${args[$((index + 1))]}")"
-                args[$((index + 1))]="/imports/source"
-                break
+        if (( dataset_path_index >= 0 )); then
+            source_path="${args[$dataset_path_index]}"
+            [[ "$dataset_path_equals" == true ]] && source_path="${source_path#--path=}"
+            source_path="$(realpath -- "$source_path")"
+            if [[ "$dataset_path_equals" == true ]]; then
+                args[$dataset_path_index]="--path=/imports/source"
+            else
+                args[$dataset_path_index]="/imports/source"
             fi
-        done
+        fi
         if [[ -z "$source_path" || ! -d "$source_path" ]]; then
             echo "ovlab: dataset import --path must name an existing directory." >&2
             exit 3
@@ -174,6 +224,7 @@ if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${
         training_report_mounts=()
         training_report_roots=()
         training_report_args=("$@")
+        _ovlab_translate_run_paths "$runs_root" training_report_args
         parameter_mount_added=false
         for ((index=0; index<${#training_report_args[@]}; index++)); do
             parameter_index=-1
@@ -287,6 +338,8 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
         exports_root="$(realpath -m -- "$exports_root")"
         derived_root="$exports_root/evaluate/derived"
         configs_root="$(realpath -m -- "$configs_root")"
+        reporting_args=("$@")
+        _ovlab_translate_run_paths "$runs_root" reporting_args
         if [[ "${1:-}" != "report" || "${2:-}" != "profiles" ]] && [[ ! -d "$runs_root" ]]; then
             echo "ovlab: canonical run source directory does not exist: $runs_root" >&2
             exit 4
@@ -308,7 +361,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 --read-only \
                 --user 10001:10001 \
                 --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
-                "$reporting_image" "$@"
+                "$reporting_image" "${reporting_args[@]}"
         fi
         verification_kind=""
         if [[ "${1:-}" == "report" && "${2:-}" == "verify" ]]; then
@@ -353,7 +406,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
                 --env "OVLAB_DERIVED_DISPLAY_ROOT=$derived_root" \
                 --env "OVLAB_EXPORTS_DISPLAY_ROOT=$exports_root" \
                 "${verification_mounts[@]}" \
-                "$reporting_image" "$@"
+                "$reporting_image" "${reporting_args[@]}"
         fi
         mkdir -p -- "$runs_root" "$exports_root"
         if [[ -z "${OVLAB_EXPERIMENT_ID:-}" ]]; then
@@ -383,7 +436,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
             --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly" \
             --mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly" \
             --mount "type=bind,source=$exports_root,target=/var/lib/ovlab/exports" \
-            "$reporting_image" "$@"
+            "$reporting_image" "${reporting_args[@]}"
     fi
 fi
 exec "$python_executable" -m ovlab_benchctl.cli "$@"

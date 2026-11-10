@@ -1,13 +1,13 @@
 # Running Evaluations
 
 OVLAB separates the portable evaluation experiment from machine-specific run
-settings. A file in `configs/experiments/evaluation/` defines the benchmark, policy, and
+settings. A file in `experiments/evaluation/` defines the benchmark, policy, and
 metrics. A local profile provides paths to datasets, checkpoints, and outputs,
 as well as device selection. These profiles serve different purposes.
 
 ## Evaluation lifecycle
 
-`eval run TARGET` selects a YAML from `configs/experiments/evaluation`. After a run,
+`eval run TARGET` selects a YAML from `experiments/evaluation`. After a run,
 use `eval inspect RUN_ID_OR_HASH` or `eval verify RUN_ID_OR_HASH`. All evaluation
 run examples accept explicit YAML paths as well as short names. `deploy run` now
 starts a persistent model service described in [`DEPLOYMENT.md`](DEPLOYMENT.md).
@@ -22,9 +22,9 @@ set the data paths:
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --dry-run
+  experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --dry-run
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
+  experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
 ```
 
 `--dry-run` displays and validates the plan without starting Docker. `eval
@@ -39,7 +39,7 @@ experiment YAML.
 
 `ovlab run` uses the low-level native execution path. You can provide the
 evaluation YAML by its short name; the CLI looks for it in
-`configs/experiments/evaluation/`:
+`experiments/evaluation/`:
 
 ```bash
 ./ovlab run libero10-lora-4bit-three-per-task --dry-run
@@ -85,7 +85,7 @@ dependencies; the Docker workflow is usually simpler for operator runs.
 `ovlab run` accepts both explicit paths and short YAML names:
 
 ```bash
-./ovlab run configs/experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
+./ovlab run experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
 ./ovlab run libero10-lora-4bit-three-per-task
 ```
 
@@ -111,7 +111,7 @@ authenticate with `wandb login` or `WANDB_API_KEY`.
 W&B settings such as `WANDB_MODE=offline` apply.
 
 ```bash
-OVLAB_WANDB_PROJECT=ovlab ./ovlab eval run configs/experiments/evaluation/libero-mock-smoke.yaml
+OVLAB_WANDB_PROJECT=ovlab ./ovlab eval run experiments/evaluation/libero-mock-smoke.yaml
 ```
 
 The mirror records numeric episode metrics, per-task metrics, averages across

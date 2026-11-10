@@ -16,16 +16,16 @@ model:
 ```
 
 The comparable LIBERO10 smoke pair is the token baseline
-`configs/experiments/training/quic/action-chunks/libero10-token-smoke.yaml`
-(head disabled) and `configs/experiments/training/quic/action-chunks/libero10-h8-smoke.yaml`
+`experiments/training/quic/action-chunks/libero10-token-smoke.yaml`
+(head disabled) and `experiments/training/quic/action-chunks/libero10-h8-smoke.yaml`
 (head enabled). An H=1 continuous-head control is also available at
-`configs/experiments/training/quic/action-chunks/libero10-h1-smoke.yaml`.
+`experiments/training/quic/action-chunks/libero10-h1-smoke.yaml`.
 They keep batch 4, accumulation 4, a 5% whole episode validation partition,
 train-only fitted normalization, three optimizer updates and the 24 GiB budget.
 They are configurations, not evidence of a successful GPU run.
 
 ```bash
-./ovlab train run configs/experiments/training/quic/action-chunks/libero10-h8-smoke.yaml --json
+./ovlab train run experiments/training/quic/action-chunks/libero10-h8-smoke.yaml --json
 ```
 
 Rebuild the OpenVLA QuIC training, policy and dataset/finalizer images from these sources

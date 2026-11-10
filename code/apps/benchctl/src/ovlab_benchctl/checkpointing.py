@@ -193,7 +193,8 @@ def checkpoint_spec(repository_root: Path, experiment: str | Path) -> Checkpoint
     kind = load(experiment_path).get("kind")
     if kind not in {"experiment", "deployment"}:
         raise CheckpointResolutionError("checkpoint selection requires an evaluation or deployment config")
-    experiment_doc = _composed(experiment_path, config_root, kind)
+    experiment_root = root / "experiments" if experiment_path.resolve().is_relative_to(root / "experiments") else config_root
+    experiment_doc = _composed(experiment_path, experiment_root, kind)
     try:
         policy_ref = experiment_doc["components"]["policy"]  # type: ignore[index]
         registry_ref = experiment_doc["resources"]["registry"]  # type: ignore[index]

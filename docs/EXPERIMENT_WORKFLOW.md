@@ -1,11 +1,12 @@
 # Experiment workflow
 
-An `ovlab.experiment/v1` JSON document describes one experiment tree. Any
+An `ovlab.experiment/v1` YAML or JSON document describes one experiment tree. Any
 node can run training, evaluation, both, or neither. Nodes without `execute`
 group their children. The tree can be as deep as needed within the validated
 limit of 12 levels and 512 nodes.
 
-The [model comparison example](../configs/experiments/workflows/libero-model-tree.json)
+The model comparison example is available as [YAML](../experiments/workflows/libero-model-tree.yaml)
+and [JSON](../experiments/workflows/libero-model-tree.json). It
 has model branches, a task branch and quantization ablations. It also runs
 training at the LoRA model node. Its evaluation profile points to a configured
 checkpoint independently of that training run. `depends_on` controls execution
@@ -13,40 +14,79 @@ order only; it does not select a newly trained checkpoint. To evaluate the
 checkpoint from a training run, configure a matching policy/checkpoint artifact
 explicitly before launching evaluation.
 
+Two evaluation-only examples use the same 4-bit merged OpenVLA-LoRA profile:
+
+```bash
+ovlab experiment run experiments/workflows/libero10-lora-4bit-smoke.yaml
+ovlab experiment run experiments/workflows/libero10-lora-4bit-eval.yaml
+```
+
+The smoke test runs task 0 once, limited to two environment steps. It checks
+the execution and reporting pipeline; its truncated result is not a meaningful
+measurement of task success. The evaluation uses all ten LIBERO-10 tasks,
+three episodes per task and the profile's 520-step limit. Both load the
+configured `openvla-7b-finetuned-libero-10` checkpoint and do not train a model.
+The checkpoint and the images required by the deployment must already be
+available. Add `--dry-run` to validate either workflow without running it.
+
 ## Plan and run
 
 ```bash
-./ovlab experiment plan --spec configs/experiments/workflows/libero-model-tree.json --json
-./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json --dry-run
-./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json
-./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json --node lora/task-0
-./ovlab experiment run --spec configs/experiments/workflows/libero-model-tree.json --node lora --node-only
+ovlab experiment plan experiments/workflows/libero-model-tree.yaml --json
+ovlab experiment run experiments/workflows/libero-model-tree.yaml --dry-run
+ovlab experiment run experiments/workflows/libero-model-tree.yaml
+ovlab experiment run experiments/workflows/libero-model-tree.yaml --node lora/task-0
+ovlab experiment run experiments/workflows/libero-model-tree.yaml --node lora --node-only
+ovlab experiment run experiments/workflows/libero-model-tree.yaml --sequential
+ovlab experiment run experiments/workflows/libero-model-tree.yaml --max-workers 4
 ```
+
+`--spec` remains an equivalent named form. A command accepts either the
+positional target or its named alias, and rejects specifying both.
+
+Independent phases run in parallel by default, with at most two workers.
+`--sequential` runs one phase at a time; `--max-workers N` sets a limit from
+1 to 32 (`--max-workers 1` is equivalent to `--sequential`). These options
+also apply to `plan` and `run --dry-run`, which show the selected mode. A node's
+evaluation waits for its training, and explicit `depends_on` phases must finish
+before dependent phases start. On failure, no additional phases are started;
+active subprocesses are interrupted and completed evidence remains recorded.
+
+The worker limit does not assign GPUs or reserve VRAM. Concurrent GPU phases
+can contend for the same device; use `--sequential` when they cannot fit
+together. The training preflight estimate applies to each individual run. In
+particular, the example's non-quantized LoRA profile estimates 27 GiB and is
+rejected on a 24 GiB device even with `--sequential`. Select a compatible
+training profile or a GPU with more memory. The QuIC BF16 profile has a 23 GiB
+planning estimate, but represents a different adaptation method and does not
+guarantee a particular peak for every configuration.
 
 `--node` selects that node and its descendants. `--node-only` selects just
 that node. A selected subtree must contain every phase it names in
 `depends_on`; otherwise planning fails before any workload starts. `plan` and
-`run --dry-run` validate the selected subtree and write nothing. The JSON tree
+`run --dry-run` validate the selected subtree and write nothing. The tree
 shape is always checked, while unrelated siblings need not have runnable
 profiles when a node is selected. Running creates
 a new instance whose directory name contains the spec ID, UTC timestamp and
 short content identity.
 
 The plan contains each node's complete resolved train/evaluate configuration
-and a source for every field. It is saved with the original JSON under
-`runs/<instance>/.experiment/`. `result.json` records each phase's run ID,
+and a source for every field. A canonical `spec.json` is saved under
+`runs/<instance>/.experiment/`. When the input is YAML, `spec.yaml` also
+preserves the original file, including comments. `result.json` records each phase's run ID,
 canonical path, CLI result, comparison report and any failure. The export root
 has an `experiment.json` index. Completed runs remain authoritative if a later
 node or report fails.
 
-## JSON fields
+## Workflow fields
 
 | Field | Purpose |
 | --- | --- |
 | `schema_version` | Required at the root; `ovlab.experiment/v1`. |
+| `kind` | Required at the root; `workflow`. |
 | `id`, `name` | Portable ID and readable title. `id` is required at every node; `name` at the root. |
-| `config.train.profile` | Existing YAML under `configs/experiments/training/`. |
-| `config.evaluate.profile` | Existing YAML under `configs/experiments/evaluation/`. |
+| `config.train.profile` | Existing YAML under `experiments/training/`. |
+| `config.evaluate.profile` | Existing YAML under `experiments/evaluation/`. |
 | `config.train.patch` | Changes fields in the resolved training profile, such as `dataset`, `model`, `training` or `resources`. |
 | `config.evaluate.patch` | Changes fields in the resolved evaluation YAML, including `components` references and `deployment`. |
 | `config.evaluate.component_patches` | Changes validated benchmark, policy, metrics, protocol or artifacts YAML; for example `benchmark.settings.task_indices`. |
@@ -61,9 +101,16 @@ validated in full. Profile references and patched components must remain
 inside `configs/`; arbitrary file paths, unknown fields, invalid component
 combinations, missing dependencies and dependency cycles fail at planning.
 
+Files ending in `.yaml` or `.yml` use the same strict YAML subset as other
+OVLAB configurations: two-space indentation, mappings, sequences, inline
+scalar lists, and quoted or plain scalars. Duplicate keys, anchors, aliases,
+tags, merge keys, multi-document files and inline mappings are rejected. Other
+extensions continue to be parsed as JSON. Both formats produce the same plan,
+configuration inheritance and canonical spec hash for the same data.
+
 Each phase uses the existing training or evaluation owner. For execution, the
 workflow temporarily materializes the resolved YAML under the appropriate
-`configs/**/.generated/` directory, then removes it. The immutable plan and
+`experiments/**/.generated/` or `configs/**/.generated/` directory, then removes it. The immutable plan and
 canonical run evidence retain the exact resolved documents.
 
 ## Artifacts and comparisons
@@ -71,6 +118,7 @@ canonical run evidence retain the exact resolved documents.
 ```text
 runs/<instance>/
   .experiment/{spec,plan,result}.json
+  .experiment/spec.yaml  # original input when a YAML file was used
   train/<node-path>/<run-id>/
   evaluate/<node-path>/<run-id>/
 

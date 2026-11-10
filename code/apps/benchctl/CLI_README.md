@@ -1,8 +1,8 @@
 # OVLAB CLI
 
 `train`, `eval`, and `deploy` share `run TARGET`, `inspect TARGET`, and `verify TARGET`.
-Each `run` supports `--dry-run`. Configuration names use `configs/experiments/training`,
-`configs/experiments/evaluation`, and `configs/deploy`, respectively. `eval` replaces
+Each `run` supports `--dry-run`. Configuration names use `experiments/training`,
+`experiments/evaluation`, and `configs/deploy`, respectively. `eval` replaces
 the former evaluation behavior of `deploy`. See [model deployment](../../../DEPLOYMENT.md).
 
 `ovlab` is the unified command-line interface for OpenVLABenchmark. It exposes
@@ -54,8 +54,8 @@ Check the host before deploying:
 
 ```bash
 ./ovlab doctor
-./ovlab doctor --experiment configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab doctor --experiment configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --json
+./ovlab doctor --experiment experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+./ovlab doctor --experiment experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --json
 ```
 
 `doctor` reads the checkout and Compose environment, probes Docker Compose and
@@ -79,11 +79,11 @@ one command:
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
-`TARGET` accepts a path or a YAML filename/name under `configs/experiments/evaluation`.
-`train run TARGET` uses the same form under `configs/experiments/training`.
+`TARGET` accepts a path or a YAML filename/name under `experiments/evaluation`.
+`train run TARGET` uses the same form under `experiments/training`.
 
 The CLI validates the Compose model, passes the same experiment to both
 containers, waits for policy readiness, runs the benchmark, propagates failure,
@@ -148,7 +148,7 @@ Run the five-task cross-suite Vanilla NF4 experiment with:
 
 ```bash
 ./ovlab eval run \
-  configs/experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml
+  experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml
 ```
 
 Without `--quantization`, the selected policy component determines inference
@@ -277,7 +277,7 @@ requiring a runnable provider:
 
 ```bash
 ./ovlab config validate \
-  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
+  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --mode descriptor
 ```
 
@@ -285,7 +285,7 @@ Runtime validation additionally requires a complete runnable configuration:
 
 ```bash
 ./ovlab config validate \
-  configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
+  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
   --mode runtime
 ```
 
@@ -370,7 +370,7 @@ inference trace. Privileged benchmark signals are not part of the RPC schema.
 
 ## 5. Low-level native runner
 
-`TARGET` accepts a path or a YAML filename/name under `configs/experiments/evaluation`.
+`TARGET` accepts a path or a YAML filename/name under `experiments/evaluation`.
 `--profile` selects the local machine profile for this run. If omitted, the CLI
 uses `OVLAB_LOCAL_PROFILE` or `configs/local/profile.yaml`.
 

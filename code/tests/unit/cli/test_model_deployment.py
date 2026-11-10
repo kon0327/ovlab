@@ -156,4 +156,4 @@ def test_predefined_paths_cover_moved_training_and_evaluation():
     assert resolve_config_path("libero10-lora-merged-rpc-smoke", ROOT, "experiments/evaluation").is_file()
     assert resolve_config_path("quic/libero10-a1-qp2", ROOT, "experiments/training").is_file()
     assert not (ROOT / "configs/training").exists()
-    assert not list((ROOT / "configs/experiments").glob("*.yaml"))
+    assert not list((ROOT / "experiments").glob("*.yaml"))

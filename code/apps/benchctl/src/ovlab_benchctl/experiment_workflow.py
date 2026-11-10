@@ -1,6 +1,6 @@
 """Plan and execute a tree of independently runnable experiment nodes.
 
-The JSON document is an orchestration layer over the existing, validated
+The JSON or YAML document is an orchestration layer over the existing, validated
 training profiles and evaluation experiments.  Every selected phase resolves
 to an ordinary OVLAB YAML configuration before any workload is started.
 """
@@ -8,6 +8,7 @@ to an ordinary OVLAB YAML configuration before any workload is started.
 from __future__ import annotations
 
 from copy import deepcopy
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import hashlib
 import html
@@ -16,14 +17,16 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import uuid
 from urllib.parse import quote
 
 from .config_bundle import ConfigBundleBuilder
-from .errors import ConfigError
-from .strict_yaml import dumps
+from .errors import ConfigError, StrictYamlError
+from .strict_yaml import dumps, loads as load_yaml
 from .training_composition import load_training_profile
 from .training_profiles import TrainingProfile
 from .schema import validate
@@ -35,6 +38,8 @@ PLAN_SCHEMA = "ovlab.experiment-plan/v1"
 RESULT_SCHEMA = "ovlab.experiment-result/v1"
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PHASES = ("train", "evaluate")
+_DEFAULT_WORKERS = 2
+_MAX_WORKERS = 32
 _RESERVED = {"train", "evaluate", "derived", "interactive", "isolated", "grouped"}
 _COMPONENTS = {
     "benchmark": "benchmark", "policy": "policy", "metrics": "metric_set",
@@ -52,6 +57,13 @@ class ExperimentSpecError(ConfigError):
 
 class ExperimentExecutionError(RuntimeError):
     """A planned experiment phase or required report failed."""
+
+
+class _StepFailure(Exception):
+    def __init__(self, cause: BaseException, record: dict[str, object] | None):
+        super().__init__(str(cause))
+        self.cause = cause
+        self.record = record
 
 
 def _object_pairs(pairs):
@@ -106,17 +118,26 @@ def _field_sources(base, reference, patches):
     return sources
 
 
-def _read_spec(path: Path):
+def _read_spec_source(path: Path):
     try:
         raw = path.read_bytes()
     except OSError as exc:
         raise ExperimentSpecError(f"cannot read experiment spec: {path}") from exc
     if len(raw) > 2_000_000:
         raise ExperimentSpecError("experiment spec exceeds 2 MB")
+    is_yaml = path.suffix.lower() in {".yaml", ".yml"}
     try:
-        return json.loads(raw, object_pairs_hook=_object_pairs)
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ExperimentSpecError(f"invalid experiment JSON: {exc}") from exc
+        if is_yaml:
+            document = load_yaml(raw.decode("utf-8"), source=str(path))
+        else:
+            document = json.loads(raw, object_pairs_hook=_object_pairs)
+    except (UnicodeError, json.JSONDecodeError, StrictYamlError) as exc:
+        raise ExperimentSpecError(f"invalid experiment {'YAML' if is_yaml else 'JSON'}: {exc}") from exc
+    return document, raw
+
+
+def _read_spec(path: Path):
+    return _read_spec_source(path)[0]
 
 
 def _spec_hash(document):
@@ -147,10 +168,12 @@ def _validate_node(raw, path="", depth=0, counter=None):
         raise ExperimentSpecError("experiment tree exceeds 12 levels or 512 nodes")
     allowed = {"id", "name", "config", "execute", "depends_on", "children"}
     if depth == 0:
-        allowed.add("schema_version")
-    _keys(raw, allowed, ("id",) if depth else ("schema_version", "id", "name"), path or "root")
+        allowed.update(("schema_version", "kind"))
+    _keys(raw, allowed, ("id",) if depth else ("schema_version", "kind", "id", "name"), path or "root")
     if depth == 0 and raw["schema_version"] != SCHEMA:
         raise ExperimentSpecError(f"schema_version must be {SCHEMA}")
+    if depth == 0 and raw["kind"] != "workflow":
+        raise ExperimentSpecError("kind must be workflow")
     _safe_id(raw["id"], f"{path or 'root'}.id")
     if "name" in raw and (not isinstance(raw["name"], str) or not raw["name"].strip()):
         raise ExperimentSpecError(f"{path or 'root'}.name must be a nonempty string")
@@ -205,7 +228,7 @@ def _visit(raw, inherited=None, path=""):
         yield from _visit(child, state, child_path)
 
 
-def _topological_steps(nodes, selected):
+def _dependency_graph(nodes, selected):
     tasks = {(node["path"], phase): (node, phase) for node in nodes for phase in node["execute"] if node["path"] in selected}
     edges = {key: set() for key in tasks}
     for (path, phase), (node, _) in tasks.items():
@@ -218,8 +241,13 @@ def _topological_steps(nodes, selected):
             if key == (path, phase):
                 raise ExperimentSpecError("a phase cannot depend on itself")
             edges[(path, phase)].add(key)
+    return tasks, edges
+
+
+def _topological_steps(nodes, selected):
+    tasks, edges = _dependency_graph(nodes, selected)
     result = []
-    pending = dict(edges)
+    pending = {key: set(value) for key, value in edges.items()}
     while pending:
         ready = next((key for key, dependencies in pending.items() if not dependencies), None)
         if ready is None:
@@ -410,8 +438,11 @@ class ExperimentWorkflow:
         self.repository_root = Path(repository_root).expanduser().resolve()
         self.config_root = self.repository_root / "configs"
         self.environment = dict(os.environ if environment is None else environment)
-        self.runner = runner or subprocess.run
+        self.runner = runner
         self.bundle = ConfigBundleBuilder(self.repository_root)
+        self._process_lock = threading.Lock()
+        self._active_processes: set[subprocess.Popen] = set()
+        self._cancelled = threading.Event()
 
     def _spec_path(self, reference: str | Path) -> Path:
         path = Path(reference).expanduser()
@@ -424,22 +455,22 @@ class ExperimentWorkflow:
         path = Path(reference).expanduser()
         if path.is_absolute():
             candidate = path.resolve()
-        elif path.parts and path.parts[0] == "configs":
+        elif path.parts and path.parts[0] in {"configs", "experiments"}:
             candidate = (self.repository_root / path).resolve()
         else:
-            candidate = (self.config_root / "experiments" / ("training" if phase == "train" else "evaluation") / path).resolve()
+            candidate = (self.repository_root / "experiments" / ("training" if phase == "train" else "evaluation") / path).resolve()
             if not candidate.is_file() and not candidate.suffix:
                 candidate = candidate.with_suffix(".yaml")
-        section = self.config_root / "experiments" / ("training" if phase == "train" else "evaluation")
+        section = self.repository_root / "experiments" / ("training" if phase == "train" else "evaluation")
         if not candidate.is_relative_to(section.resolve()) or not candidate.is_file() or candidate.is_symlink():
             raise ExperimentSpecError(f"{phase} profile must be a regular file inside {section}: {reference}")
         return candidate
 
     def _resolved_config(self, phase, state):
         path = self._profile_path(state["profile"], phase)
-        reference = path.relative_to(self.config_root).as_posix()
+        reference = path.relative_to(self.repository_root).as_posix()
         if phase == "train":
-            base = dict(load_training_profile(path, config_root=self.config_root).document)
+            base = dict(load_training_profile(path, config_root=self.repository_root / "experiments").document)
         else:
             base = self.bundle.load_component(reference, "experiment")
         document = deepcopy(base)
@@ -480,7 +511,13 @@ class ExperimentWorkflow:
             self.bundle.load_component(document["resources"]["registry"], "resource_registry")
         return result
 
-    def plan(self, spec: str | Path, *, node: str | None = None, node_only=False):
+    def plan(self, spec: str | Path, *, node: str | None = None, node_only=False,
+             sequential=False, max_workers=None):
+        if sequential and max_workers is not None:
+            raise ExperimentSpecError("--sequential and --max-workers cannot be combined")
+        workers = 1 if sequential else (_DEFAULT_WORKERS if max_workers is None else max_workers)
+        if type(workers) is not int or not 1 <= workers <= _MAX_WORKERS:
+            raise ExperimentSpecError(f"max workers must be between 1 and {_MAX_WORKERS}")
         spec_path = self._spec_path(spec)
         raw = _read_spec(spec_path)
         _validate_node(raw)
@@ -526,16 +563,17 @@ class ExperimentWorkflow:
             "name": raw["name"], "selected_node": selected_path,
             "node_only": bool(node_only), "nodes": nodes, "steps": steps,
             "selected_nodes": sorted(selected),
+            "execution": {"mode": "sequential" if workers == 1 else "parallel", "max_workers": workers},
             "dependency_semantics": "scheduling only; checkpoints are not wired between phases automatically",
             "side_effects_performed": False,
         }
 
     def _materialize(self, instance, node_path, phase, configuration):
-        # Evaluation deployment accepts only configs/experiments/evaluation YAML;
+        # Evaluation deployment accepts only experiments/evaluation YAML;
         # temporary configurations are removed after this run. All bytes are
         # separately snapshotted in the immutable experiment plan.
-        parts = node_path.split("/") if node_path else ["root"]
-        base = self.config_root / "experiments" / ("training" if phase == "train" else "evaluation") / ".generated" / instance
+        parts = ["nodes", *node_path.split("/")] if node_path else ["root"]
+        base = self.repository_root / "experiments" / ("training" if phase == "train" else "evaluation") / ".generated" / instance
         target = base.joinpath(*parts[:-1], parts[-1] + ".yaml")
         target.parent.mkdir(parents=True, exist_ok=True)
         document = deepcopy(configuration["document"])
@@ -550,11 +588,24 @@ class ExperimentWorkflow:
         return target
 
     def _invoke(self, command, env):
-        completed = self.runner(
-            [str(self.repository_root / "ovlab"), *command, "--json"],
-            cwd=self.repository_root, env=env, stdout=subprocess.PIPE,
-            stderr=sys.stderr, text=True, check=False,
-        )
+        invocation = [str(self.repository_root / "ovlab"), *command, "--json"]
+        if self.runner is not None:
+            completed = self.runner(invocation, cwd=self.repository_root, env=env,
+                                    stdout=subprocess.PIPE, stderr=sys.stderr, text=True, check=False)
+        else:
+            with self._process_lock:
+                if self._cancelled.is_set():
+                    raise ExperimentExecutionError("experiment execution was cancelled")
+                process = subprocess.Popen(invocation, cwd=self.repository_root, env=env,
+                                           stdout=subprocess.PIPE, stderr=sys.stderr, text=True,
+                                           start_new_session=True)
+                self._active_processes.add(process)
+            try:
+                stdout, _ = process.communicate()
+                completed = subprocess.CompletedProcess(invocation, process.returncode, stdout)
+            finally:
+                with self._process_lock:
+                    self._active_processes.discard(process)
         try:
             output = json.loads(completed.stdout.strip())
         except (AttributeError, json.JSONDecodeError) as exc:
@@ -564,6 +615,129 @@ class ExperimentWorkflow:
             message = "; ".join(str(item.get("message", item)) for item in errors) or f"exit {completed.returncode}"
             raise ExperimentExecutionError(f"{' '.join(command[:2])} failed: {message}")
         return output["result"]
+
+    def _cancel_running(self):
+        self._cancelled.set()
+        with self._process_lock:
+            for process in tuple(self._active_processes):
+                if process.poll() is None:
+                    try:
+                        process.send_signal(signal.SIGINT)
+                    except ProcessLookupError:
+                        pass
+
+    def _execute_step(self, instance, node_path, phase, item, runs_root, exports_root):
+        record = None
+        try:
+            configuration = item["configuration"][phase]
+            generated = self._materialize(instance, node_path, phase, configuration)
+            env = dict(
+                self.environment, OVLAB_RUNS_ROOT=str(runs_root), OVLAB_EXPORTS_ROOT=str(exports_root),
+                OVLAB_EXPERIMENT_ID=instance, OVLAB_EXPERIMENT_NODE=node_path,
+            )
+            if phase == "train":
+                command = ["train", "run", str(generated)]
+            elif "deployment" in configuration["document"]:
+                command = ["eval", "run", str(generated)]
+            else:
+                command = ["run", str(generated)]
+            child = self._invoke(command, env)
+            run_path = child.get("host_path") or child.get("run_path")
+            if run_path is None and child.get("new_run_paths"):
+                run_path = child["new_run_paths"][0]
+            if not isinstance(run_path, str):
+                raise ExperimentExecutionError(f"{node_path or '<root>'} {phase} did not return a run path")
+            scope = ExperimentScope(instance, tuple(node_path.split("/")) if node_path else ())
+            expected_parent = scope.runs_root(runs_root, phase).resolve()
+            if Path(run_path).resolve().parent != expected_parent:
+                raise ExperimentExecutionError(
+                    f"{node_path or '<root>'} {phase} returned a run outside {expected_parent}: {run_path}"
+                )
+            run_id = Path(run_path).name
+            record = {"run_id": run_id, "run_path": run_path, "result": child}
+            if phase == "train":
+                record["isolated_export"] = self._invoke([
+                    "export", "isolated", "--category", "train", "--run", run_id,
+                ], env)
+            elif command[0] == "run":
+                profile = configuration["document"].get("reporting", {}).get("profile", "libero-task-default")
+                record["postprocessing"] = self._invoke([
+                    "report", "publish", "--run", run_id, "--profile", profile,
+                ], env)
+            return record
+        except BaseException as exc:
+            raise _StepFailure(exc, record) from exc
+
+    def _execute_steps(self, plan, result, manifest, export_root, runs_root, exports_root):
+        nodes = {item["path"]: item for item in plan["nodes"]}
+        _, dependencies = _dependency_graph(plan["nodes"], set(plan["selected_nodes"]))
+        order = [(step["node"], step["phase"]) for step in plan["steps"]]
+        order_index = {key: index for index, key in enumerate(order)}
+        pending, completed, active = set(order), set(), {}
+        first_error = None
+        workers = plan["execution"]["max_workers"]
+
+        def save(key, record):
+            if record is not None:
+                node_path, phase = key
+                result["nodes"].setdefault(node_path, {})[phase] = record
+            _write_json(manifest / "result.json", result)
+            _publish_experiment_index(plan, result, export_root)
+
+        def collect(future, key):
+            nonlocal first_error
+            try:
+                record = future.result()
+            except _StepFailure as exc:
+                result.setdefault("failures", []).append({
+                    "node": key[0], "phase": key[1],
+                    "type": type(exc.cause).__name__, "message": str(exc.cause),
+                })
+                save(key, exc.record)
+                if first_error is None:
+                    first_error = exc.cause
+                    self._cancel_running()
+            else:
+                save(key, record)
+                completed.add(key)
+
+        self._cancelled.clear()
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ovlab-experiment") as executor:
+            try:
+                while pending or active:
+                    if first_error is None:
+                        for key in order:
+                            if len(active) >= workers:
+                                break
+                            if key in pending and dependencies[key].issubset(completed):
+                                pending.remove(key)
+                                node_path, phase = key
+                                future = executor.submit(self._execute_step, result["experiment_id"],
+                                                         node_path, phase, nodes[node_path], runs_root, exports_root)
+                                active[future] = key
+                    if not active:
+                        if first_error is not None:
+                            raise first_error
+                        raise ExperimentExecutionError("experiment scheduler has no runnable phase")
+                    finished, _ = wait(active, return_when=FIRST_COMPLETED)
+                    for future in sorted(finished, key=lambda item: order_index[active[item]]):
+                        key = active.pop(future)
+                        collect(future, key)
+                if first_error is not None:
+                    raise first_error
+            except BaseException:
+                self._cancel_running()
+                for future in active:
+                    future.cancel()
+                for future in tuple(active):
+                    if future.cancelled():
+                        continue
+                    key = active[future]
+                    try:
+                        collect(future, key)
+                    except BaseException:
+                        pass
+                raise
 
     def _grouped(self, plan, result, env):
         """Publish comparison reports for each node with multiple child runs."""
@@ -592,15 +766,17 @@ class ExperimentWorkflow:
                 outputs[phase][path] = {"status": "completed", "run_ids": child_runs, "result": grouped}
         return outputs
 
-    def run(self, spec: str | Path, *, node: str | None = None, node_only=False, dry_run=False):
-        plan = self.plan(spec, node=node, node_only=node_only)
+    def run(self, spec: str | Path, *, node: str | None = None, node_only=False,
+            dry_run=False, sequential=False, max_workers=None):
+        plan = self.plan(spec, node=node, node_only=node_only, sequential=sequential, max_workers=max_workers)
         if dry_run:
             return plan
         if not plan["steps"]:
             raise ExperimentSpecError("selected experiment contains no executable train/evaluate phases")
-        spec_snapshot = _read_spec(Path(plan["spec"]))
+        spec_path = Path(plan["spec"])
+        spec_snapshot, source_bytes = _read_spec_source(spec_path)
         if _spec_hash(spec_snapshot) != plan["spec_hash"]:
-            raise ExperimentSpecError("experiment JSON changed during planning; retry the command")
+            raise ExperimentSpecError("experiment specification changed during planning; retry the command")
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
         instance = f"{plan['id']}_{stamp}_{plan['spec_hash'][:6]}{uuid.uuid4().hex[:4]}"
         data_root = Path(self.environment.get("OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data")).expanduser().resolve()
@@ -624,63 +800,22 @@ class ExperimentWorkflow:
         manifest.mkdir()
         manifest.chmod(0o2770)
         _write_json(manifest / "spec.json", spec_snapshot)
+        if spec_path.suffix.lower() in {".yaml", ".yml"}:
+            original = manifest / "spec.yaml"
+            original.write_bytes(source_bytes)
+            original.chmod(0o640)
         _write_json(manifest / "plan.json", {**plan, "experiment_id": instance})
         result = {
             "schema_version": RESULT_SCHEMA, "experiment_id": instance,
             "spec_hash": plan["spec_hash"], "status": "running", "nodes": {},
             "grouped": {}, "runs_root": str(experiment_root), "exports_root": str(export_root),
             "overview": str(export_root / "index.html"),
+            "execution": plan["execution"],
         }
         _write_json(manifest / "result.json", result)
         _publish_experiment_index(plan, result, export_root)
         try:
-            by_path = {item["path"]: item for item in plan["nodes"]}
-            for step in plan["steps"]:
-                node_path, phase = step["node"], step["phase"]
-                item = by_path[node_path]
-                configuration = item["configuration"][phase]
-                generated = self._materialize(instance, node_path, phase, configuration)
-                env = dict(
-                    self.environment, OVLAB_RUNS_ROOT=str(runs_root), OVLAB_EXPORTS_ROOT=str(exports_root),
-                    OVLAB_EXPERIMENT_ID=instance, OVLAB_EXPERIMENT_NODE=node_path,
-                )
-                if phase == "train":
-                    command = ["train", "run", str(generated)]
-                elif "deployment" in configuration["document"]:
-                    command = ["eval", "run", str(generated)]
-                else:
-                    command = ["run", str(generated)]
-                child = self._invoke(command, env)
-                run_path = child.get("host_path") or child.get("run_path")
-                if run_path is None and child.get("new_run_paths"):
-                    run_path = child["new_run_paths"][0]
-                if not isinstance(run_path, str):
-                    raise ExperimentExecutionError(f"{node_path or '<root>'} {phase} did not return a run path")
-                scope = ExperimentScope(instance, tuple(node_path.split("/")) if node_path else ())
-                expected_parent = scope.runs_root(runs_root, phase).resolve()
-                if Path(run_path).resolve().parent != expected_parent:
-                    raise ExperimentExecutionError(
-                        f"{node_path or '<root>'} {phase} returned a run outside {expected_parent}: {run_path}"
-                    )
-                run_id = Path(run_path).name
-                result["nodes"].setdefault(node_path, {})[phase] = {
-                    "run_id": run_id, "run_path": run_path, "result": child,
-                }
-                _write_json(manifest / "result.json", result)
-                _publish_experiment_index(plan, result, export_root)
-                if phase == "train":
-                    isolated = self._invoke([
-                        "export", "isolated", "--category", "train", "--run", run_id,
-                    ], env)
-                    result["nodes"][node_path][phase]["isolated_export"] = isolated
-                elif command[0] == "run":
-                    profile = configuration["document"].get("reporting", {}).get("profile", "libero-task-default")
-                    published = self._invoke([
-                        "report", "publish", "--run", run_id, "--profile", profile,
-                    ], env)
-                    result["nodes"][node_path][phase]["postprocessing"] = published
-                _write_json(manifest / "result.json", result)
-                _publish_experiment_index(plan, result, export_root)
+            self._execute_steps(plan, result, manifest, export_root, runs_root, exports_root)
             result["grouped"] = self._grouped(plan, result, dict(
                 self.environment, OVLAB_RUNS_ROOT=str(runs_root), OVLAB_EXPORTS_ROOT=str(exports_root),
                 OVLAB_EXPERIMENT_ID=instance,
@@ -699,7 +834,7 @@ class ExperimentWorkflow:
             # Profiles and patched components are temporary execution inputs;
             # their exact resolved documents remain in plan.json and each run.
             for section in ("experiments/training", "experiments/evaluation", "benchmarks", "policies", "metrics", "protocols", "artifacts"):
-                generated_root = self.config_root / section / ".generated" / instance
+                generated_root = (self.repository_root if section.startswith("experiments/") else self.config_root) / section / ".generated" / instance
                 if generated_root.is_dir():
                     shutil.rmtree(generated_root)
                     try:
