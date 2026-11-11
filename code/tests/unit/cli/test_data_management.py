@@ -250,7 +250,7 @@ def test_incomplete_artifacts_and_archive_collisions_are_rejected_before_mutatio
     assert (data / "runs/run-1").is_dir()
 
 
-def test_force_delete_removes_incomplete_run_but_archive_remains_protected(tmp_path):
+def test_force_delete_removes_incomplete_run(tmp_path):
     data = tmp_path / "data"
     active = data / "runs/active-run"
     active.mkdir(parents=True)
@@ -260,9 +260,6 @@ def test_force_delete_removes_incomplete_run_but_archive_remains_protected(tmp_p
     preview = manager.preview("delete", run_id="active-run", force=True)
     assert preview["force"] is True
     assert preview["targets"][0]["state"] == "active-or-incomplete"
-    with pytest.raises(DataSafetyError, match="only for delete"):
-        manager.preview("archive", run_id="active-run", force=True)
-
     result = manager.delete(run_id="active-run", force=True)
     assert result["force"] is True
     assert not active.exists()
@@ -379,3 +376,50 @@ def test_managed_roots_must_not_overlap(tmp_path):
             data / "runs",
             exports_root=data / "runs/exports",
         )
+
+
+def test_cli_forced_archive_all_preserves_incomplete_and_completed_runs(tmp_path):
+    data = tmp_path / "data"
+    completed = data / "runs/evaluate/completed-run"
+    completed.mkdir(parents=True)
+    (completed / "manifest.completed.json").write_text("{}")
+    active = data / "runs/study-1/train/model-a/incomplete-run"
+    active.mkdir(parents=True)
+    (active / "training-plan.json").write_text("{}")
+    (active / "events.jsonl").write_text("planned\n")
+
+    refused = _invoke(data, "data", "archive", "--all", "--yes", "--json")
+    assert refused.returncode == 7 and active.is_dir() and completed.is_dir()
+    preview = _invoke(data, "data", "archive", "--all", "--force", "--dry-run", "--json")
+    assert preview.returncode == 0 and active.is_dir() and completed.is_dir()
+    plan = json.loads(preview.stdout)["result"]
+    assert plan["force"] is True and plan["target_count"] == 2
+    assert {row["state"] for row in plan["targets"]} == {"completed", "active-or-incomplete"}
+    archived = _invoke(data, "data", "archive", "--all", "--force", "--yes", "--json")
+    assert archived.returncode == 0, archived.stdout + archived.stderr
+    result = json.loads(archived.stdout)["result"]
+    assert result["force"] is True and result["target_count"] == 2
+    incomplete = next(row for row in result["targets"] if row["source_state"] == "active-or-incomplete")
+    assert incomplete["force"] is True
+    assert (data / "archive/runs/study-1/train/model-a/incomplete-run/events.jsonl").read_text() == "planned\n"
+    assert not active.exists() and not completed.exists()
+    manifest = next((data / "archive/manifests/run/train").glob("*.json"))
+    assert json.loads(manifest.read_text())["source_state"] == "active-or-incomplete"
+
+
+def test_forced_archive_retains_collision_and_symlink_checks(tmp_path):
+    data = tmp_path / "data"
+    active = data / "runs/evaluate/active-run"
+    active.mkdir(parents=True)
+    (active / "manifest.started.json").write_text("{}")
+    manager = DataManager(data, data / "runs")
+    destination = data / "archive/runs/evaluate/active-run"
+    destination.mkdir(parents=True)
+    with pytest.raises(DataSafetyError, match="already exists"):
+        manager.archive(run_id="active-run", force=True)
+    assert active.is_dir()
+    destination.rmdir()
+    (active / "outside").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(DataSafetyError, match="symbolic link"):
+        manager.archive(run_id="active-run", force=True)
+    assert active.is_dir()

@@ -620,8 +620,6 @@ class DataManager:
         return tuple(targets)
 
     def preview(self, action: str, *, force: bool = False, **selector) -> dict[str, object]:
-        if force and action != "delete":
-            raise DataSafetyError("--force is supported only for delete operations")
         targets = self.select(allow_incomplete=force, **selector)
         if action == "delete":
             self._require_delete_permissions(targets)
@@ -689,7 +687,7 @@ class DataManager:
                 "Repair ownership or group-write permissions for the managed data roots first"
             )
 
-    def _archive_one(self, target: DataTarget) -> dict[str, object]:
+    def _archive_one(self, target: DataTarget, *, force: bool = False) -> dict[str, object]:
         destination = (self.archive_root / target.archive_relative).resolve()
         if not destination.is_relative_to(self.archive_root):
             raise DataSafetyError("archive destination escapes OVLAB archive root")
@@ -755,6 +753,8 @@ class DataManager:
             "archive_path": str(destination),
             "archive_relative": str(target.archive_relative),
             "archived_at_utc": _utc_now(),
+            "source_state": target.state,
+            "force": force,
             "cross_filesystem_copy": cross_filesystem,
             "interactive_archive_path": None if companion_destination is None else str(companion_destination),
             "interactive_file_count": None if companion_inventory is None else companion_inventory["file_count"],
@@ -774,8 +774,8 @@ class DataManager:
         _atomic_json(manifest_root / manifest_name, entry)
         return entry
 
-    def archive(self, **selector) -> dict[str, object]:
-        targets = self.select(**selector)
+    def archive(self, *, force: bool = False, **selector) -> dict[str, object]:
+        targets = self.select(allow_incomplete=force, **selector)
         destinations = [self.archive_root / target.archive_relative for target in targets]
         destinations.extend(
             self.archive_root / target.companion_relative
@@ -787,10 +787,11 @@ class DataManager:
         collisions = [str(path) for path in destinations if path.exists()]
         if collisions:
             raise DataSafetyError("archive destination already exists: " + ", ".join(collisions))
-        archived = [self._archive_one(target) for target in targets]
+        archived = [self._archive_one(target, force=force) for target in targets]
         return {
             "schema_version": DATA_OPERATION_SCHEMA,
             "action": "archive", "status": "completed", "dry_run": False,
+            "force": force,
             "target_count": len(archived), "targets": archived,
             "archive_root": str(self.archive_root),
         }

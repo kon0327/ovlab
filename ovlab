@@ -363,6 +363,9 @@ if [[ ( "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "
 fi
 
 # Render help from the checkout, including the unified report interface.
+if [[ "${1:-}" == "report" && "${2:-}" == "generate" ]]; then
+    exec "$python_executable" -m ovlab_benchctl.cli "$@"
+fi
 if [[ "${1:-}" == "report" ]]; then
     for argument in "$@"; do
         if [[ "$argument" == "--help" || "$argument" == "-h" ]]; then
@@ -374,9 +377,7 @@ fi
 # Present report and export through one command while keeping older container
 # images compatible with their existing `report publish` and `export` entry points.
 if [[ "${1:-}" == "report" && "${2:-}" != "" ]]; then
-    if [[ "${2:-}" == "export" ]]; then
-        set -- export "${@:3}"
-    elif [[ "${2:-}" == "auto" || ( "${2:-}" != -* && "${2:-}" != "generate" && "${2:-}" != "publish" && "${2:-}" != "verify" && "${2:-}" != "profiles" ) ]]; then
+    if [[ "${2:-}" == "auto" || ( "${2:-}" != -* && "${2:-}" != "generate" && "${2:-}" != "publish" && "${2:-}" != "verify" && "${2:-}" != "profiles" && "${2:-}" != "export" ) ]]; then
         # Selection runs on the host; each export still runs in the isolated image.
         exec "$python_executable" -m ovlab_benchctl.cli "$@"
     fi
@@ -402,6 +403,31 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
         configs_root="$(realpath -m -- "$configs_root")"
         reporting_args=("$@")
         _ovlab_translate_run_paths "$runs_root" reporting_args
+        if [[ "${1:-}" == "report" && "${2:-}" == "publish" ]]; then
+            for ((index=2; index<${#reporting_args[@]}; index++)); do
+                output_index=-1
+                output_prefix=""
+                case "${reporting_args[$index]}" in
+                    --output)
+                        if (( index + 1 < ${#reporting_args[@]} )); then
+                            output_index=$((index + 1))
+                            output_path="${reporting_args[$output_index]}"
+                        fi ;;
+                    --output=*)
+                        output_index=$index
+                        output_prefix="--output="
+                        output_path="${reporting_args[$index]#--output=}" ;;
+                esac
+                if (( output_index >= 0 )); then
+                    output_path="$(realpath -m -- "$output_path")"
+                    if [[ "$output_path" != "$exports_root/"* ]]; then
+                        echo "ovlab: report --output must be inside $exports_root when using Docker." >&2
+                        exit 3
+                    fi
+                    reporting_args[$output_index]="${output_prefix}/var/lib/ovlab/exports/${output_path#"$exports_root/"}"
+                fi
+            done
+        fi
         if [[ "${1:-}" != "report" || "${2:-}" != "profiles" ]] && [[ ! -d "$runs_root" ]]; then
             echo "ovlab: canonical run source directory does not exist: $runs_root" >&2
             exit 4

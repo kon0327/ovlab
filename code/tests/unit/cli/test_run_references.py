@@ -195,3 +195,74 @@ def test_application_resolves_hash_before_runner_reporting_and_export_calls(
     assert grouped[0]["run_ids"] == (run_id,)
     assert grouped[1]["same_model_as"] == run_id
     assert ("export-verify", run_id) in calls
+
+
+def test_report_publish_calls_shared_report_generator_and_exports(tmp_path, monkeypatch):
+    import ovlab_runner
+
+    data = tmp_path / "data"
+    evaluation = _run(data / "runs", "eval-1")
+    (evaluation / "manifest.started.json").write_text("{}")
+    app = OvlabApplication(tmp_path / "repository", environment={"OVLAB_DATA_ROOT": str(data)})
+    calls = []
+    monkeypatch.setattr(app, "report_generate", lambda run, profile, task_id=None:
+                        calls.append(("generate", Path(run), profile, task_id)) or {"output": "/report"})
+
+    class Export:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def generate_isolated(self, run):
+            calls.append(("export", run))
+            return {"output": "/export"}
+
+    monkeypatch.setattr(ovlab_runner, "ExportEngine", Export)
+    result = app.report_publish("eval-1", "profile-a", task_id="task-1")
+    assert result["report"]["output"] == "/report"
+    assert result["isolated_export"]["output"] == "/export"
+    assert calls == [("generate", evaluation.resolve(), "profile-a", "task-1"), ("export", "eval-1")]
+    calls.clear()
+    result = app.report_publish("eval-1", report_enabled=False)
+    assert result["report"] is None and calls == [("export", "eval-1")]
+
+
+def test_report_publish_preserves_machine_report_output(tmp_path, monkeypatch):
+    import ovlab_runner
+
+    data = tmp_path / "data"
+    evaluation = _run(data / "runs", "eval-1")
+    (evaluation / "manifest.started.json").write_text("{}")
+    app = OvlabApplication(tmp_path / "repository", environment={"OVLAB_DATA_ROOT": str(data)})
+    calls = []
+    monkeypatch.setattr(ovlab_runner, "regenerate_report", lambda run, output:
+                        calls.append(("generate", Path(run), output)) or {"output": output})
+
+    class Export:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def generate_isolated(self, run):
+            calls.append(("export", run))
+            return {"output": "/export"}
+
+    monkeypatch.setattr(ovlab_runner, "ExportEngine", Export)
+    result = app.report_publish("eval-1", output="/report.json")
+    assert result["report"]["output"] == "/report.json"
+    assert calls == [("generate", evaluation.resolve(), "/report.json"), ("export", "eval-1")]
+
+
+def test_machine_report_displays_host_export_path(tmp_path, monkeypatch):
+    import ovlab_runner
+
+    data = tmp_path / "data"
+    evaluation = _run(data / "runs", "eval-1")
+    (evaluation / "manifest.started.json").write_text("{}")
+    exports = data / "exports"
+    app = OvlabApplication(tmp_path / "repository", environment={
+        "OVLAB_DATA_ROOT": str(data), "OVLAB_EXPORTS_ROOT": str(exports),
+        "OVLAB_EXPORTS_DISPLAY_ROOT": "/host/exports",
+    })
+    monkeypatch.setattr(ovlab_runner, "regenerate_report",
+                        lambda run, output: {"output": str(Path(output).resolve())})
+    result = app.report_generate("eval-1", output=exports / "machine")
+    assert result["output"] == "/host/exports/machine"

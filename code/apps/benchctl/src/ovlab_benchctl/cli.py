@@ -94,9 +94,6 @@ class _RootParser(argparse.ArgumentParser):
             parsed.command = "run"
         elif parsed.command == "run" and getattr(parsed, "run_category", None):
             parsed.command = parsed.run_category
-        elif parsed.command == "report" and getattr(parsed, "report_command", None) == "export":
-            parsed.command = "export"
-            parsed.report_command = None
         return parsed
 
 
@@ -228,29 +225,22 @@ def _parser() -> argparse.ArgumentParser:
     recompute.add_argument("run_path", metavar="RUN_PATH_OR_REFERENCE")
     _output_options(recompute)
 
-    report = commands.add_parser("report", help="create and verify reports and exports",
-                                 epilog="Export a run or experiment automatically: ovlab report RUN_OR_EXPERIMENT_ID")
-    report_commands = report.add_subparsers(dest="report_command", required=True)
+    report = commands.add_parser(
+        "report", help="create and verify reports and exports",
+        usage="%(prog)s RUN_OR_EXPERIMENT_ID [--detail | --json]\n       %(prog)s {publish,profiles,verify} ...",
+        epilog="Export a run or experiment automatically: ovlab report RUN_OR_EXPERIMENT_ID",
+    )
+    report_commands = report.add_subparsers(dest="report_command", required=True, metavar="{publish,profiles,verify}")
     auto = report_commands.add_parser("auto", help="export a run or all runs in an experiment")
     auto.add_argument("reference", help="run ID, run hash, or completed experiment ID")
     _output_options(auto)
-    generate = report_commands.add_parser(
-        "generate", help="build a reproducible report (example: ovlab report generate --run RUN_ID --profile libero-task-default)",
-    )
-    generate.add_argument(
-        "run_path", nargs="?",
-        help="canonical run path, ID, or displayed hash",
-    )
-    generate.add_argument("--run", dest="run_id", help="canonical run ID or displayed run hash")
-    generate.add_argument("--task", help="optional canonical task ID")
-    generate.add_argument("--profile", default="libero-task-default", help="built-in profile ID or local YAML path")
-    generate.add_argument("--output", help="legacy output path; cannot be combined with --run")
-    _output_options(generate)
     publish = report_commands.add_parser(
         "publish", help="publish the HTML report and isolated export for one finalized run",
     )
     _primary_argument(publish, "--run", "run_id", "RUN", help="canonical run ID, path or hash")
     publish.add_argument("--profile", default="libero-task-default")
+    publish.add_argument("--task", help="optional canonical task ID for the report")
+    publish.add_argument("--output", help="legacy machine-report output path")
     publish.add_argument(
         "--report-enabled", choices=("true", "false"), default="true",
         help="generate derived HTML in addition to the always-generated isolated export",
@@ -294,10 +284,10 @@ def _parser() -> argparse.ArgumentParser:
     export_selector.add_argument("--name", dest="export_name", help="alias for NAME")
     export_selector.add_argument("--export", dest="legacy_export_id", help="legacy grouped export alias")
     _output_options(export_verify)
-    report_commands._name_parser_map["export"] = export
-    report_commands._choices_actions.append(
-        report_commands._ChoicesPseudoAction("export", (), "create and verify isolated or grouped exports")
-    )
+    # Compatibility entry points remain available to existing workflows, while
+    # the public interface automatically selects exports via `report TARGET`.
+    report_commands._choices_actions = [action for action in report_commands._choices_actions
+                                        if action.dest in {"publish", "profiles", "verify"}]
 
     data = commands.add_parser(
         "data", help="list, archive, and safely delete runs, reports, and exports"
@@ -329,18 +319,14 @@ def _parser() -> argparse.ArgumentParser:
         )
         selectors.add_argument(
             "--all", dest="all_data", action="store_true",
-            help=(
-                "select all runs, reports, and exports; incomplete entries are refused"
-                + (" unless --force is supplied" if action == "delete" else "")
-            ),
+            help="select all runs, reports, and exports; incomplete entries require --force",
         )
         command.add_argument("--dry-run", action="store_true", help="show the exact selection without changing files")
         command.add_argument("--yes", action="store_true", help="confirm the operation non-interactively")
-        if action == "delete":
-            command.add_argument(
-                "--force", action="store_true",
-                help="allow deletion of active or incomplete artifacts; path and permission safety checks remain enforced",
-            )
+        command.add_argument(
+            "--force", action="store_true",
+            help=f"allow {action} of active or incomplete artifacts; path safety checks remain enforced",
+        )
         _output_options(command)
 
     dataset = commands.add_parser("dataset", help="resolve, acquire, prepare, and verify immutable datasets")
@@ -429,6 +415,12 @@ def _parser() -> argparse.ArgumentParser:
     network.add_argument("--online", action="store_true", help="also check registered revisions on Hugging Face")
     checkpoint_list.add_argument("--profile", help="local profile containing checkpoint path overrides (registry only)")
     _output_options(checkpoint_list)
+    checkpoint_export = checkpoint_commands.add_parser("export", help="export a verified checkpoint bundle")
+    _primary_argument(checkpoint_export, "--checkpoint", "checkpoint_id", "CHECKPOINT")
+    checkpoint_export.add_argument("--format", choices=("bundle", "tar", "onnx"), required=True,
+                                   help="bundle directory, tar archive, or ONNX (not yet implemented)")
+    checkpoint_export.add_argument("--output", required=True, help="new output directory or tar file")
+    _output_options(checkpoint_export)
     checkpoint_inspect = checkpoint_commands.add_parser("inspect", help="inspect checkpoint identity and compatibility")
     _primary_argument(checkpoint_inspect, "--checkpoint", "checkpoint_id", "CHECKPOINT")
     _output_options(checkpoint_inspect)
@@ -455,7 +447,8 @@ def _parser() -> argparse.ArgumentParser:
             grouped_commands._ChoicesPseudoAction(name, (), help_text)
         )
         set_grouped_prog(subparser, f"ovlab run {name}")
-    set_grouped_prog(export, "ovlab report export")
+    set_grouped_prog(report, "ovlab report")
+    set_grouped_prog(export, "ovlab export")
     # Keep the old entry points usable, but show the grouped interface in help.
     commands._choices_actions = [action for action in commands._choices_actions
                                  if action.dest not in {"eval", "train", "experiment", "export", "_native-run"}]
@@ -703,12 +696,6 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("results agree", ("all_results_agree",)), ("episodes", ("episode_count",)),
         ("trace modified", ("original_trace_modified",)), ("metric API", ("metric_api",)),
     ),
-    "report generate": (
-        ("run", ("run_id", "source_run")), ("profile", ("profile_id",)),
-        ("build", ("derived_build_id",)), ("status", ("status",)),
-        ("integrity", ("integrity",)), ("output", ("output",)), ("reused", ("reused",)),
-        ("interactive", ("interactive_output",)), ("interactive integrity", ("interactive_integrity",)),
-    ),
     "report publish": (
         ("status", ("status",)), ("run", ("run_id",)),
         ("report", ("report.output",)), ("export", ("isolated_export.output",)),
@@ -745,10 +732,11 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     "data archive": (
         ("status", ("status",)), ("targets", ("target_count",)),
         ("archive", ("archive_root",)), ("dry run", ("dry_run",)),
+        ("forced", ("force",)),
     ),
     "data delete": (
         ("status", ("status",)), ("targets", ("target_count",)),
-        ("dry run", ("dry_run",)),
+        ("dry run", ("dry_run",)), ("forced", ("force",)),
     ),
     "dataset resolve": (
         ("provider", ("provider",)), ("dataset", ("logical_name",)),
@@ -835,6 +823,10 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("training run", ("training_run_id",)), ("build", ("derived_build_id",)),
         ("integrity", ("integrity",)), ("output", ("output",)), ("reused", ("reused",)),
         ("interactive", ("interactive_output",)), ("interactive integrity", ("interactive_integrity",)),
+    ),
+    "checkpoint export": (
+        ("checkpoint", ("checkpoint_id",)), ("format", ("format",)),
+        ("kind", ("kind",)), ("integrity", ("integrity",)), ("output", ("output",)),
     ),
     "checkpoint inspect": (
         ("checkpoint", ("checkpoint.checkpoint_id", "manifest.checkpoint_id")),
@@ -984,7 +976,7 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.RUNTIME, "report_renderer_error"
     if name in {"DatasetIntegrityError", "CheckpointBundleError"}:
         return ExitCode.INTEGRITY, "artifact_integrity_error"
-    if name in {"DatasetRequestError", "TrainingProfileError"}:
+    if name in {"DatasetRequestError", "TrainingProfileError", "CheckpointExportError"}:
         return ExitCode.CONFIGURATION, "configuration_error"
     if name in {"DatasetUnavailableError"}:
         return ExitCode.POLICY_UNAVAILABLE, "dataset_unavailable"
@@ -1190,24 +1182,17 @@ def _dispatch(args):
         if args.report_command == "profiles":
             return app.report_profiles(), args.json, None
         if args.report_command == "publish":
-            return app.report_publish(
-                args.run_id,
-                args.profile,
-                report_enabled=args.report_enabled == "true",
-            ), args.json, None
+            options = {"report_enabled": args.report_enabled == "true"}
+            if args.output is not None:
+                if args.task is not None or args.profile != "libero-task-default" or not options["report_enabled"]:
+                    raise CliUsageError("report publish --output cannot be combined with --task, --profile or disabled reporting")
+                options["output"] = args.output
+            if args.task is not None:
+                options["task_id"] = args.task
+            return app.report_publish(args.run_id, args.profile, **options), args.json, None
         if args.report_command == "verify":
             return app.report_verify(args.run_id, args.profile, build_id=args.build), args.json, None
-        if args.run_id:
-            if args.run_path is not None or args.output is not None:
-                raise CliUsageError("report generate --run cannot be combined with legacy RUN_PATH/--output")
-            return app.report_generate(args.run_id, args.profile, task_id=args.task), args.json, None
-        if args.run_path is None:
-            raise CliUsageError("report generate requires RUN, --run RUN or legacy RUN_PATH --output PATH")
-        if args.output is None:
-            return app.report_generate(args.run_path, args.profile, task_id=args.task), args.json, None
-        if args.task is not None or args.profile != "libero-task-default":
-            raise CliUsageError("--task/--profile require the --run form")
-        return app.generate_report(args.run_path, args.output), args.json, None
+        raise AssertionError("unhandled report command")
     if args.command == "export":
         app = _application()
         if getattr(args, "category", "evaluate") == "train":
@@ -1287,14 +1272,14 @@ def _dispatch(args):
             "export_id": args.export_id,
             "all_data": args.all_data,
         }
-        force = args.force if args.data_command == "delete" else False
+        force = args.force
         preview = app.data_preview(args.data_command, force=force, **selector)
         if args.dry_run:
             return preview, args.json, None
         if not _confirm_data_operation(args, preview):
             return {**preview, "status": "cancelled", "dry_run": False}, False, None
         result = (
-            app.data_archive(**selector)
+            app.data_archive(force=force, **selector)
             if args.data_command == "archive" else app.data_delete(force=force, **selector)
         )
         return result, args.json, None
@@ -1372,6 +1357,10 @@ def _dispatch(args):
             if args.source == "local":
                 return app.checkpoint_list(), args.json, None
             return app.checkpoint_registry_list(online=args.online, profile=args.profile), args.json, None
+        if args.checkpoint_command == "export":
+            from .checkpoint_export import export_checkpoint
+            return export_checkpoint(app._model_data_root(), args.checkpoint_id,
+                                     format=args.format, output=Path(args.output)), args.json, None
         if args.checkpoint_command == "inspect":
             return app.checkpoint_inspect(args.checkpoint_id), args.json, None
         return app.checkpoint_verify(args.checkpoint_id), args.json, None

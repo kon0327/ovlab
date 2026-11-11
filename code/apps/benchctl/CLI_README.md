@@ -203,9 +203,8 @@ EXPERIMENT_ID` to export all runs in a completed experiment. Each run gets an
 isolated export at its node. Each parent with at least two child branches holding
 runs of the same category also gets a grouped export of those descendants.
 Training and evaluation are handled separately. The output lists each node,
-export, source runs and destination. Specialized
-exports are available under `ovlab report export`; the former top-level
-`ovlab export` commands remain compatibility aliases.
+export, source runs and destination. Legacy report and export commands remain
+available for compatibility with existing automation.
 
 ## Command overview
 
@@ -239,18 +238,12 @@ ovlab
 ├── run verify RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── metrics recompute RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── report RUN_ID|EXPERIMENT_ID [--detail | --json]
+├── report publish RUN_ID [--profile PROFILE] [--task TASK_ID] [--output PATH] [--detail | --json]
 ├── report profiles [--detail | --json]
-├── report generate --run RUN_ID|RUN_HASH [--task TASK_ID] [--profile PROFILE] [--detail | --json]
-├── report publish --run RUN_ID|RUN_HASH [--profile PROFILE] [--report-enabled true|false] [--detail | --json]
 ├── report verify --run RUN_ID|RUN_HASH [--profile PROFILE] [--build BUILD_ID] [--detail | --json]
-├── report export isolated --run RUN_ID|RUN_HASH [--episode EPISODE_ID] [--template TEMPLATE] [--detail | --json]
-├── report export grouped --name GROUP (--all-runs | --same-model-as RUN_REFERENCE | --runs RUN_REFERENCE...)
-│   [--suite SUITE] [--template TEMPLATE] [--detail | --json]
-├── report export verify --kind isolated|grouped --name NAME [--detail | --json]
-├── report export generate --spec SPEC.yaml [--detail | --json]  # legacy grouped bridge
 ├── data
 │   ├── list [--kind runs|reports|all] [--archived] [--detail | --json]
-│   ├── archive (--run RUN_REFERENCE | --report REPORT_REFERENCE | --all) [--dry-run] [--yes] [--detail | --json]
+│   ├── archive (--run RUN_REFERENCE | --report REPORT_REFERENCE | --all) [--force] [--dry-run] [--yes] [--detail | --json]
 │   └── delete (--run RUN_REFERENCE | --report REPORT_REFERENCE | --all) [--dry-run] [--yes] [--detail | --json]
 ├── dataset
 │   ├── providers [--detail | --json]
@@ -263,6 +256,7 @@ ovlab
 │   └── verify --dataset DATASET_ID [--detail | --json]
 └── checkpoint
     ├── list [--detail | --json]
+    ├── export CHECKPOINT_ID --format bundle|tar --output PATH [--detail | --json]
     ├── inspect --checkpoint CHECKPOINT_ID [--detail | --json]
     └── verify --checkpoint CHECKPOINT_ID [--detail | --json]
 ```
@@ -457,19 +451,15 @@ complete recorded and recomputed `MetricResult` objects.
 ## 8. Reports and exports
 
 ```bash
+./ovlab report RUN_ID
+./ovlab report EXPERIMENT_ID --json
 ./ovlab report profiles
-./ovlab report generate --run RUN_ID --profile libero-task-default
-./ovlab report generate --run RUN_ID --task libero/10/0 --profile libero-task-default
 ./ovlab report verify --run RUN_ID --profile libero-task-default --build DERIVED_BUILD_ID
-./ovlab run train report --run TRAINING_RUN_ID
-./ovlab run train report --run TRAINING_RUN_ID --verify --build DERIVED_BUILD_ID
-./ovlab report export isolated --run RUN_ID
-./ovlab report export isolated --run RUN_ID --episode EPISODE_ID
-./ovlab report export grouped --name paper-ablation --runs RUN_ID_A RUN_ID_B
-./ovlab report export grouped --name model-family --same-model-as REFERENCE_RUN_ID
-./ovlab report export grouped --name complete-study --all-runs --suite libero_10
-./ovlab report export verify --kind grouped --name paper-ablation
 ```
+
+The report command automatically creates isolated and hierarchical grouped
+exports. `report publish RUN_ID` generates the HTML report and isolated export.
+Explicit export commands remain available for existing automation.
 
 Reports read canonical evidence from `OVLAB_RUNS_ROOT` and publish staged,
 checksummed offline HTML/JSON builds under
@@ -493,12 +483,15 @@ allocator VRAM/peaks and explicitly estimated—not measured—GFLOPs.
 During deployment, benchmark and policy containers are torn down after the
 canonical run is finalized. The orchestrator then invokes `report publish` in
 the reporting container to generate the final HTML report and isolated export.
-Grouped comparison is never automatic. The experiment setting is
+Experiment workflows automatically produce grouped comparisons for eligible
+hierarchical branches. The experiment setting is
 `reporting: {enabled: true, profile: libero-task-default,
 on_task_finalize: true, on_run_finalize: true, failure_policy: warn}`. Setting
 `enabled: false` skips HTML but retains isolated export. A renderer or export
-failure cannot change canonical benchmark status or timing. The legacy `report generate RUN_PATH
---output PATH` form remains available for the H.1 machine report.
+failure cannot change canonical benchmark status or timing. The H.1 machine
+report remains available through `report publish RUN_ID --output PATH`; this
+also publishes the isolated export. With the reporting container, `PATH` must
+be under `OVLAB_EXPORTS_ROOT`.
 
 ## 9. Data lifecycle management
 
@@ -520,10 +513,11 @@ operations require an interactive confirmation; automation must supply
 benchmark runs, derived reports, and exports only—it never includes datasets,
 checkpoints, `runs/train`, or source files. If any selected item is active or
 incomplete, the complete operation is refused rather than silently skipping it.
-`data delete --force` explicitly permits deletion of active, aborted legacy, or
-incomplete artifacts. It bypasses only the state guard: confirmation, managed-root
-containment, symbolic-link rejection, and recursive permission preflight still
-apply. `--force` is intentionally unavailable for archival.
+`data archive --force` and `data delete --force` explicitly permit operations on
+active or incomplete artifacts. They bypass only the state guard: confirmation,
+managed-root containment and symbolic-link rejection still apply; deletion also
+performs recursive permission preflight. Stop active writers before forcing an
+archive.
 Training report IDs use `training:TRAINING_RUN_ID`. See
 [`DATA_MANAGEMENT.md`](../../../DATA_MANAGEMENT.md) for archive layout, safety
 checks and concurrency guidance.

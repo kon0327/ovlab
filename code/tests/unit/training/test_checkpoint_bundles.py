@@ -316,3 +316,58 @@ def test_checkpoint_migration_dry_run_and_apply(tmp_path):
     assert local.is_dir() and not legacy.exists()
     assert (tmp_path / "checkpoints/others").is_dir()
     assert store.verify(checkpoint_id)["status"] == "verified"
+
+
+@pytest.mark.parametrize("export_format", ["bundle", "tar"])
+def test_checkpoint_export_round_trip_and_refuses_overwrite(tmp_path, export_format):
+    import tarfile
+    from ovlab_benchctl.checkpoint_export import CheckpointExportError, export_checkpoint
+
+    finalized = CheckpointBundleStore(tmp_path).finalize(_context(tmp_path))
+    checkpoint_id = finalized["checkpoint_id"]
+    target = tmp_path / ("export.tar" if export_format == "tar" else "export-bundle")
+    result = export_checkpoint(tmp_path, checkpoint_id, format=export_format, output=target)
+    assert result["integrity"] == "verified" and result["format"] == export_format
+    if export_format == "bundle":
+        assert (target / "checkpoint.json").read_bytes() == (Path(finalized["checkpoint_path"]) / "checkpoint.json").read_bytes()
+    else:
+        with tarfile.open(target) as archive:
+            assert archive.extractfile(f"{checkpoint_id}/checkpoint.json").read() == (Path(finalized["checkpoint_path"]) / "checkpoint.json").read_bytes()
+    with pytest.raises(CheckpointExportError, match="already exists"):
+        export_checkpoint(tmp_path, checkpoint_id, format=export_format, output=target)
+    assert CheckpointBundleStore(tmp_path).verify(checkpoint_id)["status"] == "verified"
+
+
+def test_checkpoint_export_rejects_tampered_source_and_unsupported_onnx(tmp_path):
+    from ovlab_benchctl.checkpoint_export import CheckpointExportError, export_checkpoint
+
+    finalized = CheckpointBundleStore(tmp_path).finalize(_context(tmp_path))
+    checkpoint_id = finalized["checkpoint_id"]
+    target = tmp_path / "output"
+    with pytest.raises(CheckpointExportError, match="ONNX export is not yet implemented"):
+        export_checkpoint(tmp_path, checkpoint_id, format="onnx", output=target)
+    assert not target.exists()
+    weight = Path(finalized["checkpoint_path"]) / "weights-or-adapter/adapter_model.safetensors"
+    weight.chmod(0o644)
+    weight.write_bytes(b"corrupted")
+    with pytest.raises(CheckpointBundleError, match="integrity failure"):
+        export_checkpoint(tmp_path, checkpoint_id, format="bundle", output=target)
+    assert not target.exists()
+
+
+def test_checkpoint_export_cli_produces_verified_bundle(tmp_path):
+    import subprocess
+    import sys
+
+    finalized = CheckpointBundleStore(tmp_path).finalize(_context(tmp_path))
+    checkpoint_id = finalized["checkpoint_id"]
+    output = tmp_path / "exported"
+    env = {**os.environ, "OVLAB_MODEL_DATA_ROOT": str(tmp_path), "OVLAB_PYTHON": sys.executable}
+    completed = subprocess.run(
+        [str(ROOT / "ovlab"), "checkpoint", "export", checkpoint_id, "--format", "bundle", "--output", str(output), "--json"],
+        cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)["result"]
+    assert result["checkpoint_id"] == checkpoint_id and result["integrity"] == "verified"
+    assert (output / "manifest.json").is_file()

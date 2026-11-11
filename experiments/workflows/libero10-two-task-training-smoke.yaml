@@ -1,0 +1,28 @@
+# Partial training smoke test, not the full requested comparison.
+# OFT training, evaluation of the newly trained checkpoints, and quantized
+# QuIC inference are not currently supported by the workflow/runtime.
+schema_version: ovlab.experiment/v1
+kind: workflow
+id: libero10-two-task-training-smoke
+name: LIBERO-10 two-task LoRA and QuIC training smoke test
+
+config:
+  train:
+    profile: openvla-lora-libero10-smoke.yaml
+    patch:
+      dataset:
+        partition:
+          groups:
+            - LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket
+            - LIVING_ROOM_SCENE2_put_both_the_cream_cheese_box_and_the_butter_in_the_basket
+
+children:
+  - id: lora
+    name: LoRA training
+    execute: [train]
+  - id: quic
+    name: QuIC training
+    config:
+      train:
+        profile: openvla-libero10-quic-smoke.yaml
+    execute: [train]

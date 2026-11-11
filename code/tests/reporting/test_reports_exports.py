@@ -861,22 +861,24 @@ def test_unified_cli_report_and_export_json_workflows(tmp_path):
     profiles = invoke("report", "profiles", "--json")
     assert profiles.returncode == 0 and profiles.stderr == ""
     assert json.loads(profiles.stdout)["result"]["profiles"][0]["id"] == "libero-task-default"
-    missing = invoke("report", "generate", "--run", "missing-run", "--json")
+    missing = invoke("report", "publish", "--run", "missing-run", "--json")
     assert missing.returncode == 4
     assert json.loads(missing.stdout)["errors"][0]["code"] == "source_unavailable"
     invalid_profile = tmp_path / "invalid-profile.yaml"
     invalid_profile.write_text("schema_version: wrong\n", encoding="utf-8")
-    invalid = invoke("report", "generate", "--run", run_id, "--profile", str(invalid_profile), "--json")
+    invalid = invoke("report", "publish", "--run", run_id, "--profile", str(invalid_profile), "--json")
     assert invalid.returncode == 3
     assert json.loads(invalid.stdout)["errors"][0]["code"] == "configuration_error"
-    generated = invoke("report", "generate", "--run", run_id, "--profile", "libero-task-default", "--json")
+    generated = invoke("report", "publish", "--run", run_id, "--profile", "libero-task-default", "--json")
     assert generated.returncode == 0 and generated.stderr == ""
-    result = json.loads(generated.stdout)["result"]
+    publication_from_publish = json.loads(generated.stdout)["result"]
+    assert publication_from_publish["isolated_export"]["integrity"] == "verified"
+    result = publication_from_publish["report"]
     assert Path(result["output"]).is_relative_to(data / "exports/evaluate/derived")
     verified = invoke("report", "verify", "--run", run_id, "--profile", "libero-task-default", "--build", result["derived_build_id"], "--json")
     assert verified.returncode == 0 and json.loads(verified.stdout)["result"]["integrity"] == "verified"
-    task = invoke("report", "generate", "--run", run_id, "--task", "mock-task-0", "--profile", "libero-task-default", "--json")
-    assert task.returncode == 0 and json.loads(task.stdout)["result"]["integrity"] == "verified"
+    task = invoke("report", "publish", "--run", run_id, "--task", "mock-task-0", "--profile", "libero-task-default", "--json")
+    assert task.returncode == 0 and json.loads(task.stdout)["result"]["report"]["integrity"] == "verified"
 
     published = invoke(
         "report", "publish", "--run", run_id, "--profile", "libero-task-default",
@@ -903,7 +905,6 @@ def test_unified_cli_report_and_export_json_workflows(tmp_path):
     assert checked.returncode == 0 and json.loads(checked.stdout)["result"]["integrity"] == "verified"
 
     for arguments in (
-        ("report", "generate", run_id),
         ("report", "publish", run_id),
         ("report", "verify", run_id),
         ("export", "isolated", run_id),

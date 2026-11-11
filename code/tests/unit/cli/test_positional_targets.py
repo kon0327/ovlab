@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 @pytest.mark.parametrize("arguments,method,expected", [
-    (["report", "generate", "run-1"], "report_generate", "run-1"),
     (["report", "publish", "run-1"], "report_publish", "run-1"),
     (["report", "verify", "run-1"], "report_verify", "run-1"),
     (["export", "isolated", "run-1"], "export_isolated", "run-1"),
@@ -86,15 +85,9 @@ def test_duplicate_targets_are_rejected(arguments):
     assert exc.value.code == 2
 
 
-def test_report_generate_preserves_legacy_output_form(monkeypatch):
-    calls = []
-    class Application:
-        def generate_report(self, source, output):
-            calls.append((source, output))
-            return {}
-    monkeypatch.setattr(cli, "_application", lambda: Application())
-    cli._dispatch(cli._parser().parse_args(["report", "generate", "run-1", "--output", "out.txt"]))
-    assert calls == [("run-1", "out.txt")]
+def test_report_generate_is_not_a_cli_command():
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(["report", "generate", "run-1"])
 
 
 @pytest.mark.parametrize("target,field,value", [
@@ -204,3 +197,18 @@ def test_reporting_host_run_path_is_translated_for_docker(tmp_path):
                             cwd=ROOT, env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert log.read_text().splitlines()[-3:] == ["report", "verify", "/var/lib/ovlab/runs/study/evaluate/model/run-1"]
+
+
+def test_report_publish_routes_machine_report_output(monkeypatch):
+    calls = []
+
+    class Application:
+        def report_publish(self, run, profile, **options):
+            calls.append((run, profile, options))
+            return {"status": "completed"}
+
+    monkeypatch.setattr(cli, "_application", lambda: Application())
+    cli._dispatch(cli._parser().parse_args(["report", "publish", "run-1", "--output", "out.json"]))
+    assert calls == [("run-1", "libero-task-default", {"report_enabled": True, "output": "out.json"})]
+    with pytest.raises(cli.CliUsageError, match="cannot be combined"):
+        cli._dispatch(cli._parser().parse_args(["report", "publish", "run-1", "--output", "out.json", "--task", "task-1"]))

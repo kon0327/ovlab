@@ -67,10 +67,9 @@ experiment specifications also work from another directory.
 The principal target can be positional across reporting, exports and training:
 
 ```bash
-ovlab report generate RUN_ID
+ovlab report RUN_ID
+ovlab report EXPERIMENT_ID
 ovlab report verify RUN_ID
-ovlab report export isolated RUN_ID
-ovlab report export grouped GROUP_NAME RUN_ID_1 RUN_ID_2
 ovlab run train report TRAINING_RUN_ID
 ovlab dataset inspect DATASET_ID
 ovlab checkpoint verify CHECKPOINT_ID
@@ -118,13 +117,9 @@ environment when available:
 ./ovlab run eval inspect RUN_PATH_OR_ID_OR_HASH
 ./ovlab run eval verify RUN_PATH_OR_ID_OR_HASH
 ./ovlab metrics recompute RUN_PATH_OR_ID_OR_HASH
-./ovlab report publish --run RUN_ID_OR_HASH --profile libero-task-default
-./ovlab report generate --run RUN_ID_OR_HASH --profile libero-task-default
+./ovlab report RUN_ID_OR_HASH
+./ovlab report EXPERIMENT_ID
 ./ovlab report verify --run RUN_ID_OR_HASH --profile libero-task-default --build BUILD_ID
-./ovlab report export isolated --run RUN_ID_OR_HASH
-./ovlab report export grouped --name STUDY_NAME --runs RUN_ID_OR_HASH_A RUN_ID_OR_HASH_B
-./ovlab report export isolated --category train --run TRAINING_RUN_ID
-./ovlab report export grouped --category train --name TRAINING_STUDY --runs TRAIN_RUN_A TRAIN_RUN_B
 ./ovlab data list
 ./ovlab data archive --run RUN_ID
 ./ovlab dataset resolve --benchmark libero --suite libero_10

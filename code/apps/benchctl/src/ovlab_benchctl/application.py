@@ -753,14 +753,21 @@ class OvlabApplication:
         from ovlab_runner import recompute_run_metrics
         return recompute_run_metrics(self._benchmark_run_path(path))
 
-    def generate_report(self, path, output):
-        from ovlab_runner import regenerate_report
-        return regenerate_report(self._benchmark_run_path(path), output)
-
-    def report_generate(self, run, profile="libero-task-default", *, task_id=None):
+    def report_generate(self, run, profile="libero-task-default", *, task_id=None, output=None):
         from ovlab_runner import DerivedReportEngine, UnifiedInteractiveReportEngine
         runs, derived, exports = self._data_roots()
         selected = self._benchmark_run(run)
+        if output is not None:
+            from ovlab_runner import regenerate_report
+            report = regenerate_report(selected.path, output)
+            display_root = self.environment.get("OVLAB_EXPORTS_DISPLAY_ROOT")
+            container_root = self.environment.get("OVLAB_EXPORTS_ROOT")
+            if display_root and container_root:
+                path = Path(report["output"]).resolve()
+                root = Path(container_root).resolve()
+                if path.is_relative_to(root):
+                    report["output"] = str(Path(display_root) / path.relative_to(root))
+            return report
         scope = ExperimentScope.from_run_path(runs, selected.path, "evaluate")
         selected_profile = self._report_profile(profile)
         if scope is not None:
@@ -769,24 +776,20 @@ class OvlabApplication:
             ).generate(selected.path, task_id=task_id)
         return DerivedReportEngine(runs, derived, selected_profile).generate(selected.run_id, task_id=task_id)
 
-    def report_publish(self, run, profile="libero-task-default", *, report_enabled=True):
-        """Publish regenerable outputs from one finalized canonical run."""
-        from ovlab_runner import DerivedReportEngine, ExportEngine, UnifiedInteractiveReportEngine
-        runs, derived, exports = self._data_roots()
+    def report_publish(self, run, profile="libero-task-default", *, report_enabled=True,
+                       task_id=None, output=None):
+        """Generate the selected report and publish its isolated export."""
+        from ovlab_runner import ExportEngine
+        runs, _, exports = self._data_roots()
         selected = self._benchmark_run(run)
         run_id = selected.run_id
         scope = ExperimentScope.from_run_path(runs, selected.path, "evaluate")
         report = None
         if report_enabled:
-            if scope is not None:
-                report = UnifiedInteractiveReportEngine(
-                    runs, scope.exports_root(exports, "evaluate") / "interactive",
-                    self._report_profile(profile),
-                ).generate(selected.path)
-            else:
-                report = DerivedReportEngine(
-                    runs, derived, self._report_profile(profile)
-                ).generate(run_id)
+            options = {"task_id": task_id}
+            if output is not None:
+                options["output"] = output
+            report = self.report_generate(selected.path, profile, **options)
         isolated = ExportEngine(runs, exports, scope=scope).generate_isolated(run_id)
         return {
             "schema_version": "ovlab.postprocessing-result/v1",
@@ -914,8 +917,8 @@ class OvlabApplication:
             raise ValueError("data action must be archive or delete")
         return self._data_manager().preview(action, force=force, **selector)
 
-    def data_archive(self, **selector):
-        return self._data_manager().archive(**selector)
+    def data_archive(self, *, force=False, **selector):
+        return self._data_manager().archive(force=force, **selector)
 
     def data_delete(self, *, force=False, **selector):
         return self._data_manager().delete(force=force, **selector)

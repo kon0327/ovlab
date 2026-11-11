@@ -109,8 +109,18 @@ Archive all benchmark runs, derived reports, and exports:
 ./ovlab data archive --all
 ```
 
-The complete selection is refused if any run, report, or export is active or
-incomplete; no target is silently skipped.
+By default the complete selection is refused if any run, report, or export is
+active or incomplete; no target is silently skipped. To include these artifacts,
+review the selection and explicitly add `--force`:
+
+```bash
+./ovlab data archive --all --force --dry-run
+./ovlab data archive --all --force
+```
+
+`--force` does not stop running processes. Stop any active writers before
+archiving their data. The archive manifest records the source state and whether
+force was used; it does not turn an incomplete run into a finalized one.
 
 Interactive execution asks for an explicit confirmation. Automation must use
 `--yes`; JSON-mode mutations never prompt:
@@ -180,7 +190,8 @@ add `--force` after first reviewing the forced dry-run:
 
 `--force` bypasses only the artifact-state check. It does not bypass confirmation,
 root-containment checks, symbolic-link rejection, or the recursive permission
-preflight, and it is not accepted by `data archive`.
+preflight. Archival accepts the same flag and retains its own destination,
+path and symbolic-link checks.
 
 Deletion is irreversible and always requires interactive confirmation or
 `--yes`. Deleting a run does not implicitly delete its report or isolated
@@ -191,8 +202,8 @@ export, and deleting a report or export does not delete its canonical run. Use
 
 The manager:
 
-- refuses active or incompletely finalized runs;
-- refuses incomplete or `.partial` report and export builds;
+- refuses active or incompletely finalized runs unless explicitly forced;
+- refuses incomplete or `.partial` report and export builds unless explicitly forced;
 - rejects path traversal and symbolic links;
 - never overwrites an existing archive entry;
 - never follows a selected path outside its configured root;

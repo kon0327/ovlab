@@ -197,7 +197,6 @@ def test_plain_run_requires_target_but_keeps_inspect_and_verify():
     ("run", "config.yaml"),
     ("metrics", "recompute", "/runs/example"),
     ("report", "profiles"),
-    ("report", "generate", "--run", "run-1"),
     ("report", "publish", "--run", "run-1"),
     ("report", "verify", "--run", "run-1"),
     ("export", "isolated", "--run", "run-1"),
@@ -999,9 +998,10 @@ def test_unified_report_parses_single_run_and_export_subcommands():
     direct = _parser().parse_args(["report", "run-123", "--json"])
     assert direct.command == "report" and direct.report_command == "auto"
     assert direct.reference == "run-123" and direct.json
-    grouped = _parser().parse_args(["report", "export", "grouped", "comparison", "run-123", "run-456"])
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["report", "export", "grouped", "comparison", "run-123", "run-456"])
+    grouped = _parser().parse_args(["export", "grouped", "comparison", "run-123", "run-456"])
     assert grouped.command == "export" and grouped.export_command == "grouped"
-    assert grouped.group_targets == ["comparison", "run-123", "run-456"]
 
 
 def test_report_shortcut_uses_isolated_export_in_reporting_image(tmp_path):
@@ -1036,3 +1036,35 @@ def test_report_shortcut_dispatches_to_automatic_export(monkeypatch):
     monkeypatch.setattr(report_auto, "generate_report", lambda reference, **kwargs: expected)
     result, json_mode, _ = _dispatch(_parser().parse_args(["report", "run-123", "--json"]))
     assert result == expected and json_mode
+
+
+def test_report_help_exposes_automatic_workflow_not_legacy_export_actions():
+    result = _run("report", "--help")
+    assert result.returncode == 0
+    assert "RUN_OR_EXPERIMENT_ID" in result.stdout
+    assert "profiles" in result.stdout and "verify" in result.stdout
+    assert "generate" not in result.stdout and "publish" in result.stdout
+    assert "report export" not in result.stdout
+
+
+def test_report_publish_maps_machine_output_into_reporting_container(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    log = tmp_path / "docker-arguments.txt"
+    docker = binaries / "docker"
+    docker.write_text(
+        '#!/bin/sh\nif [ "${1:-}" = image ]; then exit 0; fi\n'
+        'printf "%s\\n" "$@" > "$OVLAB_FAKE_DOCKER_LOG"\n', encoding="utf-8"
+    )
+    docker.chmod(0o755)
+    data = tmp_path / "data"
+    (data / "runs").mkdir(parents=True)
+    env = {"PATH": f"{binaries}:{os.environ['PATH']}", "OVLAB_DATA_ROOT": str(data),
+           "OVLAB_FAKE_DOCKER_LOG": str(log)}
+    output = data / "exports" / "machine-report"
+    result = _run("report", "publish", "run-1", "--output", str(output), environment=env)
+    assert result.returncode == 0, result.stderr
+    arguments = log.read_text().splitlines()
+    assert arguments[arguments.index("--output") + 1] == "/var/lib/ovlab/exports/machine-report"
+    invalid = _run("report", "publish", "run-1", "--output", str(tmp_path / "outside"), environment=env)
+    assert invalid.returncode == 3 and "must be inside" in invalid.stderr

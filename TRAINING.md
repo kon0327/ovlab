@@ -265,7 +265,14 @@ Inspect canonical evidence offline:
 ./ovlab checkpoint list
 ./ovlab checkpoint inspect --checkpoint CHECKPOINT_ID
 ./ovlab checkpoint verify --checkpoint CHECKPOINT_ID
+# Copy the verified immutable bundle or make a tar archive:
+./ovlab checkpoint export CHECKPOINT_ID --format bundle --output /path/to/new-bundle
+./ovlab checkpoint export CHECKPOINT_ID --format tar --output /path/to/checkpoint.tar
 ```
+
+`bundle` and `tar` preserve the finalized checkpoint and its metadata; adapter
+bundles still require their separately identified base model. ONNX conversion is
+not yet implemented for complete policies.
 
 `checkpoint list` defaults to finalized local training bundles. To list portable
 checkpoint resources declared in `configs/resources/registry.yaml`, use:
