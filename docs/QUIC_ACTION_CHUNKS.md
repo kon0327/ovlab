@@ -25,7 +25,7 @@ train-only fitted normalization, three optimizer updates and the 24 GiB budget.
 They are configurations, not evidence of a successful GPU run.
 
 ```bash
-./ovlab train run experiments/training/quic/action-chunks/libero10-h8-smoke.yaml --json
+./ovlab run train run experiments/training/quic/action-chunks/libero10-h8-smoke.yaml --json
 ```
 
 Rebuild the OpenVLA QuIC training, policy and dataset/finalizer images from these sources
@@ -36,7 +36,7 @@ bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic da
 ```
  The existing coverage study launcher validates token
 cross entropy and is intended for the token profiles; run chunk profiles through
-`ovlab train run` directly.
+`ovlab run train run` directly.
 
 ## Model and optimizer
 

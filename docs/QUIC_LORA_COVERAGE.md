@@ -176,7 +176,7 @@ bash deploy/scripts/train-quic-lora-coverage.sh --dry-run --output /tmp/quic-cov
 bash deploy/scripts/train-quic-lora-coverage.sh --output /tmp/quic-coverage-run
 ```
 
-The output directory must be new. The launcher uses normal `ovlab train run`
+The output directory must be new. The launcher uses normal `ovlab run train run`
 and verifies each run and checkpoint. It requires exact identity/reload logits,
 finite held-out action-token loss and complete active-target coverage including
 Conv2d. **All four smokes must pass before any deep training starts.** A failed
@@ -192,9 +192,9 @@ LoRA reference trained for a scientific method comparison.
 For one stage, the ordinary CLI remains available:
 
 ```bash
-./ovlab train validate \
+./ovlab run train validate \
   --profile experiments/training/quic/lora-coverage/libero10-smoke.yaml
-./ovlab train run experiments/training/quic/lora-coverage/libero10-smoke.yaml
+./ovlab run train run experiments/training/quic/lora-coverage/libero10-smoke.yaml
 ```
 
 Record offline action-token CE, accuracy, decoded normalized action L1, invalid

@@ -56,7 +56,7 @@ environment, install it once into `~/.local/bin`:
 ```bash
 bash ./install-ovlab-cli.sh
 ovlab --help
-ovlab experiment run experiments/workflows/libero-model-tree.json --dry-run
+ovlab run experiment run experiments/workflows/libero-model-tree.json --dry-run
 ```
 
 The installer prints a PATH instruction if `~/.local/bin` is not already on
@@ -71,7 +71,7 @@ ovlab report generate RUN_ID
 ovlab report verify RUN_ID
 ovlab export isolated RUN_ID
 ovlab export grouped GROUP_NAME RUN_ID_1 RUN_ID_2
-ovlab train report TRAINING_RUN_ID
+ovlab run train report TRAINING_RUN_ID
 ovlab dataset inspect DATASET_ID
 ovlab checkpoint verify CHECKPOINT_ID
 ```
@@ -96,15 +96,15 @@ environment when available:
 
 ```bash
 ./ovlab --help
-./ovlab experiment plan --spec experiments/workflows/libero-model-tree.json
-./ovlab experiment run --spec experiments/workflows/libero-model-tree.json --dry-run
-./ovlab experiment run --spec experiments/workflows/libero-model-tree.json
+./ovlab run experiment plan --spec experiments/workflows/libero-model-tree.json
+./ovlab run experiment run --spec experiments/workflows/libero-model-tree.json --dry-run
+./ovlab run experiment run --spec experiments/workflows/libero-model-tree.json
 ./ovlab doctor
 ./ovlab doctor --experiment experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab eval run libero10-lora-merged-rpc-smoke
-./ovlab eval run libero10-lora-merged-rpc-smoke --quantization 4bit
-./ovlab train run openvla-libero10-lora-smoke
-./ovlab train run openvla-libero10-lora-smoke --dry-run
+./ovlab run eval run libero10-lora-merged-rpc-smoke
+./ovlab run eval run libero10-lora-merged-rpc-smoke --quantization 4bit
+./ovlab run train run openvla-libero10-lora-smoke
+./ovlab run train run openvla-libero10-lora-smoke --dry-run
 ./ovlab deploy run openvla-libero10 --dry-run
 ./ovlab deploy run openvla-libero10
 ./ovlab deploy inspect openvla-libero10
@@ -115,8 +115,8 @@ environment when available:
 ./ovlab run CONFIG --dry-run
 ./ovlab run EXPERIMENT --dry-run
 ./ovlab run EXPERIMENT --profile configs/local/profile.yaml --dry-run
-./ovlab eval inspect RUN_PATH_OR_ID_OR_HASH
-./ovlab eval verify RUN_PATH_OR_ID_OR_HASH
+./ovlab run eval inspect RUN_PATH_OR_ID_OR_HASH
+./ovlab run eval verify RUN_PATH_OR_ID_OR_HASH
 ./ovlab metrics recompute RUN_PATH_OR_ID_OR_HASH
 ./ovlab report publish --run RUN_ID_OR_HASH --profile libero-task-default
 ./ovlab report generate --run RUN_ID_OR_HASH --profile libero-task-default
@@ -128,8 +128,8 @@ environment when available:
 ./ovlab data list
 ./ovlab data archive --run RUN_ID
 ./ovlab dataset resolve --benchmark libero --suite libero_10
-./ovlab train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
-./ovlab train report --run TRAINING_RUN_ID
+./ovlab run train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
+./ovlab run train report --run TRAINING_RUN_ID
 ./ovlab checkpoint list
 ```
 
@@ -139,7 +139,7 @@ the CLI accepts either the complete ID or that hash; training run selectors
 use the same rule within their separate namespace. Exact IDs take precedence,
 and an ambiguous hash is rejected.
 
-`ovlab eval run` is the normal evaluation workflow. It launches the selected
+`ovlab run eval run` is the normal evaluation workflow. It launches the selected
 policy service and the LIBERO runner as separate Compose containers, waits for
 readiness, propagates the benchmark result, and cleans up the private deployment
 resources. It then starts the dedicated reporting image with canonical `runs/`

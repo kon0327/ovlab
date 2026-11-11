@@ -1082,6 +1082,13 @@ class OvlabApplication:
         from .training_runs import CheckpointBundleStore
         return {"schema_version": "ovlab.checkpoint-list/v1", "checkpoints": CheckpointBundleStore(self._model_data_root()).list()}
 
+    def checkpoint_registry_list(self, *, online=False, profile=None):
+        from .checkpoint_catalog import registry_checkpoints
+        registry = self.resolver.load_component("resources/registry.yaml", "resource_registry")
+        return registry_checkpoints(registry, environment=self.environment,
+                                    model_data_root=self._model_data_root(), online=online,
+                                    profile=profile)
+
     def checkpoint_inspect(self, checkpoint_id):
         from .training_runs import CheckpointBundleStore
         return CheckpointBundleStore(self._model_data_root()).inspect(checkpoint_id)

@@ -17,8 +17,8 @@ explicitly before launching evaluation.
 Two evaluation-only examples use the same 4-bit merged OpenVLA-LoRA profile:
 
 ```bash
-ovlab experiment run experiments/workflows/libero10-lora-4bit-smoke.yaml
-ovlab experiment run experiments/workflows/libero10-lora-4bit-eval.yaml
+ovlab run experiment run experiments/workflows/libero10-lora-4bit-smoke.yaml
+ovlab run experiment run experiments/workflows/libero10-lora-4bit-eval.yaml
 ```
 
 The smoke test runs task 0 once, limited to two environment steps. It checks
@@ -32,13 +32,13 @@ available. Add `--dry-run` to validate either workflow without running it.
 ## Plan and run
 
 ```bash
-ovlab experiment plan experiments/workflows/libero-model-tree.yaml --json
-ovlab experiment run experiments/workflows/libero-model-tree.yaml --dry-run
-ovlab experiment run experiments/workflows/libero-model-tree.yaml
-ovlab experiment run experiments/workflows/libero-model-tree.yaml --node lora/task-0
-ovlab experiment run experiments/workflows/libero-model-tree.yaml --node lora --node-only
-ovlab experiment run experiments/workflows/libero-model-tree.yaml --sequential
-ovlab experiment run experiments/workflows/libero-model-tree.yaml --max-workers 4
+ovlab run experiment plan experiments/workflows/libero-model-tree.yaml --json
+ovlab run experiment run experiments/workflows/libero-model-tree.yaml --dry-run
+ovlab run experiment run experiments/workflows/libero-model-tree.yaml
+ovlab run experiment run experiments/workflows/libero-model-tree.yaml --node lora/task-0
+ovlab run experiment run experiments/workflows/libero-model-tree.yaml --node lora --node-only
+ovlab run experiment run experiments/workflows/libero-model-tree.yaml --sequential
+ovlab run experiment run experiments/workflows/libero-model-tree.yaml --max-workers 4
 ```
 
 `--spec` remains an equivalent named form. A command accepts either the

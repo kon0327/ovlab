@@ -114,7 +114,7 @@ Dataset acquisition is not performed by `train validate` or `train plan`.
 Training can opt into the same explicit built-in acquisition step with:
 
 ```bash
-./ovlab train run \
+./ovlab run train run \
   experiments/training/openvla-libero10-lora-smoke.yaml \
   --allow-dataset-download
 ```

@@ -191,20 +191,62 @@ if [[ "${1:-}" == "dataset" && "${OVLAB_DATASET_RUNTIME:-docker}" != "host" ]]; 
         echo "ovlab: dataset registry does not exist: $datasets_root" >&2
         exit 4
     fi
+    # Docker runs without a TTY, so pass the caller's terminal width explicitly.
+    dataset_columns="${COLUMNS:-}"
+    if [[ -t 1 ]] && command -v stty >/dev/null 2>&1; then
+        terminal_size="$(stty size <&1 2>/dev/null || true)"
+        [[ "$terminal_size" =~ ^[0-9]+[[:space:]]+([0-9]+)$ ]] && dataset_columns="${BASH_REMATCH[1]}"
+    fi
+    dataset_terminal_env=()
+    if [[ "$dataset_columns" =~ ^[1-9][0-9]*$ ]]; then
+        dataset_terminal_env=(--env "COLUMNS=$dataset_columns")
+    fi
     echo "ovlab: dataset: using isolated image $dataset_image (network=$network)." >&2
-    exec docker run --rm \
-        --network "$network" --read-only --user 10001:10001 --group-add "$(id -g)" \
-        --cap-drop ALL --security-opt no-new-privileges:true \
-        --tmpfs /tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700 \
-        --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data \
-        --env "OVLAB_MODEL_DATA_DISPLAY_ROOT=$model_data_root" \
-        "${dataset_mount[@]}" "${import_mount[@]}" \
-        "$dataset_image" "${args[@]}"
+    dataset_docker=(docker run --rm
+        --network "$network" --read-only --user 10001:10001 --group-add "$(id -g)"
+        --cap-drop ALL --security-opt no-new-privileges:true
+        --tmpfs /tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700
+        --env OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data
+        --env "OVLAB_MODEL_DATA_DISPLAY_ROOT=$model_data_root"
+        "${dataset_terminal_env[@]}" "${dataset_mount[@]}" "${import_mount[@]}"
+        "$dataset_image")
+    # Format list output with the checkout's CLI, even if the isolated image
+    # was built before the current human-readable formatting was introduced.
+    if [[ "$dataset_command" == "list" && "$help_requested" == false ]]; then
+        dataset_structured=false
+        for argument in "${args[@]}"; do
+            [[ "$argument" == "--json" || "$argument" == "--detail" ]] && dataset_structured=true
+        done
+        if [[ "$dataset_structured" == false ]]; then
+            set +e
+            "${dataset_docker[@]}" "${args[@]}" --json | "$python_executable" -c '
+import json, sys
+from ovlab_benchctl.cli import _human, _compact
+try:
+    doc = json.load(sys.stdin)
+except (ValueError, OSError):
+    sys.exit(1)
+if doc.get("status") != "success":
+    for error in doc.get("errors", []):
+        print("ovlab: " + error.get("message", "dataset list failed"), file=sys.stderr)
+    sys.exit(1)
+_human(_compact("dataset list", doc.get("result")))
+'
+            dataset_pipeline_status=("${PIPESTATUS[@]}")
+            set -e
+            if (( dataset_pipeline_status[0] != 0 )); then
+                exit "${dataset_pipeline_status[0]}"
+            fi
+            exit "${dataset_pipeline_status[1]}"
+        fi
+    fi
+    exec "${dataset_docker[@]}" "${args[@]}"
 fi
 
 # Training performance reports use the same purpose-built reporting image while
 # reading canonical training evidence through a separate read-only mount.
-if [[ "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${3:-}" != "-h" ]]; then
+if [[ ( "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "${3:-}" != "-h" ) || ( "${1:-}" == "run" && "${2:-}" == "train" && "${3:-}" == "report" && "${4:-}" != "--help" && "${4:-}" != "-h" ) ]]; then
+    [[ "${1:-}" == "run" ]] && set -- "${@:2}"
     reporting_runtime="${OVLAB_REPORTING_RUNTIME:-docker}"
     if [[ "$reporting_runtime" != "host" ]]; then
         if ! command -v docker >/dev/null 2>&1; then

@@ -19,17 +19,17 @@ contract. Canonical camera names are checked in the same way.
 ## Scenario directories
 
 - `../experiments/workflows/`: hierarchical YAML or JSON experiments selected by
-  `ovlab experiment plan|run --spec FILE`; see the
+  `ovlab run experiment plan|run --spec FILE`; see the
   [experiment workflow guide](../docs/EXPERIMENT_WORKFLOW.md).
-- `../experiments/training/`: training scenarios selected by `ovlab train run TARGET`.
-- `../experiments/evaluation/`: evaluation scenarios selected by `ovlab eval run TARGET`.
+- `../experiments/training/`: training scenarios selected by `ovlab run train run TARGET`.
+- `../experiments/evaluation/`: evaluation scenarios selected by `ovlab run eval run TARGET`.
 - `deploy/`: policy-only deployment configs selected by `ovlab deploy run TARGET`.
 
 Commented reference files: [`evaluation/example.yaml`](../experiments/evaluation/example.yaml),
 [`training/example.yaml`](../experiments/training/example.yaml) and
 [`workflows/example.yaml`](../experiments/workflows/example.yaml). Each contains a
-valid example plus commented alternatives; validate with `ovlab eval run --dry-run`,
-`ovlab train validate` or `ovlab experiment plan`, respectively.
+valid example plus commented alternatives; validate with `ovlab run eval run --dry-run`,
+`ovlab run train validate` or `ovlab run experiment plan`, respectively.
 
 Workflow specs accept YAML or JSON paths. Training, evaluation and deployment
 scenarios accept YAML names or paths; their run commands support `--dry-run`.
@@ -111,8 +111,8 @@ paths may differ; checkpoint/data identities, episode split, normalization, seed
 optimizer budget and resource contract must remain shared.
 
 ```bash
-./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab train ablate materialize --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab run train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab run train ablate materialize --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-plan
 ```
 

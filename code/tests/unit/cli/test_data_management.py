@@ -74,11 +74,11 @@ def test_data_list_compact_detail_and_training_report_identity(tmp_path):
     _tree(data)
     compact = _invoke(data, "data", "list")
     assert compact.returncode == 0 and compact.stderr == ""
-    assert f"run run-1 ({run_hash('run-1')}) completed {data / 'runs/run-1'}" in compact.stdout
-    assert f"report run-1 generated {data / 'exports/derived/run-1'}" in compact.stdout
-    assert f"report training:training-1 generated {data / 'exports/derived/training/training-1'}" in compact.stdout
-    assert f"export isolated:run-1 generated {data / 'exports/isolated/run-1'}" in compact.stdout
-    assert f"export grouped:study-1 generated {data / 'exports/grouped/study-1'}" in compact.stdout
+    assert all(header in compact.stdout for header in ("KIND", "ID", "HASH", "STATE", "TYPE", "PATH"))
+    assert all(value in compact.stdout for value in (
+        "run-1", run_hash("run-1"), "completed", "training:training-1",
+        "isolated:run-1", "grouped:study-1", "generated",
+    ))
 
     detailed = _invoke(data, "data", "list", "--detail")
     document = json.loads(detailed.stdout)
@@ -182,9 +182,10 @@ def test_export_selection_is_namespaced_and_does_not_remove_other_data(tmp_path)
     run, _, _, isolated, grouped, _ = _tree(data)
     listing = _invoke(data, "data", "list", "--kind", "exports")
     assert listing.returncode == 0
-    assert "export isolated:run-1 generated" in listing.stdout
-    assert "export grouped:study-1 generated" in listing.stdout
-    assert "run run-1" not in listing.stdout
+    assert "isolated:run-1" in listing.stdout
+    assert "grouped:study-1" in listing.stdout
+    assert "generated" in listing.stdout
+    assert "completed" not in listing.stdout
 
     invalid = _invoke(data, "data", "delete", "--export", "study-1", "--yes")
     assert invalid.returncode == 7

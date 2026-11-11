@@ -94,7 +94,7 @@ with the completed canonical run path and cannot change its status or contents.
 Use the normal deployment command; no separate reporting command is required:
 
 ```bash
-./ovlab eval run experiments/evaluation/EXPERIMENT.yaml
+./ovlab run eval run experiments/evaluation/EXPERIMENT.yaml
 ```
 
 Reporting configuration affects only derived identity; it does not affect
@@ -357,12 +357,12 @@ Finalized training runs use the same isolated reporting image and a distinct
 read-only source mount:
 
 ```bash
-./ovlab train report --run TRAINING_RUN_ID
-./ovlab train report --run TRAINING_RUN_ID --verify
-./ovlab train report --run TRAINING_RUN_ID --verify --build BUILD_ID --json
+./ovlab run train report --run TRAINING_RUN_ID
+./ovlab run train report --run TRAINING_RUN_ID --verify
+./ovlab run train report --run TRAINING_RUN_ID --verify --build BUILD_ID --json
 ```
 
-`ovlab train run` generates this performance report automatically after the
+`ovlab run train run` generates this performance report automatically after the
 checkpoint finalizer succeeds. The commands above regenerate or verify it
 without starting a trainer.
 
@@ -438,8 +438,8 @@ document inline as the profile's `key_parameters` object. Then select it:
 ```bash
 ./ovlab report generate --run "$EVALUATION_RUN_ID" --profile configs/local/reporting/evaluation-profile.json
 ./ovlab report verify --run "$EVALUATION_RUN_ID" --profile configs/local/reporting/evaluation-profile.json
-./ovlab train report --run "$TRAINING_RUN_ID" --parameters configs/local/reporting/train-key-parameters.json
-./ovlab train report --run "$TRAINING_RUN_ID" --parameters configs/local/reporting/train-key-parameters.json --verify
+./ovlab run train report --run "$TRAINING_RUN_ID" --parameters configs/local/reporting/train-key-parameters.json
+./ovlab run train report --run "$TRAINING_RUN_ID" --parameters configs/local/reporting/train-key-parameters.json --verify
 ```
 
 With Docker reporting, training parameter files must be under `configs/`
@@ -694,7 +694,7 @@ Confirm that the run ID is a direct child of `OVLAB_RUNS_ROOT` and that the
 directory contains its canonical manifests and `integrity.json`:
 
 ```bash
-./ovlab eval verify "$OVLAB_RUNS_ROOT/$RUN_ID"
+./ovlab run eval verify "$OVLAB_RUNS_ROOT/$RUN_ID"
 ```
 
 The machine-readable error code is `source_unavailable` and the process exits
@@ -729,7 +729,7 @@ canonical `video.json`, then run `ovlab report verify` for the affected build.
 
 Before sharing a result:
 
-1. run `ovlab eval verify` on every canonical source run;
+1. run `ovlab run eval verify` on every canonical source run;
 2. regenerate the report from its profile or the export from its template and selection;
 3. retain the derived report build ID where applicable;
 4. run `ovlab report verify` with that build ID or `ovlab export verify` with the export kind and name;

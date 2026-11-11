@@ -1,8 +1,8 @@
 # Training operations
 
 Training scenarios live in `experiments/training/`. Use
-`ovlab train run TARGET`, `ovlab train inspect RUN_REFERENCE`, and
-`ovlab train verify RUN_REFERENCE`. `train run TARGET --dry-run` resolves the
+`ovlab run train run TARGET`, `ovlab run train inspect RUN_REFERENCE`, and
+`ovlab run train verify RUN_REFERENCE`. `train run TARGET --dry-run` resolves the
 training plan without starting a trainer; resource planning may require prepared
 local datasets/checkpoints. The legacy `--run` form for inspect/verify remains
 accepted. Evaluation uses `ovlab eval`; persistent model services use `ovlab deploy`.
@@ -116,11 +116,11 @@ merge and sequences replace. Absolute host paths, shell commands, unknown keys
 and unresolved aliases are rejected.
 
 ```bash
-./ovlab train profiles
-./ovlab train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
-./ovlab train run openvla-libero10-quic-smoke.yaml
-./ovlab train plan --profile openvla-libero10-quic-hard.yaml
-./ovlab train plan --profile experiments/training/openvla-libero10-lora-smoke.yaml
+./ovlab run train profiles
+./ovlab run train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
+./ovlab run train run openvla-libero10-quic-smoke.yaml
+./ovlab run train plan --profile openvla-libero10-quic-hard.yaml
+./ovlab run train plan --profile experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
 `model.revision` accepts a pinned 40-character commit, `local/main`,
@@ -160,11 +160,11 @@ inherited action statistics, explicit deterministic episode train/validation
 partition, and adapter-only output:
 
 ```bash
-./ovlab train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab train plan --profile experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab train run experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab run train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab run train plan --profile experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab run train run experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab run train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab run train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-run
 ```
 
@@ -188,9 +188,9 @@ adapter through reload and inference.
 Teacher-forced validation remains separate from benchmark rollout evaluation.
 
 ```bash
-./ovlab train run experiments/training/openvla-libero10-quic-smoke.yaml \
+./ovlab run train run experiments/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
-./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab run train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --fit-action-normalization --output /tmp/quic-placement-fitted-run
 ```
 
@@ -215,7 +215,7 @@ bash deploy/scripts/build-images.sh dataset training-openvla training-openvla-qu
 Then start a bounded run:
 
 ```bash
-./ovlab train run \
+./ovlab run train run \
   experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
@@ -243,15 +243,36 @@ including private Safetensors staging files, so host-side verification works.
 Inspect canonical evidence offline:
 
 ```bash
-./ovlab train status TRAINING_RUN_ID
-./ovlab train inspect TRAINING_RUN_ID
-./ovlab train verify TRAINING_RUN_ID
-./ovlab train report --run TRAINING_RUN_ID
-./ovlab train report --run TRAINING_RUN_ID --verify
+./ovlab run train status TRAINING_RUN_ID
+./ovlab run train inspect TRAINING_RUN_ID
+./ovlab run train verify TRAINING_RUN_ID
+./ovlab run train report --run TRAINING_RUN_ID
+./ovlab run train report --run TRAINING_RUN_ID --verify
 ./ovlab checkpoint list
 ./ovlab checkpoint inspect --checkpoint CHECKPOINT_ID
 ./ovlab checkpoint verify --checkpoint CHECKPOINT_ID
 ```
+
+`checkpoint list` defaults to finalized local training bundles. To list portable
+checkpoint resources declared in `configs/resources/registry.yaml`, use:
+
+```bash
+./ovlab checkpoint list --source registry --offline
+./ovlab checkpoint list --source registry --online --json
+./ovlab checkpoint list --source registry --offline --profile configs/local/profile.yaml
+```
+
+Registry listing defaults to offline. It checks the global Hugging Face cache,
+an optional local profile override, and the managed cache in resolver order.
+`present_unverified` means the snapshot and expected file sizes are present;
+the listing does not hash files or guarantee that deployment will succeed.
+`incomplete` means the first matching snapshot is missing files or sizes differ.
+Moving revisions may show `revision_unknown` when their commit cannot be resolved
+locally. Online mode additionally queries Hugging Face for each selected revision
+without downloading weights. `not_found_or_inaccessible` includes private or
+unauthorized repositories; `unknown` includes network and server errors. Use
+`HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` for private repositories. The command is
+read-only in both modes; registry entries remain visible even if checks fail.
 
 Add `--json` to any of these commands for one stable machine-readable document.
 Checkpoint verification parses safetensors metadata and finite floating-point
@@ -314,7 +335,7 @@ training. `OVLAB_WANDB_ENTITY` selects a team; standard W&B settings such as
 `WANDB_MODE=offline` also apply. For example:
 
 ```bash
-OVLAB_WANDB_PROJECT=ovlab ./ovlab train run openvla-lora-libero10-smoke
+OVLAB_WANDB_PROJECT=ovlab ./ovlab run train run openvla-lora-libero10-smoke
 ```
 
 The host uploads the training plan, result and manifest as a small W&B artifact,

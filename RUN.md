@@ -21,9 +21,9 @@ set the data paths:
 
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
-./ovlab eval run \
+./ovlab run eval run \
   experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --dry-run
-./ovlab eval run \
+./ovlab run eval run \
   experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
 ```
 
@@ -93,8 +93,8 @@ After a run, list and inspect the results with:
 
 ```bash
 ./ovlab data list --kind runs
-./ovlab eval inspect RUN_ID_OR_HASH
-./ovlab eval verify RUN_ID_OR_HASH
+./ovlab run eval inspect RUN_ID_OR_HASH
+./ovlab run eval verify RUN_ID_OR_HASH
 ```
 
 For details about containers and their configuration, see
@@ -111,7 +111,7 @@ authenticate with `wandb login` or `WANDB_API_KEY`.
 W&B settings such as `WANDB_MODE=offline` apply.
 
 ```bash
-OVLAB_WANDB_PROJECT=ovlab ./ovlab eval run experiments/evaluation/libero-mock-smoke.yaml
+OVLAB_WANDB_PROJECT=ovlab ./ovlab run eval run experiments/evaluation/libero-mock-smoke.yaml
 ```
 
 The mirror records numeric episode metrics, per-task metrics, averages across

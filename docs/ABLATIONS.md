@@ -15,27 +15,27 @@ normalization statistics. A9 is the source project's local placement extension.
 
 ```bash
 # Pure schema/invariant validation: no dataset/model imports or GPU allocation.
-./ovlab train ablate validate \
+./ovlab run train ablate validate \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml
 
 # Resolve and verify the same immutable checkpoint and dataset for all variants.
-./ovlab train ablate plan \
+./ovlab run train ablate plan \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml
 
 # Reviewable resolved profiles, a scientific plan and exact child commands.
 # OUTPUT must be a new directory; plans and profiles are immutable.
-./ovlab train ablate materialize \
+./ovlab run train ablate materialize \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-plan
 
 # Sequential ordinary OVLAB training containers, finalizers and reports.
-./ovlab train ablate run \
+./ovlab run train ablate run \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-run
 ```
 
 `materialize` and `run` preflight local resources; fetch datasets explicitly
-first. A materialized profile can also be passed directly to `ovlab train run`.
+first. A materialized profile can also be passed directly to `ovlab run train run`.
 Relative parent paths are confined to `configs/`, cycles fail, mappings merge,
 and lists replace. Every final resolved profile is validated normally. The
 suite allows only declared changes beneath `training.peft.adapter`,
@@ -104,11 +104,11 @@ fitted statistics are separate scientific conditions. Reference full/LoRA
 partition profiles also support `train-q99`.
 
 ```bash
-./ovlab train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml \
+./ovlab run train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
-./ovlab train run experiments/training/openvla-libero10-quic-smoke.yaml \
+./ovlab run train run experiments/training/openvla-libero10-quic-smoke.yaml \
   --fit-action-normalization
-./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab run train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --fit-action-normalization --output /tmp/quic-placement-fitted-run
 ```
 

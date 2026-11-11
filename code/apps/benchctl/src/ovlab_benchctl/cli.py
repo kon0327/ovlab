@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
+import textwrap
 import sys
 import traceback
 
@@ -75,10 +77,26 @@ def _primary_argument(parser, flag, dest, metavar, *, help=None, choices=None):
     group.add_argument(flag, dest=dest, metavar=metavar, choices=choices, help=f"alias for {metavar}")
 
 
+class _RootParser(argparse.ArgumentParser):
+    """Accept legacy native run syntax while exposing grouped run commands."""
+
+    def parse_args(self, args=None, namespace=None):
+        arguments = list(sys.argv[1:] if args is None else args)
+        # The original low-level `run TARGET` is still accepted for existing scripts.
+        if arguments and arguments[0] == "run" and (len(arguments) == 1 or arguments[1] not in {"eval", "train", "experiment", "--help", "-h"}):
+            arguments[0] = "_native-run"
+        parsed = super().parse_args(arguments, namespace)
+        if parsed.command == "_native-run":
+            parsed.command = "run"
+        elif parsed.command == "run" and getattr(parsed, "run_category", None):
+            parsed.command = parsed.run_category
+        return parsed
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ovlab", description="OpenVLABenchmark orchestration CLI")
+    parser = _RootParser(prog="ovlab", description="OpenVLABenchmark orchestration CLI")
     parser.add_argument(
-        "--version", dest="show_version", action="store_true",
+        "-v", "--version", dest="show_version", action="store_true",
         help="show OVLAB CLI and repository revision",
     )
     parser.add_argument("--debug", action="store_true", help="include a traceback for unexpected failures")
@@ -187,7 +205,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--dry-run", action="store_true")
         _output_options(command)
 
-    run = commands.add_parser("run", help="execute, inspect, or verify a run")
+    run = commands.add_parser("_native-run", help=argparse.SUPPRESS)
     run.add_argument("target", nargs="?", help="evaluation YAML in experiments/evaluation, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH, RUN_ID, or RUN_HASH for inspect or verify")
     run.add_argument(
@@ -387,9 +405,14 @@ def _parser() -> argparse.ArgumentParser:
     train_report.add_argument("--parameters", help="JSON configuration of highlighted training parameters")
     _output_options(train_report)
 
-    checkpoint = commands.add_parser("checkpoint", help="inspect finalized immutable training checkpoints")
+    checkpoint = commands.add_parser("checkpoint", help="inspect local and registered checkpoints")
     checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_command", required=True)
-    checkpoint_list = checkpoint_commands.add_parser("list", help="list finalized training checkpoints")
+    checkpoint_list = checkpoint_commands.add_parser("list", help="list local training checkpoints or registered resources")
+    checkpoint_list.add_argument("--source", choices=("local", "registry"), default="local", help="checkpoint catalogue (default: local)")
+    network = checkpoint_list.add_mutually_exclusive_group()
+    network.add_argument("--offline", action="store_true", help="inspect registry and local cache without network (default)")
+    network.add_argument("--online", action="store_true", help="also check registered revisions on Hugging Face")
+    checkpoint_list.add_argument("--profile", help="local profile containing checkpoint path overrides (registry only)")
     _output_options(checkpoint_list)
     checkpoint_inspect = checkpoint_commands.add_parser("inspect", help="inspect checkpoint identity and compatibility")
     _primary_argument(checkpoint_inspect, "--checkpoint", "checkpoint_id", "CHECKPOINT")
@@ -397,6 +420,29 @@ def _parser() -> argparse.ArgumentParser:
     checkpoint_verify = checkpoint_commands.add_parser("verify", help="verify checkpoint files and tensor structure")
     _primary_argument(checkpoint_verify, "--checkpoint", "checkpoint_id", "CHECKPOINT")
     _output_options(checkpoint_verify)
+
+    grouped_run = commands.add_parser("run", help="manage evaluation, training, and experiment runs")
+    grouped_commands = grouped_run.add_subparsers(dest="run_category", metavar="COMMAND", required=True)
+    def set_grouped_prog(subparser, prefix):
+        subparser.prog = prefix
+        for action in subparser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for child_name, child in action.choices.items():
+                    set_grouped_prog(child, f"{prefix} {child_name}")
+
+    for name, subparser, help_text in (
+        ("eval", evaluation, "run, inspect, and verify evaluations"),
+        ("train", train, "validate, plan, execute, and inspect training"),
+        ("experiment", experiment, "plan and run experiment workflows"),
+    ):
+        grouped_commands._name_parser_map[name] = subparser
+        grouped_commands._choices_actions.append(
+            grouped_commands._ChoicesPseudoAction(name, (), help_text)
+        )
+        set_grouped_prog(subparser, f"ovlab run {name}")
+    # Keep the old entry points usable, but show the grouped interface in help.
+    commands._choices_actions = [action for action in commands._choices_actions
+                                 if action.dest not in {"eval", "train", "experiment", "_native-run"}]
     return parser
 
 
@@ -479,18 +525,68 @@ def _scalar(value) -> str:
     return str(value)
 
 
-def _columns(rows, fields: tuple[tuple[str, ...], ...], *, empty: str) -> str:
-    lines = []
+def _table(rows, columns: tuple[tuple[str, tuple[str, ...]], ...], *, empty: str) -> str:
+    """Render labeled, terminal-width-aware rows without dropping values."""
+    rows = list(rows)
+    if not rows:
+        return empty
+    headers = [label for label, _ in columns]
+    values = []
     for row in rows:
         if not isinstance(row, dict):
-            lines.append(_scalar(row))
-            continue
-        values = []
-        for alternatives in fields:
+            row = {columns[0][1][0]: row}
+        cells = []
+        for _, alternatives in columns:
             value = _first(row, alternatives)
-            values.append("-" if value is _MISSING else _scalar(value))
-        lines.append(" ".join(values))
-    return "\n".join(lines) if lines else empty
+            cells.append("-" if value is _MISSING or value is None or value == [] else _scalar(value))
+        values.append(cells)
+
+    terminal_width = shutil.get_terminal_size(fallback=(120, 24)).columns
+    widths = [max(len(headers[i]), *(max(map(len, cell.splitlines()), default=0)
+                                    for cell in (row[i] for row in values)))
+              for i in range(len(headers))]
+    # Keep common identifiers and status words intact. If they cannot fit,
+    # records are easier to scan than a table that splits every word.
+    minimum = [max(len(label), min(40, max(
+        (len(word) for row in values for word in row[i].split()), default=0)))
+        for i, label in enumerate(headers)]
+    if sum(minimum) + 2 * (len(headers) - 1) > terminal_width:
+        blocks = []
+        label_width = max(map(len, headers))
+        cell_width = max(1, terminal_width - label_width - 2)
+        for row in values:
+            lines = []
+            for label, cell in zip(headers, row):
+                parts = []
+                for part in cell.split("\n"):
+                    parts.extend(textwrap.wrap(part, width=cell_width, break_long_words=True,
+                                               break_on_hyphens=False) or [""])
+                lines.append(f"{label:<{label_width}}  {parts[0]}")
+                lines.extend(" " * (label_width + 2) + part for part in parts[1:])
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks)
+    while sum(widths) + 2 * (len(headers) - 1) > terminal_width:
+        candidates = [i for i in range(len(widths)) if widths[i] > minimum[i]]
+        if not candidates:
+            break
+        index = max(candidates, key=lambda i: widths[i] - minimum[i])
+        widths[index] -= 1
+
+    def line(cells):
+        return "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(cells)).rstrip()
+
+    lines = [line(headers), line(["-" * width for width in widths])]
+    for row in values:
+        wrapped = []
+        for cell, width in zip(row, widths):
+            parts = []
+            for part in cell.split("\n"):
+                parts.extend(textwrap.wrap(part, width=width, break_long_words=True,
+                                           break_on_hyphens=False) or [""])
+            wrapped.append(parts)
+        for index in range(max(map(len, wrapped))):
+            lines.append(line([cell[index] if index < len(cell) else "" for cell in wrapped]))
+    return "\n".join(lines)
 
 
 def _training_check_rows(document: dict) -> list[tuple[str, str]]:
@@ -767,49 +863,40 @@ def _compact(command: str, result) -> str:
                 lines.append(f"  Fix: {check['remedy']}")
         return "\n".join(lines)
     if command == "policy list":
-        return _columns(
-            result, (("id",), ("family",), ("config_type",), ("quic_profile",)),
-            empty="No policy variants found.",
-        )
+        return _table(result, (
+            ("ID", ("id",)), ("FAMILY", ("family",)),
+            ("CONFIG TYPE", ("config_type",)), ("RUNTIME", ("runtime_status",)),
+            ("PROFILES", ("supported_quic_profiles",)), ("SOURCES", ("source_repositories",)),
+        ), empty="No policy variants found.")
     if command == "data list":
         rows = result.get("items", ()) if isinstance(result, dict) else ()
-        lines = []
-        for row in rows:
-            if isinstance(row, dict) and row.get("kind") == "run":
-                lines.append(
-                    f"run {_scalar(row.get('id'))} ({_scalar(row.get('run_hash'))}) "
-                    f"{_scalar(row.get('state'))} {_scalar(row.get('path'))} "
-                    f"[{_scalar(row.get('run_type', 'evaluate'))}]"
-                )
-            elif isinstance(row, dict):
-                lines.append(
-                    " ".join(_scalar(row.get(key, "-")) for key in ("kind", "id", "state", "path"))
-                )
-            else:
-                lines.append(_scalar(row))
-        return "\n".join(lines) if lines else "No runs, reports, or exports found."
+        return _table(rows, (
+            ("KIND", ("kind",)), ("ID", ("id",)), ("HASH", ("run_hash",)),
+            ("STATE", ("state",)), ("TYPE", ("run_type",)), ("PATH", ("path",)),
+        ), empty="No runs, reports, or exports found.")
     list_contracts = {
-        "report profiles": (
-            "profiles", (("id",), ("source",), ("template",)), "No report profiles found.",
-        ),
-        "dataset providers": (
-            "providers", (("id",), ("version",)), "No dataset providers found.",
-        ),
-        "dataset list": (
-            "datasets", (("logical_name",), ("dataset_version",), ("path",)), "No datasets found.",
-        ),
-        "train profiles": (
-            "profiles", (("id",), ("valid",), ("path",)), "No training profiles found.",
-        ),
-        "checkpoint list": (
-            "checkpoints", (("checkpoint_id",), ("kind",), ("merge_status",), ("host_path",)),
-            "No checkpoints found.",
-        ),
+        "report profiles": ("profiles", (("ID", ("id",)), ("SOURCE", ("source",)),
+                                         ("TEMPLATE", ("template",))), "No report profiles found."),
+        "dataset providers": ("providers", (("ID", ("id",)), ("VERSION", ("version",))),
+                              "No dataset providers found."),
+        "dataset list": ("datasets", (("DATASET", ("logical_name",)), ("VERSION", ("dataset_version",)),
+                                      ("PATH", ("path",))), "No datasets found."),
+        "train profiles": ("profiles", (("PROFILE", ("id",)), ("VALID", ("valid",)),
+                                        ("PATH", ("path",))), "No training profiles found."),
+        "checkpoint list": ("checkpoints", (("CHECKPOINT", ("checkpoint_id",)), ("KIND", ("kind",)),
+                                            ("MERGE STATUS", ("merge_status",)), ("PATH", ("host_path",))),
+                            "No checkpoints found."),
     }
     if command in list_contracts:
-        key, fields, empty = list_contracts[command]
+        if command == "checkpoint list" and isinstance(result, dict) and result.get("source") == "registry":
+            return _table(result.get("checkpoints", ()), (
+                ("CHECKPOINT", ("checkpoint_id",)), ("REPOSITORY", ("repo_id",)),
+                ("REVISION", ("revision",)), ("LOCAL", ("local_status",)),
+                ("REMOTE", ("remote_status",)),
+            ), empty="No registered checkpoints found.")
+        key, columns, empty = list_contracts[command]
         rows = result.get(key, ()) if isinstance(result, dict) else ()
-        return _columns(rows, fields, empty=empty)
+        return _table(rows, columns, empty=empty)
     fields = _SUMMARY_FIELDS.get(command)
     if fields is None or not isinstance(result, dict):
         return json.dumps(result, indent=2, sort_keys=True)
@@ -1247,7 +1334,11 @@ def _dispatch(args):
     if args.command == "checkpoint":
         app = _application()
         if args.checkpoint_command == "list":
-            return app.checkpoint_list(), args.json, None
+            if args.source == "local" and (args.online or args.offline or args.profile):
+                raise CliUsageError("--online, --offline and --profile require --source registry")
+            if args.source == "local":
+                return app.checkpoint_list(), args.json, None
+            return app.checkpoint_registry_list(online=args.online, profile=args.profile), args.json, None
         if args.checkpoint_command == "inspect":
             return app.checkpoint_inspect(args.checkpoint_id), args.json, None
         return app.checkpoint_verify(args.checkpoint_id), args.json, None

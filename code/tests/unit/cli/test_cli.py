@@ -29,6 +29,18 @@ QUIC_PEFT = "configs/policies/openvla-quic/quic-peft-bones.yaml"
 QUIC_WC = "configs/policies/openvla-quic/quic-wc-bones.yaml"
 
 
+def test_registry_checkpoint_list_cli(tmp_path):
+    environment = {"OVLAB_GLOBAL_HF_CACHE": str(tmp_path / "cache"),
+                   "OVLAB_MODEL_DATA_ROOT": str(tmp_path / "data")}
+    result = _run("checkpoint", "list", "--source", "registry", "--offline", "--json", environment=environment)
+    assert result.returncode == 0
+    document = json.loads(result.stdout)["result"]
+    assert document["source"] == "registry" and document["network"] == "offline"
+    assert any(row["checkpoint_id"] == "openvla-7b" for row in document["checkpoints"])
+    assert not (tmp_path / "data").exists()
+    assert _run("checkpoint", "list", "--online", environment=environment).returncode != 0
+
+
 def _run(*args, environment=None):
     env = os.environ.copy()
     if environment:
@@ -72,7 +84,7 @@ def test_help_and_version_have_stable_identity():
     assert "Config" not in help_result.stderr
     assert all(command in help_result.stdout for command in (
         "config", "policy", "service", "connect", "run", "metrics",
-        "dataset", "train", "checkpoint",
+        "dataset", "checkpoint",
     ))
     version = _run("--version")
     assert version.returncode == 0
@@ -260,7 +272,8 @@ def test_dataset_list_defaults_to_compact_rows_and_detail_preserves_document(tmp
 
     compact = _run("dataset", "list", environment=environment)
     assert compact.returncode == 0 and compact.stderr == ""
-    assert compact.stdout == f"fixture 1.0.0 {registered['host_path']}\n"
+    assert "DATASET" in compact.stdout and "VERSION" in compact.stdout and "PATH" in compact.stdout
+    assert "fixture" in compact.stdout and "1.0.0" in compact.stdout
 
     detailed = _run("dataset", "list", "--detail", environment=environment)
     assert detailed.returncode == 0 and detailed.stderr == ""
@@ -278,8 +291,9 @@ def test_dataset_list_defaults_to_compact_rows_and_detail_preserves_document(tmp
 def test_policy_list_uses_compact_rows_and_detail_retains_every_field():
     compact = _run("policy", "list")
     assert compact.returncode == 0 and compact.stderr == ""
-    assert "vanilla openvla openvla_vanilla -\n" in compact.stdout
-    assert "quic-peft openvla_quic quic-peft QP0\n" in compact.stdout
+    assert all(header in compact.stdout for header in ("ID", "FAMILY", "CONFIG TYPE", "RUNTIME", "PROFILES", "SOURCES"))
+    assert "vanilla" in compact.stdout and "openvla_vanilla" in compact.stdout
+    assert "quic-peft" in compact.stdout and "experimental" in compact.stdout
 
     detailed = _run("policy", "list", "--detail")
     document = json.loads(detailed.stdout)
@@ -556,15 +570,25 @@ def test_dataset_launcher_rejects_unsafe_name_before_filesystem_use(tmp_path):
     assert not (tmp_path / "escaped").exists()
 
 
-def test_policy_list_is_static_distinct_and_has_no_non_quic_qp_metadata():
+def test_policy_list_reports_current_profiles_sources_and_runtime_status():
+    from ovlab_benchctl.quic_experiments import PROFILES
     result = _run("policy", "list", "--json")
     assert result.returncode == 0 and result.stderr == ""
     payload = json.loads(result.stdout)
     assert payload["status"] == "success"
     methods = {item["id"]: item for item in payload["result"]}
     assert set(methods) == {"vanilla", "lora", "openvla-oft", "quic-peft", "quic-wc"}
-    assert all("quic_profile" not in methods[name] for name in ("vanilla", "lora", "openvla-oft"))
-    assert methods["quic-peft"]["quic_profile"] == methods["quic-wc"]["quic_profile"] == "QP0"
+    assert methods["quic-peft"]["supported_quic_profiles"] == [*PROFILES, "custom"]
+    assert methods["quic-peft"]["config_type"] == "openvla_quic"
+    assert methods["quic-peft"]["runtime_status"] == "experimental"
+    assert methods["quic-peft"]["source_repositories"] == ["external/openvla-quic", "external/quic-peft-vla"]
+    assert methods["quic-wc"]["runtime_status"] == "unavailable"
+    assert all("supported_quic_profiles" not in methods[name] for name in ("vanilla", "lora", "openvla-oft", "quic-wc"))
+    assert all("quic_profile" not in item for item in methods.values())
+    human = _run("policy", "list")
+    assert human.returncode == 0
+    assert all(value in human.stdout for value in ("QP1", "QP2", "QP3", "QP4", "custom"))
+    assert "QP0" not in human.stdout
 
 
 @pytest.mark.parametrize("config", [QUIC_PEFT, QUIC_WC])
@@ -751,7 +775,8 @@ def test_gate_i_cli_human_and_json_inspection_stay_dependency_light(tmp_path):
     }
     human = _run("dataset", "providers", environment=environment)
     assert human.returncode == 0
-    assert "libero 1.0.0" in human.stdout
+    assert "ID" in human.stdout and "VERSION" in human.stdout
+    assert "libero" in human.stdout and "1.0.0" in human.stdout
     assert human.stderr == ""
 
     resolved = _run(
@@ -829,3 +854,142 @@ def test_application_delegates_to_runner_without_duplicating_episode_loop():
 def test_training_normalization_override_is_explicit_across_commands(arguments):
     assert _parser().parse_args(arguments).fit_action_normalization is False
     assert _parser().parse_args([*arguments, "--fit-action-normalization"]).fit_action_normalization is True
+
+
+def test_list_table_adapts_to_terminal_width_without_losing_values(monkeypatch):
+    from ovlab_benchctl.cli import _table
+
+    rows = [{"id": "alpha", "state": "ready"}, {"id": "beta", "state": "waiting"}]
+    columns = (("ID", ("id",)), ("STATE", ("state",)))
+    monkeypatch.setenv("COLUMNS", "80")
+    wide = _table(rows, columns, empty="empty")
+    assert wide.splitlines()[0].split() == ["ID", "STATE"]
+    assert "alpha" in wide and "waiting" in wide
+
+    monkeypatch.setenv("COLUMNS", "12")
+    narrow = _table(rows, columns, empty="empty")
+    assert "ID     alpha" in narrow and "STATE  ready" in narrow
+    assert "ID     beta" in narrow and "STATE  waiti" in narrow and "       ng" in narrow
+    assert all(len(line) <= 12 for line in narrow.splitlines())
+    assert _table([], columns, empty="No entries.") == "No entries."
+
+
+def test_list_table_wraps_long_values_without_truncation(monkeypatch):
+    from ovlab_benchctl.cli import _table
+
+    monkeypatch.setenv("COLUMNS", "30")
+    value = "abcdefghijklmnopqrstuvwxyz0123456789"
+    rendered = _table([{"id": value, "state": "ready"}],
+                      (("ID", ("id",)), ("STATE", ("state",))), empty="empty")
+    assert "".join(line.strip() for line in rendered.splitlines()[0:2]).endswith(value)
+    assert all(len(line) <= 30 for line in rendered.splitlines())
+
+
+@pytest.mark.parametrize(("command", "result", "headings"), [
+    ("report profiles", {"profiles": [{"id": "default", "source": "built-in", "template": "base"}]}, ("ID", "SOURCE", "TEMPLATE")),
+    ("dataset providers", {"providers": [{"id": "libero", "version": "1"}]}, ("ID", "VERSION")),
+    ("dataset list", {"datasets": [{"logical_name": "data", "dataset_version": "1", "path": "/data"}]}, ("DATASET", "VERSION", "PATH")),
+    ("train profiles", {"profiles": [{"id": "train", "valid": True, "path": "/train"}]}, ("PROFILE", "VALID", "PATH")),
+    ("checkpoint list", {"checkpoints": [{"checkpoint_id": "model", "kind": "adapter", "merge_status": "merged", "host_path": "/model"}]}, ("CHECKPOINT", "KIND", "MERGE STATUS", "PATH")),
+    ("checkpoint list", {"source": "registry", "checkpoints": [{"checkpoint_id": "model", "repo_id": "owner/model", "revision": "123", "local_status": "present", "remote_status": "not_checked"}]}, ("CHECKPOINT", "REPOSITORY", "REVISION", "LOCAL", "REMOTE")),
+    ("data list", {"items": [{"kind": "run", "id": "run-1", "run_hash": "abc", "state": "completed", "run_type": "train", "path": "/runs"}]}, ("KIND", "ID", "HASH", "STATE", "TYPE", "PATH")),
+])
+def test_list_commands_include_column_labels(monkeypatch, command, result, headings):
+    monkeypatch.setenv("COLUMNS", "240")
+    rendered = _compact(command, result)
+    assert all(heading in rendered.splitlines()[0] for heading in headings)
+    assert len(rendered.splitlines()) >= 3
+
+
+def test_dataset_container_receives_terminal_width(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    log = tmp_path / "docker-arguments.txt"
+    docker = binaries / "docker"
+    docker.write_text(
+        '#!/bin/sh\nif [ "${1:-}" = image ]; then exit 0; fi\n'
+        'printf "%s\\n" "$@" > "$OVLAB_FAKE_DOCKER_LOG"\n', encoding="utf-8"
+    )
+    docker.chmod(0o755)
+    result = _run("dataset", "list", "--json", environment={
+        "PATH": f"{binaries}:{os.environ['PATH']}",
+        "OVLAB_FAKE_DOCKER_LOG": str(log),
+        "OVLAB_MODEL_DATA_ROOT": str(tmp_path / "data"),
+        "COLUMNS": "73",
+    })
+    assert result.returncode == 0
+    arguments = log.read_text().splitlines()
+    assert "COLUMNS=73" in arguments
+    assert arguments[-3:] == ["dataset", "list", "--json"]
+
+
+def test_dataset_list_renders_image_json_with_host_table(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    log = tmp_path / "docker-arguments.txt"
+    docker = binaries / "docker"
+    docker.write_text(
+        '#!/bin/sh\nif [ "${1:-}" = image ]; then exit 0; fi\n'
+        'printf "%s\\n" "$@" > "$OVLAB_FAKE_DOCKER_LOG"\n'
+        '''printf '%s\\n' '{"status":"success","result":{"datasets":[{"logical_name":"libero_10","dataset_version":"1.0.0","path":"/data/libero_10"}]}}'\n''',
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    result = _run("dataset", "list", environment={
+        "PATH": f"{binaries}:{os.environ['PATH']}", "OVLAB_PYTHON": sys.executable,
+        "OVLAB_FAKE_DOCKER_LOG": str(log), "OVLAB_MODEL_DATA_ROOT": str(tmp_path / "data"),
+        "COLUMNS": "120",
+    })
+    assert result.returncode == 0
+    assert "DATASET" in result.stdout and "VERSION" in result.stdout and "PATH" in result.stdout
+    assert "libero_10" in result.stdout and "/data/libero_10" in result.stdout
+    assert log.read_text().splitlines()[-3:] == ["dataset", "list", "--json"]
+
+
+def test_version_short_alias_and_run_command_groups():
+    short = _run("-v")
+    long = _run("--version")
+    assert short.returncode == long.returncode == 0
+    assert short.stdout == long.stdout
+    help_output = _run("run", "--help")
+    assert help_output.returncode == 0
+    assert all(name in help_output.stdout for name in ("eval", "train", "experiment"))
+    nested = _run("run", "train", "validate", "openvla-libero10-quic-smoke", "--json")
+    legacy = _run("train", "validate", "openvla-libero10-quic-smoke", "--json")
+    assert nested.returncode == legacy.returncode == 0
+    assert json.loads(nested.stdout) == json.loads(legacy.stdout)
+
+
+def test_dataset_list_preserves_container_failure_status(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    docker = binaries / "docker"
+    docker.write_text('#!/bin/sh\nif [ "${1:-}" = image ]; then exit 0; fi\necho "image failure" >&2\nexit 6\n', encoding="utf-8")
+    docker.chmod(0o755)
+    result = _run("dataset", "list", environment={
+        "PATH": f"{binaries}:{os.environ['PATH']}", "OVLAB_PYTHON": sys.executable,
+        "OVLAB_MODEL_DATA_ROOT": str(tmp_path / "data"),
+    })
+    assert result.returncode == 6
+    assert "image failure" in result.stderr
+    assert result.stdout == ""
+
+
+def test_grouped_training_report_uses_reporting_container(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    docker = binaries / "docker"
+    log = tmp_path / "docker-arguments.txt"
+    docker.write_text(
+        '#!/bin/sh\nif [ "${1:-}" = image ]; then exit 0; fi\n'
+        'printf "%s\\n" "$@" > "$OVLAB_FAKE_DOCKER_LOG"\n', encoding="utf-8"
+    )
+    docker.chmod(0o755)
+    data = tmp_path / "data"
+    (data / "runs").mkdir(parents=True)
+    result = _run("run", "train", "report", "run-1", "--json", environment={
+        "PATH": f"{binaries}:{os.environ['PATH']}", "OVLAB_DATA_ROOT": str(data),
+        "OVLAB_FAKE_DOCKER_LOG": str(log),
+    })
+    assert result.returncode == 0
+    assert log.read_text().splitlines()[-4:] == ["train", "report", "run-1", "--json"]

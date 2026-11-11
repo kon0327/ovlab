@@ -1,7 +1,8 @@
 # OVLAB CLI
 
-`train`, `eval`, and `deploy` share `run TARGET`, `inspect TARGET`, and `verify TARGET`.
-Each `run` supports `--dry-run`. Configuration names use `experiments/training`,
+`run train`, `run eval`, and `deploy` share `run TARGET`, `inspect TARGET`, and `verify TARGET`.
+Each `run` supports `--dry-run`. The former top-level `eval`, `train`, and
+`experiment` commands remain available as compatibility aliases. Configuration names use `experiments/training`,
 `experiments/evaluation`, and `configs/deploy`, respectively. `eval` replaces
 the former evaluation behavior of `deploy`. See [model deployment](../../../DEPLOYMENT.md).
 
@@ -39,14 +40,16 @@ an activated Conda environment.
 
 Structured commands use one consistent output contract:
 
-- no output flag: compact operator-oriented rows or `key  value` summaries;
+- no output flag: labeled, width-aware tables for lists and `key  value` summaries for other results;
 - `--detail`: the complete result document as readable indented JSON;
 - `--json`: one stable `ovlab-cli-output/1.0.0` JSON envelope for scripts.
 
 `--detail` and `--json` are mutually exclusive. Operational progress and
-diagnostics remain on stderr, so `--json` stdout stays machine-readable. The
-`config resolve` command is intentionally different: its result is the complete
-resolved configuration and `--format yaml|json` selects its serialization.
+diagnostics remain on stderr, so `--json` stdout stays machine-readable.
+Tables wrap long values to fit the terminal; on very narrow terminals they use
+vertical records. Use `--detail` or `--json` when copying complete paths or
+identifiers. The `config resolve` command is intentionally different: its result
+is the complete resolved configuration and `--format yaml|json` selects its serialization.
 
 ## Recommended Docker workflow
 
@@ -78,12 +81,12 @@ Then run a complete isolated policy-service plus LIBERO benchmark topology with
 one command:
 
 ```bash
-./ovlab eval run \
+./ovlab run eval run \
   experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
 `TARGET` accepts a path or a YAML filename/name under `experiments/evaluation`.
-`train run TARGET` uses the same form under `experiments/training`.
+`run train run TARGET` uses the same form under `experiments/training`.
 
 The CLI validates the Compose model, passes the same experiment to both
 containers, waits for policy readiness, runs the benchmark, propagates failure,
@@ -134,8 +137,8 @@ compatible with its policy type. Use GLFW only with an interactive display serve
 resolved selection and exact commands without touching Docker:
 
 ```bash
-./ovlab eval run CONFIG --dry-run
-./ovlab eval run CONFIG --renderer glfw --dry-run
+./ovlab run eval run CONFIG --dry-run
+./ovlab run eval run CONFIG --renderer glfw --dry-run
 ```
 
 Inference quantization comes from the experiment's policy component at
@@ -147,7 +150,7 @@ unchanged. QuIC policies require `none`.
 Run the five-task cross-suite Vanilla NF4 experiment with:
 
 ```bash
-./ovlab eval run \
+./ovlab run eval run \
   experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml
 ```
 
@@ -165,7 +168,7 @@ stderr; `--json` stdout therefore remains machine-readable. Use `--offline` to
 prohibit the download path:
 
 ```bash
-./ovlab eval run CONFIG --offline
+./ovlab run eval run CONFIG --offline
 ```
 
 Custom unpublished checkpoints remain outside the repository and are selected
@@ -173,7 +176,7 @@ through a gitignored local profile. Compose uses `deploy/compose/.env` by defaul
 `OVLAB_COMPOSE_ENV_FILE` selects another repository-local environment file:
 
 ```bash
-OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab eval run CONFIG
+OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab run eval run CONFIG
 ```
 
 ## Machine-local native configuration
@@ -200,7 +203,7 @@ export OVLAB_EXECUTION_PROFILE=configs/profiles/libero-bench-egl.yaml
 ```text
 ovlab
 ├── --help
-├── --version
+├── -v, --version
 ├── doctor [--experiment EXPERIMENT] [--env-file PATH] [--detail | --json]
 ├── config
 │   ├── validate CONFIG [--mode descriptor|runtime] [--detail | --json]
@@ -212,11 +215,10 @@ ovlab
 │   ├── serve CONFIG [--socket PATH | --host HOST --port PORT] [--persistent] [--detail | --json]
 │   └── health (--socket PATH | --host HOST --port PORT) [--detail | --json]
 ├── connect CONFIG [--detail | --json]
-├── eval
-│   ├── run TARGET [--renderer egl|glfw] [--quantization none|8bit|4bit] [--offline]
-│   │   [--project-name NAME] [--dry-run] [--detail | --json]
-│   ├── inspect TARGET [--detail | --json]
-│   └── verify TARGET [--detail | --json]
+├── run
+│   ├── eval run|inspect|verify ...
+│   ├── train profiles|validate|plan|run|status|inspect|verify|report ...
+│   └── experiment plan|run ...
 ├── deploy
 │   ├── run TARGET [--profile LOCAL_PROFILE] [--quantization none|8bit|4bit]
 │   │   [--port PORT] [--offline] [--dry-run] [--detail | --json]
@@ -249,15 +251,6 @@ ovlab
 │   ├── list [--detail | --json]
 │   ├── inspect --dataset DATASET_ID [--detail | --json]
 │   └── verify --dataset DATASET_ID [--detail | --json]
-├── train
-│   ├── profiles [--detail | --json]
-│   ├── validate --profile PROFILE [--detail | --json]
-│   ├── plan --profile PROFILE [--detail | --json]
-│   ├── run TARGET [--dry-run] [--allow-dataset-download] [--detail | --json]
-│   ├── status TARGET [--detail | --json]
-│   ├── inspect TARGET [--detail | --json]
-│   ├── verify TARGET [--detail | --json]
-│   └── report --run TRAINING_RUN_ID|RUN_HASH [--verify] [--build BUILD_ID] [--detail | --json]
 └── checkpoint
     ├── list [--detail | --json]
     ├── inspect --checkpoint CHECKPOINT_ID [--detail | --json]
@@ -309,6 +302,13 @@ runtime providers:
 ./ovlab policy list --json
 ```
 
+The catalogue describes implementation availability and source ownership, not
+whether a model or its dependencies are installed or ready to run. The QuIC-PEFT
+row lists OVLAB's supported training profiles, QP1–QP4 and `custom`; the legacy
+QP0 descriptor does not represent an active transformation. QuIC-WC is an
+unavailable proposed runtime. `config_type` for QuIC-WC names its descriptor
+variant, while QuIC-PEFT uses the runnable policy configuration type.
+
 Describe the policy selected by an experiment:
 
 ```bash
@@ -322,7 +322,7 @@ a model or initialize CUDA.
 ## 3. Low-level native policy service
 
 This command is an internal container entrypoint and a developer diagnostic. A
-normal deployment should use `ovlab eval run` instead. Run one native policy
+normal deployment should use `ovlab run eval run` instead. Run one native policy
 service in the foreground:
 
 ```bash
@@ -419,13 +419,13 @@ exact IDs take precedence and ambiguous hashes fail closed. Training runs use
 Read a run summary without changing artifacts:
 
 ```bash
-./ovlab eval inspect RUN_PATH
+./ovlab run eval inspect RUN_PATH
 ```
 
 Verify trace and artifact integrity:
 
 ```bash
-./ovlab eval verify RUN_PATH
+./ovlab run eval verify RUN_PATH
 ```
 
 Verification checks required artifacts, final manifest consistency,
@@ -451,8 +451,8 @@ complete recorded and recomputed `MetricResult` objects.
 ./ovlab report generate --run RUN_ID --profile libero-task-default
 ./ovlab report generate --run RUN_ID --task libero/10/0 --profile libero-task-default
 ./ovlab report verify --run RUN_ID --profile libero-task-default --build DERIVED_BUILD_ID
-./ovlab train report --run TRAINING_RUN_ID
-./ovlab train report --run TRAINING_RUN_ID --verify --build DERIVED_BUILD_ID
+./ovlab run train report --run TRAINING_RUN_ID
+./ovlab run train report --run TRAINING_RUN_ID --verify --build DERIVED_BUILD_ID
 ./ovlab export isolated --run RUN_ID
 ./ovlab export isolated --run RUN_ID --episode EPISODE_ID
 ./ovlab export grouped --name paper-ablation --runs RUN_ID_A RUN_ID_B

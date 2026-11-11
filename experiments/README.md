@@ -16,10 +16,10 @@ experiments/
 - **`evaluation/`** defines scenarios selecting a benchmark, policy, metric set,
   protocol, artifact store and resource registry, with optional deployment and
   reporting. It includes smoke, qualification and LIBERO comparisons. Run with
-  `ovlab eval run TARGET`.
+  `ovlab run eval run TARGET`.
 - **`training/`** contains model, dataset, optimization and resource profiles,
-  including reference and smoke recipes. Use `ovlab train run TARGET` or
-  `ovlab train validate TARGET`.
+  including reference and smoke recipes. Use `ovlab run train run TARGET` or
+  `ovlab run train validate TARGET`.
   - **`quic/`** holds QuIC variants, including placement variants used by the
     [ablation suite](../docs/ABLATIONS.md).
   - **`quic/action-chunks/`** compares token and action-chunk heads; see
@@ -29,7 +29,7 @@ experiments/
     [coverage guide](../docs/QUIC_LORA_COVERAGE.md).
 - **`workflows/`** contains YAML or JSON hierarchical specifications combining
   training and evaluation profiles, patches and dependencies. Use
-  `ovlab experiment plan FILE` or `ovlab experiment run FILE`; see the
+  `ovlab run experiment plan FILE` or `ovlab run experiment run FILE`; see the
   [workflow guide](../docs/EXPERIMENT_WORKFLOW.md).
 
 The `example.yaml` files in each directory are commented reference documents.
