@@ -1,10 +1,13 @@
-# Reference workflow: ovlab experiment plan experiments/workflows/example.yaml
-# Running without --dry-run creates runs and reports; the default plan contains two evaluations.
-# Optional concurrency control: --sequential or --max-workers N (1–32; default 2).
+# Reference workflow: ovlab run --plan experiments/workflows/example.yaml
+# Running without --plan creates runs and reports; the default plan contains two evaluations.
+# Configure scheduling below; max_workers: 1 runs sequentially.
 schema_version: ovlab.experiment/v1 # Required workflow schema version.
 kind: workflow # Required root document type.
 id: example-workflow # Required portable experiment identifier.
 name: Example hierarchical experiment # Required human-readable experiment name.
+
+execution:
+  max_workers: 2 # 1–32; default 2. Select 1 for sequential phases.
 
 config: # Optional shared configuration inherited by descendants.
   train: # Optional configuration for the training phase.
@@ -55,8 +58,9 @@ children: # Optional subexperiments; nodes can be nested up to 12 levels.
               - node: model/task-0/four-bit # Dependency path from the workflow root.
                 phase: evaluate # Wait for evaluation of the specified node to finish.
 # The same node can use execute: [train, evaluate]; its evaluation waits for training.
-# A dependency does not attach the new checkpoint: the evaluation policy must select it explicitly.
-# With --node, the selection must include every explicit dependency of the selected phases.
+# To use a trained output, add config.evaluate.checkpoint_from: model/task-0
+# and schedule training at that source node. The binding adds its dependency.
+# Every scheduled dependency must exist in this experiment tree.
 # Mappings are merged; lists and scalars replace their original values. A new profile
 # does not remove inherited patches. Patches to benchmark/policy/metrics/protocol/artifacts
 # must match the selected component's schema after merging.

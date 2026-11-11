@@ -1,10 +1,13 @@
 # OVLAB CLI
 
-`run train`, `run eval`, and `deploy` share `run TARGET`, `inspect TARGET`, and `verify TARGET`.
-Each `run` supports `--dry-run`. The former top-level `eval`, `train`, and
-`experiment` commands remain available as compatibility aliases. Configuration names use `experiments/training`,
-`experiments/evaluation`, and `configs/deploy`, respectively. `eval` replaces
-the former evaluation behavior of `deploy`. See [model deployment](../../../DEPLOYMENT.md).
+`ovlab run EXPERIMENT` executes a training profile, evaluation scenario, or
+hierarchical workflow through one experiment owner. Add `--plan` to inspect the
+resolved configuration tree or `--verify` to validate a source configuration.
+`ovlab run INSTANCE_ID_OR_HASH --verify` checks a stored experiment and every
+canonical phase run. Individual run IDs/hashes also work with `--verify`.
+Runtime settings live in YAML. Phase-specific commands are private compatibility
+interfaces used by workers; they are not public run subcommands. Persistent model
+services use `ovlab deploy`; see [model deployment](../../../DEPLOYMENT.md).
 
 `ovlab` is the unified command-line interface for OpenVLABenchmark. It exposes
 the existing configuration, policy-service, runner, artifact, and metric APIs
@@ -81,12 +84,12 @@ Then run a complete isolated policy-service plus LIBERO benchmark topology with
 one command:
 
 ```bash
-./ovlab run eval run \
+./ovlab run \
   experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
-`TARGET` accepts a path or a YAML filename/name under `experiments/evaluation`.
-`run train run TARGET` uses the same form under `experiments/training`.
+`EXPERIMENT` accepts an explicit YAML path, a workflow JSON path, or a unique
+name below `experiments/`. Its schema and kind select the phase automatically.
 
 The CLI validates the Compose model, passes the same experiment to both
 containers, waits for policy readiness, runs the benchmark, propagates failure,
@@ -131,32 +134,27 @@ they share the same policy image and Compose service. LoRA remains a distinct
 scientific method through its policy component; creating a duplicate Compose
 profile would not add isolation. OpenVLA-OFT uses `profile: oft`.
 
-`--renderer` is an optional override with precedence over the
-experiment value. The Compose profile comes from the experiment and must remain
-compatible with its policy type. Use GLFW only with an interactive display server. Preview the
-resolved selection and exact commands without touching Docker:
+Set `deployment.renderer` in the evaluation YAML (`egl` or `glfw`). The Compose
+profile must match the selected policy type. GLFW requires an interactive display.
+Preview the resolved tree with:
 
 ```bash
-./ovlab run eval run CONFIG --dry-run
-./ovlab run eval run CONFIG --renderer glfw --dry-run
+./ovlab run CONFIG --plan
 ```
 
-Inference quantization comes from the experiment's policy component at
-`settings.runtime.quantization` (`none`, `8bit`, or `4bit`). Override it for one
-deployment with `--quantization 4bit` (or `8bit`/`none`). The selected value is
-recorded in the plan and the configuration bundle; the source policy YAML stays
-unchanged. QuIC policies require `none`.
+Inference quantization is `settings.runtime.quantization` in the policy component
+(`none`, `8bit`, or `4bit`). A workflow can set it through an inherited
+`config.evaluate.component_patches.policy` mapping. QuIC requires `none`.
 
 Run the five-task cross-suite Vanilla NF4 experiment with:
 
 ```bash
-./ovlab run eval run \
+./ovlab run \
   experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml
 ```
 
-Without `--quantization`, the selected policy component determines inference
-representation. With the switch, the temporary bundled policy carries the override,
-so the resolved scientific configuration and its hash reflect the selected value.
+The selected policy configuration determines the inference representation and
+its scientific identity; model/runtime choices are not CLI flags.
 
 Before Docker starts, the CLI resolves the policy's portable `checkpoint_id`.
 It checks `~/.cache/huggingface`, an optional local-profile `local_path`, and
@@ -164,19 +162,16 @@ It checks `~/.cache/huggingface`, an optional local-profile `local_path`, and
 registry-pinned revision into managed storage. File sizes and SHA-256 values are
 verified before the snapshot is mounted read-only. Resolution, per-file download
 progress, transferred byte counts, and verification stages are printed to
-stderr; `--json` stdout therefore remains machine-readable. Use `--offline` to
-prohibit the download path:
-
-```bash
-./ovlab run eval run CONFIG --offline
-```
+stderr; `--json` stdout therefore remains machine-readable. Set `deployment.offline: true` to prohibit checkpoint downloads. Training uses
+explicitly prepared offline resources. Evaluation resolves the checkpoint
+revision selected by its policy and resource registry.
 
 Custom unpublished checkpoints remain outside the repository and are selected
 through a gitignored local profile. Compose uses `deploy/compose/.env` by default;
 `OVLAB_COMPOSE_ENV_FILE` selects another repository-local environment file:
 
 ```bash
-OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab run eval run CONFIG
+OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab run CONFIG
 ```
 
 ## Machine-local native configuration
@@ -223,19 +218,13 @@ ovlab
 │   ├── serve CONFIG [--socket PATH | --host HOST --port PORT] [--persistent] [--detail | --json]
 │   └── health (--socket PATH | --host HOST --port PORT) [--detail | --json]
 ├── connect CONFIG [--detail | --json]
-├── run
-│   ├── eval run|inspect|verify ...
-│   ├── train profiles|validate|plan|run|status|inspect|verify|report ...
-│   └── experiment plan|run ...
+├── run EXPERIMENT [--plan | --verify] [--detail | --json]
 ├── deploy
 │   ├── run TARGET [--profile LOCAL_PROFILE] [--quantization none|8bit|4bit]
 │   │   [--port PORT] [--offline] [--dry-run] [--detail | --json]
 │   ├── inspect TARGET [--detail | --json]
 │   ├── verify TARGET [--detail | --json]
 │   └── stop TARGET [--dry-run] [--detail | --json]
-├── run TARGET [--profile LOCAL_PROFILE] [--output-root PATH] [--dry-run] [--detail | --json]
-├── run inspect RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
-├── run verify RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── metrics recompute RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── report RUN_ID|EXPERIMENT_ID [--detail | --json]
 ├── report publish RUN_ID [--profile PROFILE] [--task TASK_ID] [--output PATH] [--detail | --json]
@@ -326,7 +315,7 @@ a model or initialize CUDA.
 ## 3. Low-level native policy service
 
 This command is an internal container entrypoint and a developer diagnostic. A
-normal deployment should use `ovlab run eval run` instead. Run one native policy
+normal deployment should use `ovlab run` instead. Run one native policy
 service in the foreground:
 
 ```bash
@@ -372,70 +361,49 @@ With the service running, perform a lifecycle and capability handshake:
 It does not reset an episode, request a prediction, start LIBERO, or create an
 inference trace. Privileged benchmark signals are not part of the RPC schema.
 
-## 5. Low-level native runner
-
-`TARGET` accepts a path or a YAML filename/name under `experiments/evaluation`.
-`--profile` selects the local machine profile for this run. If omitted, the CLI
-uses `OVLAB_LOCAL_PROFILE` or `configs/local/profile.yaml`.
-
-Inspect the execution plan without runtime side effects:
+## 5. Unified experiment execution
 
 ```bash
-./ovlab run CONFIG --dry-run
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --plan
+./ovlab run experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
+./ovlab run experiments/workflows/libero-model-tree.yaml
 ```
 
-Dry-run guarantees:
+Standalone training and evaluation inputs become one-node trees. Every execution
+preserves source, resolved plan and phase results under
+`runs/<instance>/.experiment/`. Phase runs live below
+`runs/<instance>/{train,evaluate}/<node-path>/<run-id>/`. Settings inherit from
+parent nodes; arrays and scalar values replace inherited values. Scheduling is
+root `execution.max_workers` (1–32, default 2). Configure data paths through the
+existing host environment; run-directory placement does not change scientific
+identity. The worker's native runner entry point is private and never recursively
+starts another experiment.
 
-- complete resolution and runtime validation;
-- no model or checkpoint loading;
-- no CUDA initialization;
-- no service or socket creation;
-- no prediction or benchmark rollout;
-- no run-directory creation.
+`--plan` validates descriptors and dependencies without starting workloads,
+loading a model, creating services or writing run/export directories. Workload
+preflight checks resource availability before execution.
 
-Inside the benchmark container, execute through the existing
-`ExperimentRunner`:
+## 6. Verify configurations and canonical evidence
 
 ```bash
-./ovlab run CONFIG
+./ovlab data list runs --detail
+./ovlab run CONFIG --verify
+./ovlab run EXPERIMENT_ID_OR_HASH --verify
+./ovlab run RUN_ID_OR_HASH --verify
+./ovlab report EXPERIMENT_ID_OR_HASH
 ```
 
-Use a machine-local output placement when needed:
+A configuration is resolved and validated. An existing experiment reference is
+checked against its spec hash, plan and recorded phase inventory; every canonical
+phase run is verified with its own artifact verifier. Individual run references
+verify just that run. Run hashes are eight characters; current experiment suffix
+hashes are ten. Exact IDs take precedence and ambiguous hashes fail closed.
 
-```bash
-./ovlab run CONFIG --output-root /var/lib/ovlab/runs/evaluate
-```
-
-Changing output placement does not change scientific identity. Existing run
-directories are never overwritten. The CLI does not provide an implicit
-fallback to Vanilla, LoRA, OFT, mock policies, or dummy actions.
-
-## 6. Inspect and verify runs
-
-`./ovlab data list --kind runs` prints
-`run <run-id> (<run-hash>) <state> <path>`. The eight-character hash is a
-lookup alias, distinct from the scientific and integrity hashes. Every
-benchmark-run selector below accepts either the complete ID or this hash;
-exact IDs take precedence and ambiguous hashes fail closed. Training runs use
-`runs/train/`; evaluation runs use `runs/evaluate/`. Prefix selectors with
-`train:` or `evaluate:` if the same ID exists in both categories.
-
-Read a run summary without changing artifacts:
-
-```bash
-./ovlab run eval inspect RUN_PATH
-```
-
-Verify trace and artifact integrity:
-
-```bash
-./ovlab run eval verify RUN_PATH
-```
-
-Verification checks required artifacts, final manifest consistency,
-scientific/execution hashes, trace schemas and finalization markers, referenced
-array shape and dtype, stored SHA-256 checksums, and episode counts. It does not
-claim guarantees beyond the hashes stored by OVLAB.
+Evaluation verification checks final manifests, scientific/execution hashes,
+trace schemas, stored SHA-256 checksums, array shape and dtype, and episode counts.
+Training verification checks its finalized canonical manifest and recorded file
+hashes. Missing phases, changed files and invalid metadata fail. Verification is
+read-only and does not recreate or publish reports.
 
 ## 7. Recompute metrics offline
 

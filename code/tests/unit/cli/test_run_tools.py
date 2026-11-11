@@ -122,22 +122,19 @@ def test_offline_recomputation_preserves_trace_and_complete_results(completed_ru
 
 
 @pytest.mark.parametrize(("arguments", "expected"), [
-    (("run", "inspect"), "completed"),
-    (("run", "verify"), "verified"),
+    (("run", "--verify"), "verified"),
     (("metrics", "recompute"), True),
 ])
 def test_run_tools_json_subprocess_contract(completed_run, arguments, expected):
     completed = subprocess.run(
         [str(REPOSITORY / "ovlab"), *arguments, str(completed_run), "--json"],
-        cwd=REPOSITORY, env=os.environ.copy(), text=True,
+        cwd=REPOSITORY, env={**os.environ, "OVLAB_RUNS_ROOT": str(completed_run.parent)}, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
     assert completed.returncode == 0 and completed.stderr == ""
     payload = json.loads(completed.stdout)
     assert payload["status"] == "success"
-    if arguments == ("run", "inspect"):
-        assert payload["result"]["status"] == expected
-    elif arguments == ("run", "verify"):
-        assert payload["result"]["integrity"] == expected
+    if arguments == ("run", "--verify"):
+        assert payload["result"]["verified_runs"][0]["integrity"] == expected
     else:
         assert payload["result"]["all_results_agree"] is expected

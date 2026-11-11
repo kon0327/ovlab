@@ -54,7 +54,7 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
             if name in {"Dockerfile.openvla", "Dockerfile.openvla-oft"}
             else "canonical-readonly-reporting-v1"
             if name == "Dockerfile.reporting"
-            else "resolved-checkpoint-config-bundle-v2"
+            else "native-run-config-bundle-v3"
         )
         assert f'io.github.ovlab.deployment.contract="{expected_contract}"' in text
 
@@ -140,7 +140,7 @@ def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports():
     assert "OVLAB_RUNS_PATH" not in COMPOSE
     assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 5
     assert COMPOSE.count("target: /var/lib/ovlab/runs") == 5
-    assert COMPOSE.count("--output-root, /var/lib/ovlab/runs/evaluate") == 3
+    assert COMPOSE.count('--output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"') == 3
     assert COMPOSE.count("target: /var/lib/ovlab/runs\n        read_only: true") == 2
     assert "OVLAB_DERIVED_ROOT" not in COMPOSE
     assert "/var/lib/ovlab/derived" not in COMPOSE

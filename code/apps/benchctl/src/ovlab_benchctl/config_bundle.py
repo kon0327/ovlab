@@ -163,6 +163,15 @@ class ConfigBundleBuilder:
             experiment_reference, kind, selected
         )
         overlays: dict[str, str] = {}
+        if kind == "experiment" and "offline" in experiment_document.get("deployment", {}):
+            # Checkpoint acquisition is a host responsibility. Keep its setting
+            # in the deployment plan and source hash, while workers receive the
+            # portable runtime document. Flatten extends so a parent cannot
+            # reintroduce host-only options in older policy images.
+            runtime_document = deepcopy(experiment_document)
+            runtime_document.pop("extends", None)
+            runtime_document["deployment"].pop("offline")
+            overlays[experiment_reference] = dumps(runtime_document)
         if kind == "deployment" and quantization is not None:
             deployment_leaf = load(self.config_root / experiment_reference)
             deployment_leaf.setdefault("runtime", {})["quantization"] = quantization

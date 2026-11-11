@@ -1,4 +1,4 @@
-# Reference evaluation scenario: ovlab eval run experiments/evaluation/example.yaml --dry-run
+# Reference evaluation scenario: ovlab run experiments/evaluation/example.yaml --plan
 # Execution requires the appropriate local resources, checkpoint and images; it runs a real evaluation.
 schema_version: "0.1.0" # Required evaluation scenario schema version.
 kind: experiment # Required evaluation scenario type; this is not a workflow.

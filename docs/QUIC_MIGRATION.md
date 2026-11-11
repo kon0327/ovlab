@@ -60,17 +60,17 @@ defaults. Training profiles now accept bounded relative `extends`; mappings
 deep-merge and sequences replace their parent, just like experiment components.
 
 ```bash
-./ovlab run train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab run train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab run train ablate plan --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab run train ablate materialize \
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
+./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab train ablate plan --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab train ablate materialize \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/ovlab-quic-review
 ```
 
 Planning resolves verified local assets without loading model weights or using
 network access. Materialization writes resolved profiles and commands. Use
-`train run TARGET` for one variant, or `train ablate run --suite ...
+`ovlab run TARGET` for one variant, or `train ablate run --suite ...
 --output NEW_DIRECTORY` to execute sequentially through the existing isolated
 trainer, independent finalizer and reporting owner.
 
@@ -111,16 +111,15 @@ statistics; use the new train-only fitting option for a vanilla host. Importing
 an arbitrary historical normalization sidecar remains unsupported.
 
 ```bash
-./ovlab run train run experiments/training/openvla-libero10-quic-smoke.yaml \
-  --fit-action-normalization
-./ovlab run train ablate run \
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train ablate run \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --fit-action-normalization --output /tmp/my-fitted-quic-ablation
 ```
 
-The switch also works on `train validate`, `train plan`, and every `train ablate`
-operation, so the effective configuration can be reviewed first. It resolves
-to `dataset.partition.action_normalization: train-q99`, changes the scientific
+Set `dataset.partition.action_normalization: train-q99` in a profile used by
+`ovlab run`; the compatibility ablation utility also supports the override.
+This changes the scientific
 identity, and never edits the input YAML. q01/q99 are fitted only on selected
 training frames after the episode split; validation actions are excluded.
 The resulting `fitted-action-normalization.json` and `normalization.json` are

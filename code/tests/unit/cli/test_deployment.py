@@ -351,6 +351,30 @@ def test_offline_flag_is_part_of_the_deployment_plan():
     assert plan.document(side_effects_performed=False)["offline"] is True
 
 
+def test_evaluation_offline_setting_is_resolved_from_yaml(tmp_path):
+    repository = tmp_path / "repository"
+    shutil.copytree(REPOSITORY / "configs", repository / "configs")
+    shutil.copytree(REPOSITORY / "experiments", repository / "experiments")
+    environment_file = repository / "deploy/compose/.env"
+    environment_file.parent.mkdir(parents=True)
+    environment_file.write_text("")
+    source = repository / LORA
+    source.write_text(source.read_text().replace("  renderer: egl", "  renderer: egl\n  offline: true"))
+    deployment = ComposeDeployment(repository, environment={})
+    plan = deployment.plan(LORA, project_name="offline-from-config")
+    assert plan.offline is True
+    assert plan.document(side_effects_performed=False)["offline"] is True
+    assert deployment.plan(LORA, offline=False).offline is False
+    builder = ConfigBundleBuilder(repository)
+    bundle = builder.build(LORA, "profiles/libero-bench-egl.yaml")
+    from ovlab_benchctl.strict_yaml import load
+    with builder.materialize(bundle) as materialized:
+        runtime = load(materialized / LORA)
+        assert "offline" not in runtime["deployment"]
+    source_entry = next(item for item in bundle.files if item["path"] == LORA)
+    assert "source_sha256" in source_entry
+
+
 def test_stale_policy_and_benchmark_images_fail_before_checkpoint_or_compose(
     deployment_environment,
 ):
@@ -384,7 +408,7 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
         del kwargs
         image = command[-1]
         contract = (
-            "resolved-checkpoint-config-bundle-v2"
+            "native-run-config-bundle-v3"
             if image == "ovlab-benchmark-libero:local"
             else "canonical-readonly-reporting-v1"
             if image == "ovlab-reporting:local"
@@ -406,6 +430,21 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
     assert "build-images.sh policy-openvla" in str(failure.value)
 
 
+def test_old_benchmark_worker_requires_only_the_benchmark_rebuild():
+    def inspect(command, **kwargs):
+        image = command[-1]
+        contract = ("resolved-checkpoint-config-bundle-v2" if image == "ovlab-benchmark-libero:local"
+                    else "canonical-readonly-reporting-v1" if image == "ovlab-reporting:local"
+                    else "resolved-checkpoint-quantization-config-bundle-v2")
+        return _Result(0, stdout=contract)
+    deployment = ComposeDeployment(REPOSITORY, runner=inspect)
+    plan = deployment.plan(LORA, env_file=ENV_FILE)
+    with pytest.raises(ComposeDeploymentError) as failure:
+        _PREFLIGHT_IMAGES(deployment, plan)
+    assert "build-images.sh benchmark" in str(failure.value)
+    assert "build-images.sh benchmark policy" not in str(failure.value)
+
+
 def test_preflight_accepts_compatible_images_without_source_tree_lock():
     observed = []
     def inspect(command, **kwargs):
@@ -417,7 +456,7 @@ def test_preflight_accepts_compatible_images_without_source_tree_lock():
             if image == "ovlab-policy-openvla:local"
             else "canonical-readonly-reporting-v1"
             if image == "ovlab-reporting:local"
-            else "resolved-checkpoint-config-bundle-v2"
+            else "native-run-config-bundle-v3"
         )
         return _Result(0, stdout=f"{contract}\n")
 

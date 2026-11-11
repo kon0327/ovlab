@@ -30,7 +30,7 @@ checkpoint ID and the portable registry identity. It checks the default global
 Hugging Face cache, an optional local-profile override, and OVLAB-managed
 storage, verifies declared file sizes and SHA-256 values, and exposes only the
 resolved snapshot to the policy container. Missing artifacts are downloaded at
-their pinned revision unless `ovlab run eval run --offline` is used. This path uses
+their pinned revision unless the evaluation sets `deployment.offline: true`. This path uses
 the Python standard library and does not require a host Conda environment.
 
 Docker deployment also constructs a deterministic minimal configuration bundle
@@ -64,9 +64,9 @@ export OVLAB_LOCAL_PROFILE=configs/local/profile.yaml
 ./ovlab policy describe experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ./ovlab service serve experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ./ovlab connect experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --dry-run
-./ovlab run eval inspect RUN_PATH
-./ovlab run eval verify RUN_PATH
+./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --plan
+./ovlab data list runs --detail
+./ovlab run RUN_PATH --verify
 ./ovlab metrics recompute RUN_PATH
 ```
 

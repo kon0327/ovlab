@@ -82,9 +82,12 @@ def validate_experiment(doc, path):
             doc["deployment"],
             f"{path}.deployment",
             required=("profile", "renderer"),
+            optional=("offline",),
         )
         enum(deployment["profile"], ("openvla", "oft", "quic"), f"{path}.deployment.profile")
         enum(deployment["renderer"], ("egl", "glfw"), f"{path}.deployment.renderer")
+        if "offline" in deployment:
+            exact_type(deployment["offline"], bool, f"{path}.deployment.offline")
     if "reporting" in doc:
         reporting = mapping(
             doc["reporting"], f"{path}.reporting",

@@ -306,7 +306,7 @@ sequenceDiagram
     participant S as runs/
     participant O as Reporting service
 
-    U->>C: eval run experiment.yaml
+    U->>C: run experiment.yaml
     C->>R: validate experiment, profile and renderer
     R-->>C: minimal config bundle identity
     C->>C: prepare host roots and verify image contracts/source manifests

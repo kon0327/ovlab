@@ -1,0 +1,110 @@
+schema_version: ovlab.experiment/v1
+kind: workflow
+id: libero10-two-task-eval-smoke
+name: LIBERO-10 two-task evaluation
+
+execution:
+  max_workers: 1
+
+config:
+  train:
+    profile: openvla-lora-libero10-smoke.yaml
+    patch:
+      dataset:
+        partition:
+          groups:
+            - LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket
+            - LIVING_ROOM_SCENE2_put_both_the_cream_cheese_box_and_the_butter_in_the_basket
+
+children:
+  - id: lora
+    name: LoRA evaluation
+    execute: [evaluate]
+    config:
+      evaluate:
+        profile: libero10-lora-full-three-per-task.yaml
+        patch:
+          experiment:
+            id: libero10-lora-trained-two-task
+            name: Pretrained LoRA on two LIBERO-10 tasks
+            tags: [libero-10, lora, workflow-trained, one-episode-per-task]
+          components:
+            protocol: protocols/libero-official-episode-v1.yaml
+        component_patches:
+          benchmark:
+            settings:
+              task_indices: [0, 1]
+    children:
+      - id: full
+        name: Trained LoRA, full precision
+        execute: [evaluate]
+      - id: eight-bit
+        name: Trained LoRA, 8-bit
+        config:
+          evaluate:
+            profile: libero10-lora-8bit-three-per-task.yaml
+        execute: [evaluate]
+      - id: four-bit
+        name: Trained LoRA, 4-bit
+        config:
+          evaluate:
+            profile: libero10-lora-4bit-three-per-task.yaml
+        execute: [evaluate]
+  - id: quic
+    name: QuIC training
+    config:
+      train:
+        profile: openvla-libero10-quic-smoke.yaml
+      evaluate:
+        checkpoint_from: quic
+    execute: [train]
+    children:
+      - id: full
+        name: Newly trained QuIC, full precision
+        config:
+          evaluate:
+            profile: libero10-quic-adapter-rpc-smoke.yaml
+            patch:
+              experiment:
+                id: libero10-quic-trained-two-task
+                name: Newly trained QuIC on two LIBERO-10 tasks
+                tags: [libero-10, quic, workflow-trained, one-episode-per-task]
+              components:
+                protocol: protocols/libero-official-episode-v1.yaml
+            component_patches:
+              benchmark:
+                settings:
+                  task_indices: [0, 1]
+        execute: [evaluate]
+  - id: oft
+    name: Pretrained OFT reference
+    config:
+      evaluate:
+        profile: libero10-oft-full-three-per-task.yaml
+        patch:
+          experiment:
+            id: libero10-oft-pretrained-two-task
+            name: Pretrained OFT reference on two LIBERO-10 tasks
+            tags: [libero-10, oft, pretrained-reference, one-episode-per-task]
+          components:
+            protocol: protocols/libero-oft-episode-v1.yaml
+        component_patches:
+          benchmark:
+            settings:
+              task_indices: [0, 1]
+    children:
+      - id: full
+        name: Pretrained OFT, full precision
+        execute: [evaluate]
+      - id: eight-bit
+        name: Pretrained OFT, 8-bit
+        config:
+          evaluate:
+            profile: libero10-oft-8bit-three-per-task.yaml
+        execute: [evaluate]
+      - id: four-bit
+        name: Pretrained OFT, 4-bit
+        config:
+          evaluate:
+            profile: libero10-oft-4bit-three-per-task.yaml
+        execute: [evaluate]

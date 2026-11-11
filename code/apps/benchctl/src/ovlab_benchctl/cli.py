@@ -78,23 +78,15 @@ def _primary_argument(parser, flag, dest, metavar, *, help=None, choices=None):
 
 
 class _RootParser(argparse.ArgumentParser):
-    """Accept legacy native run syntax while exposing grouped run commands."""
+    """Normalize the shorthand report entry point."""
 
     def parse_args(self, args=None, namespace=None):
         arguments = list(sys.argv[1:] if args is None else args)
-        # The original low-level `run TARGET` is still accepted for existing scripts.
-        if arguments and arguments[0] == "run" and (len(arguments) == 1 or arguments[1] not in {"eval", "train", "experiment", "--help", "-h"}):
-            arguments[0] = "_native-run"
         if (len(arguments) > 1 and arguments[0] == "report"
                 and not arguments[1].startswith("-")
                 and arguments[1] not in {"auto", "generate", "publish", "verify", "profiles", "export"}):
             arguments.insert(1, "auto")
-        parsed = super().parse_args(arguments, namespace)
-        if parsed.command == "_native-run":
-            parsed.command = "run"
-        elif parsed.command == "run" and getattr(parsed, "run_category", None):
-            parsed.command = parsed.run_category
-        return parsed
+        return super().parse_args(arguments, namespace)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -169,7 +161,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluation = commands.add_parser("eval", help="run, inspect, and verify evaluation experiments")
     eval_commands = evaluation.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_commands.add_parser("run", help="run one experiment through Docker Compose")
-    eval_run.add_argument("target", help="evaluation YAML name/path in experiments/evaluation")
+    eval_run.add_argument("target", metavar="TARGET", help="evaluation YAML name/path in experiments/evaluation")
     eval_run.add_argument(
         "--renderer", choices=("egl", "glfw"),
         help="override deployment.renderer from the experiment",
@@ -184,7 +176,7 @@ def _parser() -> argparse.ArgumentParser:
         help="reject a missing checkpoint instead of downloading a pinned, remote/main or latest revision",
     )
     eval_run.add_argument("--project-name")
-    eval_run.add_argument("--dry-run", action="store_true")
+    eval_run.add_argument("--plan", "--dry-run", dest="dry_run", action="store_true", help="resolve and show the evaluation plan without starting workloads")
     _output_options(eval_run)
 
     for operation in ("inspect", "verify"):
@@ -377,7 +369,7 @@ def _parser() -> argparse.ArgumentParser:
     _primary_argument(train_plan, "--profile", "profile", "PROFILE")
     _output_options(train_plan)
     train_run = train_commands.add_parser("run", help="run an isolated offline trainer and finalize its checkpoint")
-    train_run.add_argument("target", help="training YAML name/path in experiments/training")
+    train_run.add_argument("target", metavar="TARGET", help="training YAML name/path in experiments/training")
     train_run.add_argument("--allow-dataset-download", action="store_true")
     train_run.add_argument("--dry-run", action="store_true", help="resolve the training plan without starting a trainer")
     for command in (train_validate, train_plan, train_run):
@@ -428,28 +420,18 @@ def _parser() -> argparse.ArgumentParser:
     _primary_argument(checkpoint_verify, "--checkpoint", "checkpoint_id", "CHECKPOINT")
     _output_options(checkpoint_verify)
 
-    grouped_run = commands.add_parser("run", help="manage evaluation, training, and experiment runs")
-    grouped_commands = grouped_run.add_subparsers(dest="run_category", metavar="COMMAND", required=True)
-    def set_grouped_prog(subparser, prefix):
-        subparser.prog = prefix
-        for action in subparser._actions:
-            if isinstance(action, argparse._SubParsersAction):
-                for child_name, child in action.choices.items():
-                    set_grouped_prog(child, f"{prefix} {child_name}")
-
-    for name, subparser, help_text in (
-        ("eval", evaluation, "run, inspect, and verify evaluations"),
-        ("train", train, "validate, plan, execute, and inspect training"),
-        ("experiment", experiment, "plan and run experiment workflows"),
-    ):
-        grouped_commands._name_parser_map[name] = subparser
-        grouped_commands._choices_actions.append(
-            grouped_commands._ChoicesPseudoAction(name, (), help_text)
-        )
-        set_grouped_prog(subparser, f"ovlab run {name}")
-    set_grouped_prog(report, "ovlab report")
-    set_grouped_prog(export, "ovlab export")
-    # Keep the old entry points usable, but show the grouped interface in help.
+    unified = commands.add_parser(
+        "run", help="run any training, evaluation, or hierarchical experiment",
+        description="Resolve an experiment configuration and execute its complete tree. "
+                    "Model, runtime, and scheduling settings belong in the configuration.",
+    )
+    unified.add_argument("target", metavar="EXPERIMENT", help="YAML path, workflow JSON, or unique experiment name; run or experiment ID/hash with --verify")
+    mode = unified.add_mutually_exclusive_group()
+    mode.add_argument("--plan", action="store_true", help="resolve and display the complete plan without starting workloads")
+    mode.add_argument("--verify", action="store_true", help="validate a configuration, or verify the canonical artifacts of an existing run or experiment")
+    _output_options(unified)
+    # Phase-specific parsers remain private worker interfaces. Public execution
+    # always uses the experiment owner, including one-phase configurations.
     commands._choices_actions = [action for action in commands._choices_actions
                                  if action.dest not in {"eval", "train", "experiment", "export", "_native-run"}]
     return parser
@@ -474,7 +456,7 @@ def _command_name(args) -> str:
         value = getattr(args, name, None)
         if value:
             parts.append(value)
-    if args.command == "run" and args.target in {"inspect", "verify"}:
+    if args.command == "_native-run" and args.target in {"inspect", "verify"}:
         parts.append(args.target)
     return " ".join(item for item in parts if item)
 
@@ -843,10 +825,14 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
 
 
 def _compact(command: str, result) -> str:
-    if command in {"experiment plan", "experiment run"} and isinstance(result, dict):
+    if command in {"run", "experiment plan", "experiment run"} and isinstance(result, dict):
         lines = [f"experiment  {result.get('experiment_id', result.get('id', '-'))}"]
         if "status" in result:
             lines.append(f"status      {result['status']}")
+        if "source_type" in result:
+            lines.append(f"source      {result['source_type']}")
+        if "verified_runs" in result:
+            lines.append(f"verified    {len(result['verified_runs'])} runs")
         if "nodes" in result:
             lines.append(f"nodes       {len(result['nodes'])}")
         if "steps" in result:
@@ -859,6 +845,20 @@ def _compact(command: str, result) -> str:
         for key in ("overview", "runs_root", "exports_root"):
             if key in result:
                 lines.append(f"{key:<11} {result[key]}")
+        if isinstance(result.get("nodes"), list):
+            rows = []
+            for node in result["nodes"]:
+                for phase in node.get("execute", []):
+                    configuration = node.get("configuration", {}).get(phase, {})
+                    rows.append({"node": node["path"] or "<root>", "phase": phase,
+                                 "profile": configuration.get("profile", "-"),
+                                 "checkpoint": ((configuration['checkpoint_from'] or '<root>') + ':train'
+                                                if 'checkpoint_from' in configuration else '-')})
+            if rows:
+                columns = (("NODE", ("node",)), ("PHASE", ("phase",)), ("CONFIGURATION", ("profile",)))
+                if any(row['checkpoint'] != '-' for row in rows):
+                    columns += (("CHECKPOINT FROM", ("checkpoint",)),)
+                lines.extend(("", _table(rows, columns, empty="No executable phases.")))
         return "\n".join(lines)
     if command == "report auto" and isinstance(result, dict):
         lines = [f"source  {result.get('source_type', '-')}  {result.get('source', '-')}"]
@@ -984,7 +984,7 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.INTERRUPTED, "interrupted"
     if name.startswith("Training"):
         return ExitCode.RUNTIME, "training_error"
-    if name in {"RunIntegrityError", "ArtifactError"}:
+    if name in {"RunIntegrityError", "ArtifactError", "ExperimentIntegrityError"}:
         return ExitCode.INTEGRITY, "run_integrity_error"
     if name.startswith("QuIC") and ("Incomplete" in name or "Unavailable" in name or "Provider" in name):
         return ExitCode.POLICY_UNAVAILABLE, "policy_unavailable"
@@ -1092,6 +1092,19 @@ def _dispatch(args):
         return result, args.json, None
     if args.command == "connect":
         return _application().connect(args.config), args.json, None
+    if args.command == "run":
+        from .experiment_workflow import ExperimentWorkflow
+        workflow = ExperimentWorkflow(_repository_root())
+        if args.verify:
+            return workflow.verify(args.target), args.json, None
+        if args.plan:
+            return workflow.plan(args.target), args.json, None
+        previous = _install_interrupt_handlers()
+        try:
+            result = workflow.run(args.target)
+        finally:
+            _restore_handlers(previous)
+        return result, args.json, None
     if args.command == "experiment":
         from .experiment_workflow import ExperimentWorkflow
         workflow = ExperimentWorkflow(_repository_root())
@@ -1116,7 +1129,7 @@ def _dispatch(args):
             args.target,
             renderer=args.renderer,
             quantization=args.quantization,
-            offline=args.offline,
+            offline=True if args.offline else None,
             project_name=args.project_name,
         )
         previous = _install_interrupt_handlers()
@@ -1143,7 +1156,7 @@ def _dispatch(args):
         else:
             result = deployment.stop(args.target, dry_run=args.dry_run)
         return result, args.json, None
-    if args.command == "run":
+    if args.command == "_native-run":
         app = _application()
         if args.target in {"inspect", "verify"}:
             if args.profile is not None:

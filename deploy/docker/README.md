@@ -4,7 +4,7 @@ QuIC role images, pinned requirements, adapter mounts, and console progress
 are documented in [QUIC.md](QUIC.md).
 
 This directory contains the production Dockerfiles for the isolated OVLAB
-runtime. The public `ovlab run eval run` command owns the Compose lifecycle; users
+runtime. The public `ovlab run` command owns the Compose lifecycle; users
 do not need to activate Conda or start containers separately. The Dockerfiles
 are not intended to collapse the benchmark and policy service into one
 container.
@@ -144,11 +144,7 @@ to `runs`, creates it if necessary, and mounts it read-only into the benchmark.
 Preview the resolved orchestration without starting containers:
 
 ```bash
-./ovlab run eval run \
-  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
-  --profile openvla \
-  --renderer egl \
-  --dry-run
+./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --plan
 ```
 
 The real command performs its own `docker compose config --quiet` preflight. It
@@ -176,19 +172,13 @@ and compatibility; they do not affect scientific configuration hashes.
 EGL is the supported backend for headless and automated LIBERO execution:
 
 ```bash
-./ovlab run eval run \
-  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
-  --profile openvla \
-  --renderer egl
+./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
 Run OpenVLA-OFT separately:
 
 ```bash
-./ovlab run eval run \
-  experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
-  --profile oft \
-  --renderer egl
+./ovlab run experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml
 ```
 
 The policy service loads checkpoints offline, becomes healthy only after
@@ -200,11 +190,8 @@ at its pinned revision by the host orchestrator before policy startup. For a
 strictly offline run, require an already verified artifact:
 
 ```bash
-./ovlab run eval run \
-  experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml \
-  --profile oft \
-  --renderer egl \
-  --offline
+# Set deployment.offline: true in this evaluation YAML first.
+./ovlab run experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml
 ```
 
 ## Run the interactive GLFW path
@@ -213,10 +200,8 @@ GLFW requires a live X11 or Wayland display such as WSLg. It is not a truly
 headless backend; hiding a window does not remove the display-server dependency.
 
 ```bash
-./ovlab run eval run \
-  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
-  --profile openvla \
-  --renderer glfw
+# Set deployment.renderer: glfw in this evaluation YAML first.
+./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
 The overlay forces `MUJOCO_GL=glfw`, removes the EGL device variable and mounts
@@ -244,7 +229,7 @@ image through the `export` Compose profile.
 
 ## Shutdown and verification
 
-`ovlab run eval run` always executes project-scoped Compose teardown, including
+`ovlab run` always executes project-scoped Compose teardown, including
 its private RPC volume, on success, failure or interruption. Canonical bind-
 mounted run artifacts are not removed.
 
@@ -260,9 +245,8 @@ find "${OVLAB_RUNS_ROOT}" -maxdepth 2 -type f
 
 - `permission denied` below the runs directory: correct ownership or ACLs for
   container UID/GID `10001:10001`.
-- checkpoint not found under `--offline`: verify the logical ID, pinned registry
-  revision, global cache, managed cache, or local-profile override. Without
-  `--offline`, inspect host network and managed-storage permissions. Policy
+- checkpoint not found with `deployment.offline: true`: verify the logical ID, pinned registry
+  revision, global cache, managed cache, or local-profile override. With `deployment.offline: false`, inspect host network and managed-storage permissions. Policy
   containers never receive network access.
 - CUDA unavailable: check the NVIDIA Container Toolkit, host driver and
   `OVLAB_GPU_DEVICE`.

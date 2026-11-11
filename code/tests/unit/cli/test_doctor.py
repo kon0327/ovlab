@@ -21,7 +21,7 @@ def _docker(command, **kwargs):
     if command[1] == "info":
         return subprocess.CompletedProcess(command, 0, "27.0.0\n", "")
     contracts = {
-        "ovlab-benchmark-libero:local": "resolved-checkpoint-config-bundle-v2",
+        "ovlab-benchmark-libero:local": "native-run-config-bundle-v3",
         "ovlab-policy-openvla:local": "resolved-checkpoint-quantization-config-bundle-v2",
         "ovlab-reporting:local": "canonical-readonly-reporting-v1",
     }

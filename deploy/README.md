@@ -28,9 +28,9 @@ BF16 compute, FP16 storage and double quantization. Applying either mode to a
 published fine-tuned artifact is inference-time quantization; it is not
 evidence that the model or adapter was trained with QLoRA.
 
-`ovlab run eval run TARGET --quantization 4bit` selects inference quantization
-for one deployment. The CLI writes the override into its temporary, hashed
-configuration bundle; repository policy files stay unchanged.
+Select quantization in the policy YAML at `settings.runtime.quantization`, or
+inherited workflow `config.evaluate.component_patches.policy`. The configuration
+bundle records the selected representation and its identity.
 
 QuIC remains descriptor-only. There is no QuIC image, Compose profile, provider
 selection, or claim of runtime readiness in Gate H.
@@ -158,7 +158,7 @@ checkpoints:
 Point the policy's `checkpoint_id` and `processor_id` at the chosen resource.
 The existing pinned registry entries continue to use their declared hashes.
 
-Before Compose starts, `ovlab run eval run` searches for the snapshot in this order:
+Before Compose starts, `ovlab run` searches for the snapshot in this order:
 
 1. `${OVLAB_GLOBAL_HF_CACHE}`, defaulting to `~/.cache/huggingface`;
 2. `resources.checkpoints.<id>.local_path` in an explicitly selected gitignored
@@ -177,16 +177,13 @@ materialization fails clearly instead of silently copying large weights.
 During a managed download the CLI reports repository metadata, file number,
 filename, byte progress, completion, and verification stages on stderr.
 
-Use strict offline resolution when downloads are forbidden:
-
-```bash
-./ovlab run eval run EXPERIMENT --offline
-```
+Set `deployment.offline: true` in the evaluation YAML when checkpoint downloads
+are forbidden. The resolved plan records this setting.
 
 For a custom checkpoint, set the local profile environment variable:
 
 ```bash
-OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab run eval run EXPERIMENT
+OVLAB_LOCAL_PROFILE=configs/local/profile.yaml ./ovlab run EXPERIMENT
 ```
 
 The policy always receives `/checkpoints/resolved/<checkpoint-id>`. The host
@@ -225,7 +222,7 @@ Normal operation uses the repository launcher. It requires Docker and system
 Python 3, not an activated Conda environment:
 
 ```bash
-./ovlab run eval run \
+./ovlab run \
   experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
 ```
 
@@ -333,8 +330,7 @@ benchmark evidence.
 
 ## Troubleshooting and limitations
 
-- A missing checkpoint under `--offline` is an expected hard failure. Without
-  `--offline`, inspect host resolver diagnostics, registry revision, network
+- A missing checkpoint with `deployment.offline: true` is an expected hard failure. With `deployment.offline: false`, inspect host resolver diagnostics, registry revision, network
   access, and managed-storage permissions. Policy runtime networking remains
   disabled.
 - For `cuda is not available`, verify the NVIDIA runtime, driver compatibility and

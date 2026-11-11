@@ -110,17 +110,10 @@ contains an immutable `dataset-...` ID.
 Repeating the same command reuses and re-verifies the existing content instead
 of publishing a mutable replacement.
 
-Dataset acquisition is not performed by `train validate` or `train plan`.
-Training can opt into the same explicit built-in acquisition step with:
-
-```bash
-./ovlab run train run \
-  experiments/training/openvla-libero10-lora-smoke.yaml \
-  --allow-dataset-download
-```
-
-Without that flag, a missing dataset stops before model initialization or
-training-container startup.
+Dataset acquisition is explicit and separate from `ovlab run`. Fetch or import
+and prepare the selected dataset before starting training. A missing dataset
+stops execution preflight before model initialization or trainer startup.
+`--plan` and configuration `--verify` only resolve and validate descriptors.
 
 ## Acquire a verified URL dataset
 
@@ -246,7 +239,7 @@ dataset:
   split: train
 ```
 
-`train plan` resolves this selector to one verified local `dataset-...` ID and
+Training execution preflight resolves this selector to one verified local `dataset-...` ID and
 includes the source revision, raw digest, preparation recipe/version and
 prepared digest in scientific identity. Host paths, Docker tags and timestamps
 remain execution provenance.

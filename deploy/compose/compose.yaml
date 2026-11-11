@@ -68,7 +68,7 @@ services:
     profiles: [openvla]
     stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
+    command: [_native-run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
     environment:
       OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}
@@ -159,7 +159,7 @@ services:
     profiles: [oft]
     stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
+    command: [_native-run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
     environment:
       OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}
@@ -255,7 +255,7 @@ services:
     profiles: [quic]
     stop_grace_period: 5m
     image: ${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}
-    command: [run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
+    command: [_native-run, "${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver did not set an experiment path}", --output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"]
     environment:
       OVLAB_PROGRESS: ${OVLAB_PROGRESS:-auto}
       OVLAB_EXPERIMENT_ID: ${OVLAB_EXPERIMENT_ID:-}

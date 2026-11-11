@@ -1,0 +1,38 @@
+# Three QuIC optimizer steps on one LIBERO-10 task, followed by one task
+# rollout using the finalized checkpoint produced by this same workflow.
+# The two-step protocol checks training-to-evaluation handoff, not performance.
+schema_version: ovlab.experiment/v1
+kind: workflow
+id: libero10-quic-training-smoke
+name: LIBERO-10 QuIC training checkpoint handoff smoke
+
+execution:
+  max_workers: 1
+
+config:
+  train:
+    profile: openvla-libero10-quic-smoke.yaml
+    patch:
+      dataset:
+        partition:
+          groups:
+            - LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket
+  evaluate:
+    checkpoint_from: ""
+    profile: libero10-quic-adapter-rpc-smoke.yaml
+    patch:
+      experiment:
+        id: libero10-quic-trained-checkpoint-smoke
+        name: QuIC checkpoint handoff smoke on one LIBERO-10 task
+        tags: [libero-10, quic, workflow-trained, checkpoint-handoff, smoke]
+    component_patches:
+      benchmark:
+        settings:
+          task_indices: [0]
+
+execute: [train]
+
+children:
+  - id: evaluate
+    name: Evaluate the newly trained QuIC checkpoint
+    execute: [evaluate]

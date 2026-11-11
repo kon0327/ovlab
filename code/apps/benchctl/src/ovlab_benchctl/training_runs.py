@@ -406,6 +406,24 @@ def inspect_safetensors(path: Path) -> list[dict[str, object]]:
     return tensors
 
 
+def _save_training_weights(model, weights, auxiliary, training):
+    model.save_pretrained(weights, safe_serialization=True)
+    if training['mode'] != 'peft' or training['peft']['method'] != 'lora':
+        return
+    # PEFT expands all-linear into architecture-specific names in memory and
+    # serializes that expansion. Retain it as evidence, while publishing the
+    # declared portable policy accepted by our checkpoint loader/finalizer.
+    path = weights / 'adapter_config.json'
+    config = json.loads(path.read_text())
+    targets = config.get('target_modules')
+    if targets != 'all-linear' and targets != ['all-linear']:
+        if not isinstance(targets, list) or not targets or any(not isinstance(x, str) or not x for x in targets):
+            raise TrainingRuntimeError('PEFT did not serialize valid all-linear targets')
+        atomic_json(auxiliary / 'lora-targets.json', {'target_policy': 'all-linear', 'resolved_targets': sorted(targets)})
+    config['target_modules'] = 'all-linear'
+    atomic_json(path, config, exclusive=False)
+
+
 def _validate_lora_staging(weights, training):
     config_path = weights / "adapter_config.json"
     candidates = sorted(weights.glob("*.safetensors"))
@@ -920,7 +938,7 @@ def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunCo
     processor_dir.mkdir()
     auxiliary.mkdir()
     processor.save_pretrained(processor_dir)
-    model.save_pretrained(weights, safe_serialization=True)
+    _save_training_weights(model, weights, auxiliary, training)
     save_dataset_statistics(dataset.dataset_statistics, auxiliary)
     changed = 0
     if training["mode"] == "peft":

@@ -7,78 +7,48 @@ as well as device selection. These profiles serve different purposes.
 
 ## Evaluation lifecycle
 
-`eval run TARGET` selects a YAML from `experiments/evaluation`. After a run,
-use `eval inspect RUN_ID_OR_HASH` or `eval verify RUN_ID_OR_HASH`. All evaluation
+`ovlab run TARGET` selects a YAML from `experiments/evaluation`. After a run,
+use `ovlab data list runs --detail` and `ovlab run RUN_ID_OR_HASH --verify`. All evaluation
 run examples accept explicit YAML paths as well as short names. `deploy run` now
 starts a persistent model service described in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## Recommended Docker Workflow
 
-For a normal evaluation, use `eval run`. Pass the experiment as a positional
+For a normal evaluation, use `ovlab run`. Pass the experiment as a positional
 argument; this workflow does not require `configs/local/profile.yaml`. If you
 do not have a local Compose environment file yet, copy the template once and
 set the data paths:
 
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
-./ovlab run eval run \
-  experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --dry-run
-./ovlab run eval run \
+./ovlab run \
+  experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --plan
+./ovlab run \
   experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
 ```
 
-`--dry-run` displays and validates the plan without starting Docker. `eval
-run` starts the policy service and LIBERO runner in separate containers. It
+`--plan` displays and validates the plan without starting Docker. An evaluation
+starts the policy service and LIBERO runner in separate containers. It
 gets local paths and output locations from `deploy/compose/.env` and the
 container definitions.
 
 The Docker Compose profile (`openvla`, `oft`, or `quic`) is selected from the
 experiment YAML.
 
-## Direct Host Execution
+## Host configuration
 
-`ovlab run` uses the low-level native execution path. You can provide the
-evaluation YAML by its short name; the CLI looks for it in
-`experiments/evaluation/`:
-
-```bash
-./ovlab run libero10-lora-4bit-three-per-task --dry-run
-./ovlab run libero10-lora-4bit-three-per-task
-```
-
-This path requires a local profile so the resolver can access machine-specific
-absolute paths and device settings. Pass it with `--profile`; otherwise the CLI
-uses `OVLAB_LOCAL_PROFILE`, then `configs/local/profile.yaml`. The error
-`runtime resolution requires --profile, OVLAB_LOCAL_PROFILE, or configs/local/profile.yaml`
-means that the experiment YAML was found, but the machine-specific settings
-are missing.
-
-Create a local profile from the template and replace its paths with absolute
-paths for your machine:
-
-```bash
-cp configs/local/profile.example.yaml configs/local/profile.yaml
-```
-
-Set `paths.checkpoint_root`, `paths.dataset_root`, `paths.runs_root`, and
-`devices.primary_gpu` for your host. You can remove the example checkpoint
-override under `resources.checkpoints` if you do not use it. The local profile
-is gitignored and should not be committed. To store it elsewhere, set its path
-with this variable:
+`ovlab run` chooses training, evaluation or a workflow from the input YAML. An
+evaluation declaring `deployment` uses its configured Compose topology. Host-only
+worker entry points are internal; they are not separate public run commands.
+Machine paths remain in the Compose environment and optional gitignored local
+profile. Select that profile with:
 
 ```bash
 export OVLAB_LOCAL_PROFILE=/absolute/path/to/profile.yaml
 ```
 
-To select a profile for one run, use:
-
-```bash
-./ovlab run libero10-lora-4bit-three-per-task --profile configs/local/profile.yaml
-```
-
-Do not add absolute paths or GPU settings to portable experiment files. Direct
-execution also requires a compatible native Python environment and runtime
-dependencies; the Docker workflow is usually simpler for operator runs.
+Runtime options belong in YAML: `deployment.renderer`, `deployment.offline`,
+policy `settings.runtime.quantization`, and workflow `execution.max_workers`.
 
 ## Selecting a Configuration
 
@@ -93,8 +63,7 @@ After a run, list and inspect the results with:
 
 ```bash
 ./ovlab data list --kind runs
-./ovlab run eval inspect RUN_ID_OR_HASH
-./ovlab run eval verify RUN_ID_OR_HASH
+./ovlab run RUN_ID_OR_HASH --verify
 ```
 
 For details about containers and their configuration, see
@@ -103,15 +72,14 @@ For details about containers and their configuration, see
 
 ## Weights & Biases tracking
 
-Set `OVLAB_WANDB_PROJECT` (or `WANDB_PROJECT`) to mirror completed `eval run` or direct `run`
-evaluations to W&B. The W&B SDK installs automatically as a dependency of
+Set `OVLAB_WANDB_PROJECT` (or `WANDB_PROJECT`) to mirror completed evaluation phases to W&B. The W&B SDK installs automatically as a dependency of
 `ovlab-benchctl` through the [host CLI environment](ENVIRONMENT.md);
 authenticate with `wandb login` or `WANDB_API_KEY`.
 `OVLAB_WANDB_ENTITY` is optional, and standard
 W&B settings such as `WANDB_MODE=offline` apply.
 
 ```bash
-OVLAB_WANDB_PROJECT=ovlab ./ovlab run eval run experiments/evaluation/libero-mock-smoke.yaml
+OVLAB_WANDB_PROJECT=ovlab ./ovlab run experiments/evaluation/libero-mock-smoke.yaml
 ```
 
 The mirror records numeric episode metrics, per-task metrics, averages across

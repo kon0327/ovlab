@@ -1,4 +1,4 @@
-"""Plan and execute a tree of independently runnable experiment nodes.
+"""Resolve training, evaluation and workflow sources into one experiment tree.
 
 The JSON or YAML document is an orchestration layer over the existing, validated
 training profiles and evaluation experiments.  Every selected phase resolves
@@ -27,7 +27,7 @@ from urllib.parse import quote
 from .config_bundle import ConfigBundleBuilder
 from .errors import ConfigError, StrictYamlError
 from .strict_yaml import dumps, loads as load_yaml
-from .training_composition import load_training_profile
+from .training_composition import load_training_document, load_training_profile
 from .training_profiles import TrainingProfile
 from .schema import validate
 from ovlab_core.experiment_scope import ExperimentScope
@@ -57,6 +57,10 @@ class ExperimentSpecError(ConfigError):
 
 class ExperimentExecutionError(RuntimeError):
     """A planned experiment phase or required report failed."""
+
+
+class ExperimentIntegrityError(RuntimeError):
+    """An experiment's stored metadata or canonical evidence is inconsistent."""
 
 
 class _StepFailure(Exception):
@@ -148,12 +152,17 @@ def _spec_hash(document):
 def _validate_config(config, label):
     _keys(config, _PHASES, (), label)
     for phase, value in config.items():
-        allowed = ("profile", "patch", "component_patches") if phase == "evaluate" else ("profile", "patch")
+        allowed = ("profile", "patch", "component_patches", "checkpoint_from") if phase == "evaluate" else ("profile", "patch")
         _keys(value, allowed, (), f"{label}.{phase}")
         if "profile" in value and (not isinstance(value["profile"], str) or not value["profile"]):
             raise ExperimentSpecError(f"{label}.{phase}.profile must be a nonempty path/name")
         if "patch" in value and not isinstance(value["patch"], dict):
             raise ExperimentSpecError(f"{label}.{phase}.patch must be an object")
+        if "checkpoint_from" in value:
+            source = value["checkpoint_from"]
+            if (not isinstance(source, str) or source.startswith("/") or source.endswith("/") or
+                    "//" in source or any(_SAFE.fullmatch(part) is None for part in source.split("/") if part)):
+                raise ExperimentSpecError(f"{label}.{phase}.checkpoint_from must be a root-relative node path (empty for the root)")
         if "component_patches" in value:
             _keys(value["component_patches"], _COMPONENTS, (), f"{label}.{phase}.component_patches")
             if any(not isinstance(patch, dict) for patch in value["component_patches"].values()):
@@ -168,12 +177,17 @@ def _validate_node(raw, path="", depth=0, counter=None):
         raise ExperimentSpecError("experiment tree exceeds 12 levels or 512 nodes")
     allowed = {"id", "name", "config", "execute", "depends_on", "children"}
     if depth == 0:
-        allowed.update(("schema_version", "kind"))
+        allowed.update(("schema_version", "kind", "execution"))
     _keys(raw, allowed, ("id",) if depth else ("schema_version", "kind", "id", "name"), path or "root")
     if depth == 0 and raw["schema_version"] != SCHEMA:
         raise ExperimentSpecError(f"schema_version must be {SCHEMA}")
     if depth == 0 and raw["kind"] != "workflow":
         raise ExperimentSpecError("kind must be workflow")
+    if depth == 0 and "execution" in raw:
+        _keys(raw["execution"], ("max_workers",), (), "execution")
+        workers = raw["execution"].get("max_workers", _DEFAULT_WORKERS)
+        if type(workers) is not int or not 1 <= workers <= _MAX_WORKERS:
+            raise ExperimentSpecError(f"execution.max_workers must be between 1 and {_MAX_WORKERS}")
     _safe_id(raw["id"], f"{path or 'root'}.id")
     if "name" in raw and (not isinstance(raw["name"], str) or not raw["name"].strip()):
         raise ExperimentSpecError(f"{path or 'root'}.name must be a nonempty string")
@@ -213,6 +227,8 @@ def _apply_phase_config(inherited, node_config, node_path):
         if "profile" in value:
             current["profile"] = value["profile"]
             current["profile_source"] = node_path or "<root>"
+        if "checkpoint_from" in value:
+            current["checkpoint_from"] = value["checkpoint_from"]
         if value.get("patch"):
             current["patches"].append((node_path, value["patch"]))
         for kind, patch in value.get("component_patches", {}).items():
@@ -234,6 +250,12 @@ def _dependency_graph(nodes, selected):
     for (path, phase), (node, _) in tasks.items():
         if phase == "evaluate" and (path, "train") in tasks:
             edges[(path, phase)].add((path, "train"))
+        configuration = node.get("configuration", {}).get(phase, {})
+        if phase == "evaluate" and "checkpoint_from" in configuration:
+            source = (configuration["checkpoint_from"], "train")
+            if source not in tasks:
+                raise ExperimentSpecError(f"{path or '<root>'} checkpoint_from refers to an unselected/missing training phase {source}")
+            edges[(path, phase)].add(source)
         for dependency in node["depends_on"]:
             key = dependency["node"], dependency["phase"]
             if key not in tasks:
@@ -449,7 +471,52 @@ class ExperimentWorkflow:
         if path.is_absolute():
             return path.resolve()
         local = path.resolve()
-        return local if local.is_file() else (self.repository_root / path).resolve()
+        if local.is_file():
+            return local
+        direct = (self.repository_root / path).resolve()
+        if direct.is_file():
+            return direct
+        names = {path.name} if path.suffix else {path.name + suffix for suffix in (".yaml", ".yml", ".json")}
+        candidates = []
+        for section in ("workflows", "training", "evaluation"):
+            base = self.repository_root / "experiments" / section
+            for candidate in base.rglob("*"):
+                if candidate.name in names and ".generated" not in candidate.parts and candidate.is_file():
+                    # Qualified section-relative names disambiguate equal basenames.
+                    if len(path.parts) == 1 or candidate.relative_to(base).with_suffix("") == path.with_suffix(""):
+                        candidates.append(candidate)
+        if len(candidates) > 1:
+            raise ExperimentSpecError(f"experiment name {str(reference)!r} is ambiguous; use a path: " + ", ".join(str(p) for p in sorted(candidates)))
+        return candidates[0] if candidates else direct
+
+    def _normalized_spec(self, path, raw):
+        """Put standalone training/evaluation through the same tree owner."""
+        if not isinstance(raw, dict):
+            raise ExperimentSpecError("experiment must be an object")
+        if raw.get("schema_version") == SCHEMA or raw.get("kind") == "workflow":
+            return raw
+        kind = raw.get("kind")
+        if kind == "training":
+            document = self._phase_document(path, "train")
+            identifier, name, phase = document["id"], document["id"], "train"
+        elif kind == "experiment":
+            document = self._phase_document(path, "evaluate")
+            identifier, name, phase = document["experiment"]["id"], document["experiment"]["name"], "evaluate"
+        else:
+            raise ExperimentSpecError("experiment kind must be workflow, training, or experiment (evaluation)")
+        return {"schema_version": SCHEMA, "kind": "workflow", "id": identifier, "name": name,
+                "config": {phase: {"profile": str(path)}}, "execute": [phase]}
+
+    def _phase_document(self, path, phase):
+        if phase == "train":
+            return dict(load_training_profile(path).document)
+        if path.is_relative_to(self.repository_root / "experiments"):
+            return self.bundle.load_component(path.relative_to(self.repository_root).as_posix(), "experiment")
+        if path.is_relative_to(self.config_root):
+            return self.bundle.load_component(path.relative_to(self.config_root).as_posix(), "experiment")
+        document = load_training_document(path, expected_kind="experiment")
+        validate(document, str(path), "experiment")
+        return document
 
     def _profile_path(self, reference, phase):
         path = Path(reference).expanduser()
@@ -461,18 +528,14 @@ class ExperimentWorkflow:
             candidate = (self.repository_root / "experiments" / ("training" if phase == "train" else "evaluation") / path).resolve()
             if not candidate.is_file() and not candidate.suffix:
                 candidate = candidate.with_suffix(".yaml")
-        section = self.repository_root / "experiments" / ("training" if phase == "train" else "evaluation")
-        if not candidate.is_relative_to(section.resolve()) or not candidate.is_file() or candidate.is_symlink():
-            raise ExperimentSpecError(f"{phase} profile must be a regular file inside {section}: {reference}")
+        if not candidate.is_file() or path.is_symlink() or candidate.is_symlink():
+            raise ExperimentSpecError(f"{phase} profile must be a regular file: {reference}")
         return candidate
 
     def _resolved_config(self, phase, state):
         path = self._profile_path(state["profile"], phase)
-        reference = path.relative_to(self.repository_root).as_posix()
-        if phase == "train":
-            base = dict(load_training_profile(path, config_root=self.repository_root / "experiments").document)
-        else:
-            base = self.bundle.load_component(reference, "experiment")
+        reference = path.relative_to(self.repository_root).as_posix() if path.is_relative_to(self.repository_root) else str(path)
+        base = self._phase_document(path, phase)
         document = deepcopy(base)
         for _, patch in state["patches"]:
             document = _merge(document, patch)
@@ -488,6 +551,8 @@ class ExperimentWorkflow:
             "document": document,
             "field_sources": _field_sources(base, reference, state["patches"]),
         }
+        if "checkpoint_from" in state:
+            result["checkpoint_from"] = state["checkpoint_from"]
         if phase == "evaluate":
             component_documents = {}
             for kind, patches in state["component_patches"].items():
@@ -515,16 +580,17 @@ class ExperimentWorkflow:
              sequential=False, max_workers=None):
         if sequential and max_workers is not None:
             raise ExperimentSpecError("--sequential and --max-workers cannot be combined")
-        workers = 1 if sequential else (_DEFAULT_WORKERS if max_workers is None else max_workers)
+        spec_path = self._spec_path(spec)
+        source = _read_spec(spec_path)
+        raw = self._normalized_spec(spec_path, source)
+        _validate_node(raw)
+        workers = 1 if sequential else (raw.get("execution", {}).get("max_workers", _DEFAULT_WORKERS) if max_workers is None else max_workers)
         if type(workers) is not int or not 1 <= workers <= _MAX_WORKERS:
             raise ExperimentSpecError(f"max workers must be between 1 and {_MAX_WORKERS}")
-        spec_path = self._spec_path(spec)
-        raw = _read_spec(spec_path)
-        _validate_node(raw)
         if node is not None and node and any(_SAFE.fullmatch(part) is None for part in node.split("/")):
             raise ExperimentSpecError("--node must be a slash-separated path of node IDs")
         root_id = _safe_id(raw["id"], "root.id")
-        spec_hash = _spec_hash(raw)
+        spec_hash = _spec_hash(source)
         entries = list(_visit(raw))
         paths = {path for _, path, _ in entries}
         selected_path = node or ""
@@ -545,10 +611,6 @@ class ExperimentWorkflow:
                         configuration[phase] = self._resolved_config(phase, phase_state)
                     elif phase in execute:
                         raise ExperimentSpecError(f"{path or '<root>'} executes {phase} without an inherited profile")
-            if path in selected and "evaluate" in execute and not configuration["evaluate"]["document"].get("reporting", {}).get("enabled", True):
-                raise ExperimentSpecError(
-                    f"{path or '<root>'} disables evaluation reporting; set config.evaluate.patch.reporting.enabled to true"
-                )
             nodes.append({
                 "id": item["id"], "name": item.get("name", item["id"]), "path": path,
                 "parent": path.rpartition("/")[0] if path else None,
@@ -557,14 +619,28 @@ class ExperimentWorkflow:
                 "children": [child["id"] for child in item.get("children", [])],
             })
         steps = _topological_steps(nodes, selected)
+        by_path = {item["path"]: item for item in nodes}
+        for item in nodes:
+            evaluation = item["configuration"].get("evaluate", {})
+            if item['path'] not in selected or "evaluate" not in item["execute"] or "checkpoint_from" not in evaluation:
+                continue
+            training = by_path[evaluation["checkpoint_from"]]["configuration"]["train"]["document"]
+            if "deployment" not in evaluation['document']:
+                raise ExperimentSpecError('checkpoint_from requires a deployed evaluation policy')
+            from .workflow_checkpoints import validate_checkpoint_binding
+            policy = evaluation.get("component_documents", {}).get("policy", {}).get("document")
+            if policy is None:
+                policy = self.bundle.load_component(evaluation["document"]["components"]["policy"], "policy")
+            validate_checkpoint_binding(training, policy)
         return {
-            "schema_version": PLAN_SCHEMA, "spec_schema_version": SCHEMA,
+            "schema_version": PLAN_SCHEMA, "spec_schema_version": source.get("schema_version"),
+            "source_kind": source.get("kind"),
             "spec": str(spec_path), "spec_hash": spec_hash, "id": root_id,
             "name": raw["name"], "selected_node": selected_path,
             "node_only": bool(node_only), "nodes": nodes, "steps": steps,
             "selected_nodes": sorted(selected),
             "execution": {"mode": "sequential" if workers == 1 else "parallel", "max_workers": workers},
-            "dependency_semantics": "scheduling only; checkpoints are not wired between phases automatically",
+            "dependency_semantics": "depends_on schedules phases; checkpoint_from binds a finalized training checkpoint and adds its training dependency",
             "side_effects_performed": False,
         }
 
@@ -584,6 +660,12 @@ class ExperimentWorkflow:
                 component_path.parent.mkdir(parents=True, exist_ok=True)
                 component_path.write_text(dumps(component["document"]), encoding="utf-8")
                 document["components"][kind] = component_path.relative_to(self.config_root).as_posix()
+            if "registry_document" in configuration:
+                registry = self.config_root / "resources" / ".generated" / instance
+                registry = registry.joinpath(*parts[:-1], parts[-1] + ".yaml")
+                registry.parent.mkdir(parents=True, exist_ok=True)
+                registry.write_text(dumps(configuration["registry_document"]), encoding="utf-8")
+                document["resources"]["registry"] = registry.relative_to(self.config_root).as_posix()
         target.write_text(dumps(document), encoding="utf-8")
         return target
 
@@ -630,17 +712,31 @@ class ExperimentWorkflow:
         record = None
         try:
             configuration = item["configuration"][phase]
-            generated = self._materialize(instance, node_path, phase, configuration)
             env = dict(
                 self.environment, OVLAB_RUNS_ROOT=str(runs_root), OVLAB_EXPORTS_ROOT=str(exports_root),
                 OVLAB_EXPERIMENT_ID=instance, OVLAB_EXPERIMENT_NODE=node_path,
             )
+            binding = None
+            if phase == "evaluate" and "checkpoint_from" in configuration:
+                from .workflow_checkpoints import bind_training_checkpoint
+                configuration, binding, overrides = bind_training_checkpoint(
+                    self.repository_root, self.environment, configuration,
+                    item.get("_checkpoint_record"), runs_root=runs_root,
+                    experiment_id=instance, bundle=self.bundle,
+                    expected_profile=item.get("_checkpoint_training_profile"),
+                )
+                env.update(overrides)
+                binding_path = runs_root / instance / ".experiment" / "checkpoint-bindings"
+                parts = ["nodes", *node_path.split("/")] if node_path else ["root"]
+                binding_path = binding_path.joinpath(*parts[:-1], parts[-1] + ".json")
+                _write_json(binding_path, {"binding": binding, "configuration": configuration})
+            generated = self._materialize(instance, node_path, phase, configuration)
             if phase == "train":
                 command = ["train", "run", str(generated)]
             elif "deployment" in configuration["document"]:
                 command = ["eval", "run", str(generated)]
             else:
-                command = ["run", str(generated)]
+                command = ["_native-run", str(generated)]
             child = self._invoke(command, env)
             run_path = child.get("host_path") or child.get("run_path")
             if run_path is None and child.get("new_run_paths"):
@@ -655,14 +751,18 @@ class ExperimentWorkflow:
                 )
             run_id = Path(run_path).name
             record = {"run_id": run_id, "run_path": run_path, "result": child}
+            if binding is not None:
+                record["checkpoint_binding"] = binding
             if phase == "train":
                 record["isolated_export"] = self._invoke([
                     "export", "isolated", "--category", "train", "--run", run_id,
                 ], env)
-            elif command[0] == "run":
-                profile = configuration["document"].get("reporting", {}).get("profile", "libero-task-default")
+            elif command[0] == "_native-run":
+                reporting = configuration["document"].get("reporting", {})
+                profile = reporting.get("profile", "libero-task-default")
                 record["postprocessing"] = self._invoke([
                     "report", "publish", "--run", run_id, "--profile", profile,
+                    "--report-enabled", "true" if reporting.get("enabled", True) else "false",
                 ], env)
             return record
         except BaseException as exc:
@@ -712,8 +812,14 @@ class ExperimentWorkflow:
                             if key in pending and dependencies[key].issubset(completed):
                                 pending.remove(key)
                                 node_path, phase = key
+                                item = deepcopy(nodes[node_path])
+                                configuration = item["configuration"][phase]
+                                if phase == "evaluate" and "checkpoint_from" in configuration:
+                                    source = configuration["checkpoint_from"]
+                                    item["_checkpoint_record"] = deepcopy(result.get("nodes", {}).get(source, {}).get("train"))
+                                    item["_checkpoint_training_profile"] = deepcopy(nodes[source]["configuration"]["train"]["document"])
                                 future = executor.submit(self._execute_step, result["experiment_id"],
-                                                         node_path, phase, nodes[node_path], runs_root, exports_root)
+                                                         node_path, phase, item, runs_root, exports_root)
                                 active[future] = key
                     if not active:
                         if first_error is not None:
@@ -765,6 +871,134 @@ class ExperimentWorkflow:
                 ], group_env)
                 outputs[phase][path] = {"status": "completed", "run_ids": child_runs, "result": grouped}
         return outputs
+
+    def _verify_run(self, path, phase):
+        if phase == "train":
+            from .training_runs import TrainingRunStore
+            data_root = Path(self.environment.get("OVLAB_MODEL_DATA_ROOT", self.environment.get(
+                "OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data")))
+            return TrainingRunStore(data_root, training_runs_root=path.parent).verify(path.name)
+        from ovlab_runner import verify_run
+        return verify_run(path)
+
+    def verify(self, reference: str | Path):
+        """Validate a source configuration or check all recorded canonical runs."""
+        from .experiment_references import find_experiment
+        from .run_references import resolve_run_reference_tree
+        source = self._spec_path(reference)
+        if source.is_file():
+            plan = self.plan(source)
+            return {"schema_version": "ovlab.experiment-verification/v1", "status": "verified",
+                    "source_type": "configuration", "id": plan["id"], "spec": plan["spec"],
+                    "spec_hash": plan["spec_hash"], "nodes": plan["nodes"], "steps": plan["steps"],
+                    "side_effects_performed": False}
+        data_root = Path(self.environment.get("OVLAB_DATA_ROOT", self.repository_root.parent / "ovlab-data"))
+        runs_root = Path(self.environment.get("OVLAB_RUNS_ROOT", data_root / "runs")).expanduser().resolve()
+        experiment = find_experiment(runs_root, str(reference))
+        if experiment is None:
+            run = resolve_run_reference_tree(runs_root, str(reference))
+            phase = "train" if (run.path / "training-plan.json").is_file() else "evaluate"
+            checked = self._verify_run(run.path, phase)
+            return {"schema_version": "ovlab.experiment-verification/v1", "status": "verified",
+                    "source_type": "run", "id": run.run_id, "verified_runs": [checked],
+                    "side_effects_performed": False}
+        documents = {}
+        for name in ("spec", "plan", "result"):
+            path = experiment / ".experiment" / (name + ".json")
+            if path.is_symlink() or not path.is_file():
+                raise ExperimentIntegrityError(f"experiment metadata is unavailable or a symbolic link: {path}")
+            try:
+                document = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_object_pairs)
+            except (OSError, ValueError, ExperimentSpecError) as exc:
+                raise ExperimentIntegrityError(f"cannot read experiment metadata: {path}") from exc
+            if not isinstance(document, dict):
+                raise ExperimentIntegrityError(f"experiment metadata must be an object: {path}")
+            documents[name] = document
+        spec, plan, result = (documents[name] for name in ("spec", "plan", "result"))
+        migrated = plan.get("migration_only") is True
+        if (plan.get("schema_version") != PLAN_SCHEMA or result.get("schema_version") != RESULT_SCHEMA or
+                plan.get("experiment_id") != experiment.name or result.get("experiment_id") != experiment.name):
+            raise ExperimentIntegrityError("experiment metadata identity or specification hash does not match")
+        if migrated:
+            path = experiment / ".experiment" / "migration.json"
+            if path.is_symlink() or not path.is_file():
+                raise ExperimentIntegrityError("migration record is unavailable or a symbolic link")
+            try:
+                migration = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_object_pairs)
+            except (OSError, ValueError, ExperimentSpecError) as exc:
+                raise ExperimentIntegrityError("invalid migration record") from exc
+            if (not isinstance(migration, dict) or migration != result.get("migration") or
+                    migration.get("schema_version") != "ovlab.experiment-migration/v1" or
+                    spec.get("id") != experiment.name or not isinstance(result.get("nodes"), dict) or
+                    set(result["nodes"]) != {""} or not isinstance(result["nodes"][""], dict) or
+                    len(result["nodes"][""]) != 1):
+                raise ExperimentIntegrityError("migration metadata is inconsistent")
+            steps = [{"node": "", "phase": phase} for phase in result["nodes"][""]]
+        else:
+            if plan.get("spec_hash") != _spec_hash(spec) or result.get("spec_hash") != plan.get("spec_hash"):
+                raise ExperimentIntegrityError("experiment specification hash does not match")
+            steps = plan.get("steps")
+        if result.get("status") != ("migrated" if migrated else "completed"):
+            raise ExperimentIntegrityError(f"experiment {experiment.name!r} is not completed ({result.get('status', 'unknown')})")
+        if not isinstance(steps, list) or not steps or not isinstance(result.get("nodes"), dict):
+            raise ExperimentIntegrityError("experiment has no valid phase inventory")
+        checked, expected = [], set()
+        if not isinstance(plan.get('nodes'), list) or any(not isinstance(node, dict) or not isinstance(node.get('path'), str) for node in plan['nodes']):
+            raise ExperimentIntegrityError('experiment has an invalid node inventory')
+        planned_nodes = {node['path']: node for node in plan['nodes']}
+        verified_checkpoints = set()
+        for step in steps:
+            if not isinstance(step, dict) or not isinstance(step.get("node"), str) or step.get("phase") not in _PHASES:
+                raise ExperimentIntegrityError("invalid phase in experiment plan")
+            node, phase = step["node"], step["phase"]
+            key = (node, phase)
+            if key in expected:
+                raise ExperimentIntegrityError("duplicate phase in experiment plan")
+            expected.add(key)
+            records = result["nodes"].get(node, {})
+            record = records.get(phase) if isinstance(records, dict) else None
+            if not isinstance(record, dict) or not isinstance(record.get("run_id"), str):
+                raise ExperimentIntegrityError(f"missing run for {node or '<root>'} {phase}")
+            run_id = record["run_id"]
+            if not _SAFE.fullmatch(run_id):
+                raise ExperimentIntegrityError("invalid recorded run ID")
+            try:
+                scope = ExperimentScope(experiment.name, tuple(node.split("/")) if node else ())
+                path = scope.runs_root(runs_root, phase) / run_id
+                resolved = resolve_run_reference_tree(runs_root, str(path), category=phase)
+            except (ValueError, RuntimeError) as exc:
+                raise ExperimentIntegrityError(f"invalid or missing run for {node or '<root>'} {phase}: {exc}") from exc
+            configured = planned_nodes.get(node, {}).get('configuration', {}).get(phase, {})
+            if phase == 'evaluate' and 'checkpoint_from' in configured:
+                from .workflow_checkpoints import verify_saved_binding
+                proof = record.get('checkpoint_binding')
+                parts = ['nodes', *node.split('/')] if node else ['root']
+                binding_file = experiment / '.experiment/checkpoint-bindings'
+                binding_file = binding_file.joinpath(*parts[:-1], parts[-1] + '.json')
+                try:
+                    verify_saved_binding(self.repository_root, self.environment, configured, proof,
+                                         result['nodes'], runs_root, experiment.name, binding_file,
+                                         verified_checkpoints, planned_nodes[configured['checkpoint_from']]['configuration']['train']['document'])
+                except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
+                    raise ExperimentIntegrityError(f'invalid checkpoint binding for {node or "<root>"}: {exc}') from exc
+            verification = self._verify_run(resolved.path, phase)
+            if verification.get("status") not in {"completed", "verified"}:
+                raise ExperimentIntegrityError(f"recorded phase is not completed: {node or '<root>'} {phase}")
+            if migrated:
+                from .experiment_migration import _inventory
+                if _inventory(resolved.path) != migration.get("source_inventory"):
+                    raise ExperimentIntegrityError("migrated run no longer matches its original inventory")
+            checked.append({"node": node, "phase": phase, **verification})
+        actual = set()
+        for node, records in result["nodes"].items():
+            if not isinstance(records, dict):
+                raise ExperimentIntegrityError("invalid experiment result node")
+            actual.update((node, phase) for phase in records)
+        if actual != expected:
+            raise ExperimentIntegrityError("experiment result phases do not match its plan")
+        return {"schema_version": "ovlab.experiment-verification/v1", "status": "verified",
+                "source_type": "experiment", "experiment_id": experiment.name,
+                "spec_hash": _spec_hash(spec), "verified_runs": checked, "side_effects_performed": False}
 
     def run(self, spec: str | Path, *, node: str | None = None, node_only=False,
             dry_run=False, sequential=False, max_workers=None):
@@ -833,7 +1067,7 @@ class ExperimentWorkflow:
         finally:
             # Profiles and patched components are temporary execution inputs;
             # their exact resolved documents remain in plan.json and each run.
-            for section in ("experiments/training", "experiments/evaluation", "benchmarks", "policies", "metrics", "protocols", "artifacts"):
+            for section in ("experiments/training", "experiments/evaluation", "benchmarks", "policies", "metrics", "protocols", "artifacts", "resources"):
                 generated_root = (self.repository_root if section.startswith("experiments/") else self.config_root) / section / ".generated" / instance
                 if generated_root.is_dir():
                     shutil.rmtree(generated_root)

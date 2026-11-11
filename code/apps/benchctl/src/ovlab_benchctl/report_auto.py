@@ -12,6 +12,7 @@ from .run_references import (
     RunReferenceAmbiguousError, RunReferenceUnavailableError,
     resolve_run_reference_across, resolve_run_reference_tree,
 )
+from .experiment_references import find_experiment
 
 
 class ReportSelectionError(ValueError):
@@ -19,16 +20,8 @@ class ReportSelectionError(ValueError):
 
 
 def _experiment(runs: Path, reference: str):
-    candidate = Path(reference).expanduser()
-    if candidate.is_absolute():
-        directory = candidate
-    elif candidate.parts == (reference,) and reference not in {".", ".."}:
-        directory = runs / reference
-    else:
-        return None
-    if directory.is_symlink() or not directory.resolve().is_relative_to(runs):
-        return None
-    if directory.resolve().parent != runs:
+    directory = find_experiment(runs, reference)
+    if directory is None:
         return None
     manifest = directory / ".experiment" / "result.json"
     if not manifest.is_file() or manifest.is_symlink() or manifest.parent.is_symlink():
@@ -37,9 +30,9 @@ def _experiment(runs: Path, reference: str):
         result = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ReportSelectionError(f"cannot read experiment result: {manifest}") from exc
-    if result.get("experiment_id") != directory.name or not isinstance(result.get("nodes"), dict):
+    if not isinstance(result, dict) or result.get("experiment_id") != directory.name or not isinstance(result.get("nodes"), dict):
         raise ReportSelectionError(f"invalid experiment result: {manifest}")
-    if result.get("status") != "completed":
+    if result.get("status") not in {"completed", "migrated"}:
         raise ReportSelectionError(f"experiment {directory.name!r} is not completed ({result.get('status', 'unknown')})")
     plan_path = directory / ".experiment" / "plan.json"
     if not plan_path.is_file() or plan_path.is_symlink():
@@ -48,6 +41,19 @@ def _experiment(runs: Path, reference: str):
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ReportSelectionError(f"cannot read experiment plan: {plan_path}") from exc
+    if not isinstance(plan, dict):
+        raise ReportSelectionError(f"invalid experiment plan: {plan_path}")
+    if plan.get("migration_only") is True:
+        records = result.get("nodes", {}).get("")
+        migration = result.get("migration")
+        if (result.get("status") != "migrated" or not isinstance(records, dict) or len(records) != 1 or
+                any(not isinstance(record, dict) or record.get("status") != "completed" for record in records.values()) or
+                not isinstance(migration, dict) or migration.get("schema_version") != "ovlab.experiment-migration/v1"):
+            raise ReportSelectionError("migrated experiment has no completed canonical run")
+        plan = {**plan, "id": directory.name,
+                "nodes": [{"id": directory.name, "path": "", "children": []}]}
+    elif result.get("status") != "completed":
+        raise ReportSelectionError("experiment is not completed")
     if (plan.get("experiment_id") != directory.name or
             not isinstance(plan.get("nodes"), list) or not isinstance(plan.get("id"), str)):
         raise ReportSelectionError(f"invalid experiment plan: {plan_path}")

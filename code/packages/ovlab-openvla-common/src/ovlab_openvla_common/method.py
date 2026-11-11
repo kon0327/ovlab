@@ -98,9 +98,17 @@ class OpenVlaMethodDescriptor:
             }
             if set(lora) != required:
                 raise ValueError(f"LoRA configuration fields must equal {sorted(required)}")
-            if lora["rank"] != 32 or lora["alpha"] != 16 or lora["scaling"] != 0.5:
+            local_training = isinstance(self.training_provenance, Mapping) and self.training_provenance.get("origin") == "ovlab-training"
+            if local_training:
+                if (type(lora['rank']) is not int or type(lora['alpha']) is not int or
+                        lora['rank'] < 1 or lora['alpha'] < 1 or
+                        lora['scaling'] != lora['alpha'] / lora['rank'] or
+                        type(lora['dropout']) not in (int, float) or not 0 <= lora['dropout'] <= 1 or
+                        not self.training_provenance.get('checkpoint_id') or not self.training_provenance.get('training_run_id')):
+                    raise ValueError('local LoRA requires valid rank, alpha, scaling, dropout and training checkpoint provenance')
+            elif lora["rank"] != 32 or lora["alpha"] != 16 or lora["scaling"] != 0.5:
                 raise ValueError("official merged LoRA requires rank=32, alpha=16, scaling=0.5")
-            if lora["dropout"] != 0.0 or lora["bias"] != "none":
+            if lora["bias"] != "none" or (not local_training and lora["dropout"] != 0.0):
                 raise ValueError("official merged LoRA requires dropout=0.0 and bias=none")
             if lora["target_policy"] != "all-linear" or lora["modules_to_save"] is not None:
                 raise ValueError("official merged LoRA requires all-linear and modules_to_save=None")

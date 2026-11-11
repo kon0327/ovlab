@@ -25,6 +25,7 @@ from ovlab_benchctl.training_runs import (
     TrainingRunContext,
     TrainingRunStore,
     inspect_safetensors,
+    _save_training_weights,
 )
 
 
@@ -87,6 +88,25 @@ def test_adapter_bundle_finalizes_unmerged_and_verifies(tmp_path):
     assert finalized_result["performance"]["schema_version"] == "ovlab.performance-summary/v1"
     assert finalized_result["adapter_parameter_count"] == 100
     assert result["checkpoint"]["parameter_counts"]["adapter"] == 100
+
+
+def test_expanded_peft_targets_remain_finalizable_and_keep_target_evidence(tmp_path):
+    context = _context(tmp_path)
+    weights = context.staging_checkpoint / 'weights-or-adapter'
+    auxiliary = context.staging_checkpoint / 'auxiliary'
+    auxiliary.mkdir()
+
+    class SerializedPeftModel:
+        def save_pretrained(self, output, **kwargs):
+            config = json.loads((output / 'adapter_config.json').read_text())
+            config['target_modules'] = ['layers.0.q_proj', 'layers.0.v_proj']
+            (output / 'adapter_config.json').write_text(json.dumps(config))
+
+    _save_training_weights(SerializedPeftModel(), weights, auxiliary, context.plan['scientific']['training'])
+    evidence = json.loads((auxiliary / 'lora-targets.json').read_text())
+    assert evidence['resolved_targets'] == ['layers.0.q_proj', 'layers.0.v_proj']
+    result = CheckpointBundleStore(tmp_path).finalize(context)
+    assert CheckpointBundleStore(tmp_path).verify(result['checkpoint_id'])['status'] == 'verified'
 
 
 @pytest.mark.parametrize("link_error", [errno.EXDEV, errno.EACCES])

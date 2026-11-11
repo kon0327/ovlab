@@ -56,7 +56,7 @@ environment, install it once into `~/.local/bin`:
 ```bash
 bash ./install-ovlab-cli.sh
 ovlab --help
-ovlab run experiment run experiments/workflows/libero-model-tree.json --dry-run
+ovlab run experiments/workflows/libero-model-tree.json --plan
 ```
 
 The installer prints a PATH instruction if `~/.local/bin` is not already on
@@ -70,13 +70,13 @@ The principal target can be positional across reporting, exports and training:
 ovlab report RUN_ID
 ovlab report EXPERIMENT_ID
 ovlab report verify RUN_ID
-ovlab run train report TRAINING_RUN_ID
+ovlab report TRAINING_RUN_ID
 ovlab dataset inspect DATASET_ID
 ovlab checkpoint verify CHECKPOINT_ID
 ```
 
-The existing named forms such as `--spec`, `--run`, and `--name` remain
-available. For data archive and delete, use an explicit typed target such as
+Reporting and data management retain their named selectors. `ovlab run` uses
+one positional experiment target. For data archive and delete, use a typed target such as
 `run:ID`, `report:ID`, or `export:isolated:ID` to avoid ambiguity.
 
 For a dedicated host Python environment, use the environment installer. It
@@ -95,57 +95,40 @@ environment when available:
 
 ```bash
 ./ovlab --help
-./ovlab run experiment plan --spec experiments/workflows/libero-model-tree.json
-./ovlab run experiment run --spec experiments/workflows/libero-model-tree.json --dry-run
-./ovlab run experiment run --spec experiments/workflows/libero-model-tree.json
+./ovlab run experiments/workflows/libero-model-tree.yaml --plan
+./ovlab run experiments/workflows/libero-model-tree.yaml
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab run experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
+./ovlab run EXPERIMENT_ID_OR_HASH --verify
 ./ovlab doctor
-./ovlab doctor --experiment experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab run eval run libero10-lora-merged-rpc-smoke
-./ovlab run eval run libero10-lora-merged-rpc-smoke --quantization 4bit
-./ovlab run train run openvla-libero10-lora-smoke
-./ovlab run train run openvla-libero10-lora-smoke --dry-run
-./ovlab deploy run openvla-libero10 --dry-run
-./ovlab deploy run openvla-libero10
-./ovlab deploy inspect openvla-libero10
-./ovlab deploy verify openvla-libero10
-./ovlab config validate CONFIG --mode descriptor
-./ovlab policy list
-./ovlab connect CONFIG
-./ovlab run CONFIG --dry-run
-./ovlab run EXPERIMENT --dry-run
-./ovlab run EXPERIMENT --profile configs/local/profile.yaml --dry-run
-./ovlab run eval inspect RUN_PATH_OR_ID_OR_HASH
-./ovlab run eval verify RUN_PATH_OR_ID_OR_HASH
-./ovlab metrics recompute RUN_PATH_OR_ID_OR_HASH
-./ovlab report RUN_ID_OR_HASH
-./ovlab report EXPERIMENT_ID
-./ovlab report verify --run RUN_ID_OR_HASH --profile libero-task-default --build BUILD_ID
-./ovlab data list
-./ovlab data archive --run RUN_ID
-./ovlab dataset resolve --benchmark libero --suite libero_10
-./ovlab run train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
-./ovlab run train report --run TRAINING_RUN_ID
+./ovlab data list runs
+./ovlab report EXPERIMENT_ID_OR_HASH
 ./ovlab checkpoint list
+./ovlab deploy run openvla-libero10 --dry-run
 ```
 
-`./ovlab data list --kind runs` prints each canonical run ID followed by its
-eight-character lookup hash in parentheses. Every benchmark-run selector in
-the CLI accepts either the complete ID or that hash; training run selectors
-use the same rule within their separate namespace. Exact IDs take precedence,
-and an ambiguous hash is rejected.
+`ovlab run EXPERIMENT` is the single execution entry point. The resolver reads
+its schema and kind: a training profile, an evaluation scenario, or a hierarchical
+workflow. A standalone profile becomes a one-node experiment. Every execution
+has the same experiment metadata and canonical phase hierarchy.
 
-`ovlab run eval run` is the normal evaluation workflow. It launches the selected
-policy service and the LIBERO runner as separate Compose containers, waits for
-readiness, propagates the benchmark result, and cleans up the private deployment
-resources. It then starts the dedicated reporting image with canonical `runs/`
-mounted read-only and publishes all generated outputs below `exports/`. It needs
-Docker and the host CLI environment.
+`--plan` resolves and displays the tree without starting workloads. `--verify`
+validates a source configuration; with a stored run or experiment ID/path/hash,
+it checks canonical evidence instead. Individual runs have eight-character
+lookup hashes; experiment instances have ten-character suffix hashes. Ambiguous
+references are rejected. `ovlab data list runs` lists individual run IDs.
 
-`train run`, `eval run`, and `deploy run` select YAML by name or path from
-`experiments/training`, `experiments/evaluation`, and `configs/deploy`.
-Each supports `--dry-run`; `inspect TARGET` and `verify TARGET` inspect their runs
-or services. `deploy run` builds and retains only the model service, with optional
-RPC ports and quantization; see [model deployment](DEPLOYMENT.md).
+Runtime settings belong in YAML: model and quantization in policy configuration,
+renderer in the evaluation deployment, and `execution.max_workers` at the workflow
+root. Configuration mappings inherit from parent to child; sequences and scalar
+values replace inherited values. See the [experiment guide](docs/EXPERIMENT_WORKFLOW.md).
+
+Evaluation phases launch the policy service and LIBERO runner in separate
+Compose containers, propagate results, clean up the private deployment, and
+publish reports below `exports/`. Training phases use their isolated trainer and
+checkpoint finalizer. Persistent model services use `ovlab deploy`; see
+[model deployment](DEPLOYMENT.md).
 
 Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile when resolving a
 machine-local checkpoint path. Installing `ovlab-benchctl` exposes the same command as the

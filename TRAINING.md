@@ -1,12 +1,11 @@
 # Training operations
 
-Training scenarios live in `experiments/training/`. Use
-`ovlab run train run TARGET`, `ovlab run train inspect RUN_REFERENCE`, and
-`ovlab run train verify RUN_REFERENCE`. `train run TARGET --dry-run` resolves the
-training plan without starting a trainer; resource planning may require prepared
-local datasets/checkpoints. The legacy `--run` form for inspect/verify remains
-accepted. Evaluation uses `ovlab eval`; persistent model services use `ovlab deploy`.
-
+Training profiles live in `experiments/training/` and use the shared experiment
+entry point: `ovlab run PROFILE`. `--plan` resolves the configuration tree;
+`--verify` validates a source or checks the canonical evidence of a stored run or
+experiment ID/hash. Runtime preflight checks local datasets and checkpoints before
+starting the isolated trainer. Use `ovlab data list runs --detail` for recorded
+run information and `ovlab report RUN_OR_EXPERIMENT_ID` for reporting.
 
 Detailed dataset-provider, acquisition, local-import and integrity procedures
 are documented separately in [`DATASETS.md`](DATASETS.md). This guide focuses
@@ -19,12 +18,16 @@ explicit dataset acquisition -> verified preparation -> validated profile
 -> offline trainer -> finalized immutable checkpoint -> explicit deployment handoff
 ```
 
-Training never runs as part of `eval run`. Benchmark `runs/`, reporting
+The input configuration schedules training and evaluation explicitly. Canonical `runs/` and reporting
 `exports/derived/` and other publication outputs remain separate from model data. The host
 model-data root defaults to `../ovlab-data` relative to the repository and may be
 set with `OVLAB_MODEL_DATA_ROOT`.
 
 ## Storage
+
+Every execution stores its source, resolved tree and phase results in
+`runs/<instance>/.experiment/`. A standalone profile uses the root node; a
+workflow uses its explicit child paths.
 
 ```text
 ovlab-data/
@@ -33,7 +36,7 @@ ovlab-data/
 │   ├── prepared/
 │   ├── dataset.json
 │   └── manifest.json
-├── runs/train/<training-run-id>/
+├── runs/<instance>/train/<node-path>/<training-run-id>/
 │   ├── original-profile.yaml
 │   ├── resolved-profile.yaml
 │   ├── training-plan.json
@@ -115,9 +118,8 @@ credentials, unsafe redirects, traversal paths, archive links and excessive
 extraction sizes are rejected. Local imports are copied into controlled storage
 so an external mutable path never becomes a training input.
 
-Dataset acquisition is never implicit. `train run --allow-dataset-download` is
-the one explicit convenience that may acquire a known built-in selector before
-training; without it a missing dataset is an actionable error.
+Fetch datasets explicitly before starting an experiment. Training rejects a
+missing dataset and keeps acquisition outside the training lifecycle.
 
 ## Profiles and planning
 
@@ -130,19 +132,18 @@ merge and sequences replace. Absolute host paths, shell commands, unknown keys
 and unresolved aliases are rejected.
 
 ```bash
-./ovlab run train profiles
-./ovlab run train validate --profile experiments/training/openvla-libero10-lora-smoke.yaml
-./ovlab run train run openvla-libero10-quic-smoke.yaml
-./ovlab run train plan --profile openvla-libero10-quic-hard.yaml
-./ovlab run train plan --profile experiments/training/openvla-libero10-lora-smoke.yaml
+./ovlab run experiments/training/openvla-libero10-lora-smoke.yaml --verify
+./ovlab run openvla-libero10-quic-smoke.yaml
+./ovlab run --plan openvla-libero10-quic-hard.yaml
+./ovlab run --plan experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
 `model.revision` accepts a pinned 40-character commit, `local/main`,
-`remote/main`, or `latest`. Omitting it means `local/main`: both `train plan` and `train run`
-read the cached Hugging Face `refs/main` and require that snapshot locally,
-without a network request. `remote/main` and its alias `latest` query Hugging Face for the current
-commit; `train run` downloads its snapshot when needed, while `train plan`
-requires it to be cached already. The selected commit and observed file hashes
+`remote/main`, or `latest`. Omitting it means `local/main`. Descriptor planning
+records this selector without accessing model bytes. At execution preflight,
+`local/main` reads cached Hugging Face `refs/main`; `remote/main` and its alias
+`latest` resolve the current commit. The runtime checks or acquires the selected
+snapshot before starting its isolated offline worker. The selected commit and observed file hashes
 are recorded in the training plan. If the registry also pins a commit, an
 explicit commit must match it and its registered hashes are enforced. With a
 moving registry entry, an explicit commit selects that cached snapshot and
@@ -152,7 +153,8 @@ records its observed file hashes.
 episodes per task, an 80/20 episode split, one frame in eight, 2,000 optimizer
 steps, effective batch size four, and up to 1,400 teacher-forced validation
 batches. It inherits the smoke profile's frozen host action normalization;
-pass `--fit-action-normalization` to fit train-only q01/q99 statistics instead.
+set `dataset.partition.action_normalization: train-q99` to fit training-only
+q01/q99 statistics instead.
 
 Validation does not resolve large assets. Planning verifies local dataset and
 base-checkpoint bytes, negotiates capabilities and evaluates resources, but
@@ -174,11 +176,11 @@ inherited action statistics, explicit deterministic episode train/validation
 partition, and adapter-only output:
 
 ```bash
-./ovlab run train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab run train plan --profile experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab run train run experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab run train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab run train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
+./ovlab run --plan experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-run
 ```
 
@@ -191,25 +193,15 @@ limitation. A three-step smoke verifies wiring, not training quality.
 
 Every explicit partition splits immutable TFDS episode IDs before frame
 sampling. Training and validation cannot share an episode. QuIC defaults to frozen selected
-host action statistics. `--fit-action-normalization` on `train validate|plan|run`
-or any `train ablate` operation selects training-only q01/q99 fitting before
-planning. It requires a partition, applies consistently to every suite variant,
-changes the scientific identity, and leaves source profiles unchanged. The
-resolved YAML alternative is `dataset.partition.action_normalization: train-q99`;
-reference full/LoRA profiles also support this mode. Fitted statistics exclude
-validation episodes, stay frozen throughout the run, and accompany the QuIC
-adapter through reload and inference.
-Teacher-forced validation remains separate from benchmark rollout evaluation.
-
-```bash
-./ovlab run train run experiments/training/openvla-libero10-quic-smoke.yaml \
-  --fit-action-normalization
-./ovlab run train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
-  --fit-action-normalization --output /tmp/quic-placement-fitted-run
-```
+host action statistics. Set `dataset.partition.action_normalization: train-q99`
+in the profile to fit training-only q01/q99 statistics. It requires an explicit
+partition and changes the scientific identity. Reference full/LoRA profiles also
+support this mode. Validation episodes never fit the bounds. Frozen statistics
+accompany the QuIC adapter through reload and inference. Teacher-forced validation
+remains separate from benchmark rollout evaluation.
 
 Training optimizer steps, QuIC teacher-forced validation, and rollout task/episode
-progress write to stderr. In an interactive `train run`, Docker receives a
+progress write to stderr. In an interactive `ovlab run`, Docker receives a
 terminal and each progress bar updates in place. Worker logs retain periodic
 plain-text snapshots. Redirected output and `--json` use plain progress lines
 on stderr, leaving JSON stdout intact. `OVLAB_PROGRESS=off` disables the
@@ -229,7 +221,7 @@ bash deploy/scripts/build-images.sh dataset training-openvla training-openvla-qu
 Then start a bounded run:
 
 ```bash
-./ovlab run train run \
+./ovlab run \
   experiments/training/openvla-libero10-lora-smoke.yaml
 ```
 
@@ -257,11 +249,9 @@ including private Safetensors staging files, so host-side verification works.
 Inspect canonical evidence offline:
 
 ```bash
-./ovlab run train status TRAINING_RUN_ID
-./ovlab run train inspect TRAINING_RUN_ID
-./ovlab run train verify TRAINING_RUN_ID
-./ovlab run train report --run TRAINING_RUN_ID
-./ovlab run train report --run TRAINING_RUN_ID --verify
+./ovlab data list runs --detail
+./ovlab run TRAINING_RUN_ID --verify
+./ovlab report TRAINING_RUN_ID
 ./ovlab checkpoint list
 ./ovlab checkpoint inspect --checkpoint CHECKPOINT_ID
 ./ovlab checkpoint verify --checkpoint CHECKPOINT_ID
@@ -356,7 +346,7 @@ training. `OVLAB_WANDB_ENTITY` selects a team; standard W&B settings such as
 `WANDB_MODE=offline` also apply. For example:
 
 ```bash
-OVLAB_WANDB_PROJECT=ovlab ./ovlab run train run openvla-lora-libero10-smoke
+OVLAB_WANDB_PROJECT=ovlab ./ovlab run openvla-lora-libero10-smoke
 ```
 
 The host uploads the training plan, result and manifest as a small W&B artifact,

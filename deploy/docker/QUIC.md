@@ -46,7 +46,7 @@ python deploy/scripts/render_requirements_lock.py \
   deploy/locks/quic-openvla.pylock.toml deploy/locks/quic-openvla.requirements.txt
 ```
 
-Use the existing `ovlab run eval run` command with an experiment declaring
+Use the existing `ovlab run` command with an experiment declaring
 `deployment: {profile: quic, renderer: egl}` and policy type `openvla_quic`.
 The composed policy's `settings.quic.adapter_path` selects the adapter
 directory; a relative path is interpreted from the OVLAB repository root.
@@ -69,7 +69,7 @@ container.
 
 `ovlab_core.progress.ConsoleProgress` provides shared stderr tracking for
 optimizer steps, validation batches, and evaluation episodes. Interactive
-`train run` attaches a Docker terminal so the worker redraws each bar in
+`ovlab run` attaches a Docker terminal so the worker redraws each bar in
 place; its evidence log records plain start, periodic (at most every 30
 seconds), and final snapshots. Redirected runs print plain progress snapshots
 to stderr. Interactive JSON-mode runs redraw the bar on stderr while JSON

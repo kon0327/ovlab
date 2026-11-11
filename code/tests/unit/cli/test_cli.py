@@ -29,6 +29,37 @@ QUIC_PEFT = "configs/policies/openvla-quic/quic-peft-bones.yaml"
 QUIC_WC = "configs/policies/openvla-quic/quic-wc-bones.yaml"
 
 
+def test_unified_run_help_shows_one_target_and_only_modes():
+    result = _run("run", "--help")
+    assert result.returncode == 0
+    assert "usage: ovlab run " in result.stdout
+    assert "EXPERIMENT" in result.stdout
+    assert "--plan" in result.stdout and "--verify" in result.stdout
+    for removed in ("--node", "--renderer", "--profile", "--max-workers", "--quantization", "{plan,run}"):
+        assert removed not in result.stdout
+
+
+@pytest.mark.parametrize("source,phase", [
+    ("experiments/training/openvla-libero10-quic-smoke.yaml", "train"),
+    ("experiments/evaluation/libero10-lora-4bit-three-per-task.yaml", "evaluate"),
+    ("experiments/workflows/libero10-two-task-training-smoke.yaml", "train"),
+])
+def test_unified_plan_resolves_all_source_kinds_without_side_effects(source, phase):
+    result = _run("run", source, "--plan", "--json")
+    assert result.returncode == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert document["command"] == "run"
+    assert document["result"]["side_effects_performed"] is False
+    assert document["result"]["steps"][0]["phase"] == phase
+
+
+@pytest.mark.parametrize("mode", ["--plan", "--verify"])
+def test_unified_config_modes_never_start_a_workload(mode):
+    result = _run("run", "experiments/workflows/libero10-two-task-training-smoke.yaml", mode, "--json")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["result"]["side_effects_performed"] is False
+
+
 def test_registry_checkpoint_list_cli(tmp_path):
     environment = {"OVLAB_GLOBAL_HF_CACHE": str(tmp_path / "cache"),
                    "OVLAB_MODEL_DATA_ROOT": str(tmp_path / "data")}
@@ -137,12 +168,15 @@ def test_deploy_run_rejects_removed_host_path_options(option):
 def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
     events = []
 
-    class Application:
-        def run(self, config, *, output_root=None):
-            events.append(("run", config, output_root))
+    class Workflow:
+        def __init__(self, root):
+            pass
+        def run(self, config):
+            events.append(("run", config))
             return {"status": "completed"}
 
-    monkeypatch.setattr(cli_module, "_application", lambda: Application())
+    from ovlab_benchctl import experiment_workflow
+    monkeypatch.setattr(experiment_workflow, "ExperimentWorkflow", Workflow)
     monkeypatch.setattr(
         cli_module, "_install_interrupt_handlers",
         lambda: events.append(("install",)) or {"previous": "handlers"},
@@ -160,30 +194,29 @@ def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
     assert json_mode is False and render is None
     assert events == [
         ("install",),
-        ("run", REPOSITORY / "experiments/evaluation/mock-e2e-smoke.yaml", None),
+        ("run", "experiments/evaluation/mock-e2e-smoke.yaml"),
         ("restore", {"previous": "handlers"}),
     ]
 
 
-def test_plain_run_resolves_bare_target_and_forwards_local_profile(monkeypatch):
+def test_private_native_worker_resolves_bare_target_and_local_profile(monkeypatch):
     class Application:
         def execution_plan(self, config, *, output_root=None, local_profile=None):
             return {"config": str(config), "output_root": output_root, "local_profile": local_profile}
 
     monkeypatch.setattr(cli_module, "_application", lambda: Application())
-    args = _parser().parse_args(["run", "mock-e2e-smoke", "--profile", "local.yaml", "--dry-run"])
+    args = _parser().parse_args(["_native-run", "mock-e2e-smoke", "--profile", "local.yaml", "--dry-run"])
     result, _, _ = _dispatch(args)
     assert result["config"] == str(REPOSITORY / "experiments/evaluation/mock-e2e-smoke.yaml")
     assert result["local_profile"] == "local.yaml"
 
 
-def test_plain_run_requires_target_but_keeps_inspect_and_verify():
-    with pytest.raises(cli_module.CliUsageError, match="requires an experiment YAML TARGET"):
-        _dispatch(_parser().parse_args(["run"]))
-    assert _parser().parse_args(["run", "inspect", "run-1"]).target == "inspect"
-    assert _parser().parse_args(["run", "verify", "run-1"]).target == "verify"
-    with pytest.raises(cli_module.CliUsageError, match="cannot be combined with --profile"):
-        _dispatch(_parser().parse_args(["run", "inspect", "run-1", "--profile", "local.yaml"]))
+def test_unified_run_rejects_missing_target_duplicate_modes_and_runtime_flags():
+    for arguments in (["run"], ["run", "example", "--plan", "--verify"],
+                      ["run", "inspect", "run-1"], ["run", "example", "--profile", "local.yaml"],
+                      ["run", "train", "example"]):
+        with pytest.raises(SystemExit):
+            _parser().parse_args(arguments)
 
 
 @pytest.mark.parametrize("arguments", [
@@ -619,7 +652,7 @@ def test_quic_runtime_and_dry_run_fail_with_typed_exit_code(config, error_type):
     error = json.loads(result.stdout)["errors"][0]
     assert error["type"] == error_type
     assert error["context"]["variant"] in {"quic-peft", "quic-wc"}
-    dry = _run("run", config, "--dry-run", "--json")
+    dry = _run("_native-run", config, "--dry-run", "--json")
     assert dry.returncode == 4
     assert json.loads(dry.stdout)["errors"][0]["type"] == error_type
 
@@ -643,9 +676,9 @@ def test_human_diagnostics_use_stderr_without_traceback():
 
 
 def test_semantic_usage_error_has_stable_exit_code():
-    result = _run("run", "inspect")
+    result = _run("run", "example", "--plan", "--verify")
     assert result.returncode == 2
-    assert "usage_error" in result.stderr
+    assert "not allowed with argument" in result.stderr
 
 
 def test_reporting_renderer_failure_has_typed_exit_code():
@@ -688,13 +721,13 @@ def test_dry_run_is_deterministic_and_has_no_filesystem_side_effects(tmp_path):
         'devices:\n  primary_gpu: cuda:0\n', encoding="utf-8",
     )
     env = {"OVLAB_LOCAL_PROFILE": str(profile)}
-    first = _run("run", "experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
-    second = _run("run", "experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
+    first = _run("_native-run", "experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
+    second = _run("_native-run", "experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
     assert first.returncode == second.returncode == 0
     assert first.stdout == second.stdout
     assert json.loads(first.stdout)["result"]["side_effects_performed"] is False
     assert not runs.exists()
-    real = _run("run", "experiments/evaluation/mock-e2e-smoke.yaml", "--json", environment=env)
+    real = _run("_native-run", "experiments/evaluation/mock-e2e-smoke.yaml", "--json", environment=env)
     assert real.returncode == 3
     assert "production CLI run currently requires LIBERO" in json.loads(real.stdout)["errors"][0]["message"]
     assert not runs.exists()
@@ -717,7 +750,7 @@ def test_run_profile_option_overrides_local_profile_environment(tmp_path):
     configured = local_profile("configured")
     selected = local_profile("selected")
     result = _run(
-        "run", "mock-e2e-smoke", "--profile", str(selected), "--dry-run", "--json",
+        "_native-run", "mock-e2e-smoke", "--profile", str(selected), "--dry-run", "--json",
         environment={"OVLAB_LOCAL_PROFILE": str(configured)},
     )
     assert result.returncode == 0, result.stderr
@@ -945,18 +978,16 @@ def test_dataset_list_renders_image_json_with_host_table(tmp_path):
     assert log.read_text().splitlines()[-3:] == ["dataset", "list", "--json"]
 
 
-def test_version_short_alias_and_run_command_groups():
+def test_version_short_alias_and_unified_run_entry_point():
     short = _run("-v")
     long = _run("--version")
     assert short.returncode == long.returncode == 0
     assert short.stdout == long.stdout
     help_output = _run("run", "--help")
     assert help_output.returncode == 0
-    assert all(name in help_output.stdout for name in ("eval", "train", "experiment"))
-    nested = _run("run", "train", "validate", "openvla-libero10-quic-smoke", "--json")
-    legacy = _run("train", "validate", "openvla-libero10-quic-smoke", "--json")
-    assert nested.returncode == legacy.returncode == 0
-    assert json.loads(nested.stdout) == json.loads(legacy.stdout)
+    assert "EXPERIMENT" in help_output.stdout
+    assert "Other operations" not in help_output.stdout
+    assert _run("run", "train", "validate", "profile.yaml").returncode == 2
 
 
 def test_dataset_list_preserves_container_failure_status(tmp_path):
@@ -986,7 +1017,7 @@ def test_grouped_training_report_uses_reporting_container(tmp_path):
     docker.chmod(0o755)
     data = tmp_path / "data"
     (data / "runs").mkdir(parents=True)
-    result = _run("run", "train", "report", "run-1", "--json", environment={
+    result = _run("train", "report", "run-1", "--json", environment={
         "PATH": f"{binaries}:{os.environ['PATH']}", "OVLAB_DATA_ROOT": str(data),
         "OVLAB_FAKE_DOCKER_LOG": str(log),
     })

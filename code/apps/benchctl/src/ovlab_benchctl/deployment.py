@@ -136,7 +136,7 @@ class ComposeDeployment:
     }
     _IMAGE_CONTRACT_LABEL = IMAGE_CONTRACT_LABEL
     _IMAGE_CONTRACTS = {
-        "benchmark": "resolved-checkpoint-config-bundle-v2",
+        "benchmark": "native-run-config-bundle-v3",
         "reporting": "canonical-readonly-reporting-v1",
         "policy-openvla": "resolved-checkpoint-quantization-config-bundle-v2",
         "policy-openvla-oft": "resolved-checkpoint-quantization-config-bundle-v2",
@@ -197,7 +197,7 @@ class ComposeDeployment:
         quantization: str | None = None,
         env_file: str | Path | None = None,
         local_profile: str | Path | None = None,
-        offline: bool = False,
+        offline: bool | None = None,
         project_name: str | None = None,
     ) -> ComposeDeploymentPlan:
         from .config_paths import resolve_config_path
@@ -223,6 +223,7 @@ class ComposeDeployment:
             )
         selected_profile = profile or configured["profile"]
         selected_renderer = renderer or configured["renderer"]
+        offline = configured.get("offline", False) if offline is None else offline
         reporting = experiment_doc.get("reporting", {})
         reporting_enabled = reporting.get("enabled", True)
         reporting_profile = reporting.get("profile", "libero-task-default")
@@ -563,6 +564,19 @@ class ComposeDeployment:
             local_checkpoint_override,
         )
         spec = checkpoint_spec(self.repository_root, plan.experiment)
+        workflow_path = self.environment.get('OVLAB_WORKFLOW_CHECKPOINT_PATH')
+        workflow_id = self.environment.get('OVLAB_WORKFLOW_CHECKPOINT_ID')
+        if workflow_path is not None or workflow_id is not None:
+            from .checkpointing import ResolvedCheckpoint, verify_checkpoint
+            if not workflow_path or workflow_id != spec.resource_id or isinstance(spec, LatestCheckpointSelection):
+                raise ComposeDeploymentError('workflow checkpoint binding differs from the selected immutable resource')
+            snapshot = Path(workflow_path).expanduser()
+            if not snapshot.is_absolute() or snapshot.is_symlink():
+                raise ComposeDeploymentError('workflow checkpoint must be an absolute regular snapshot directory')
+            snapshot = snapshot.resolve()
+            count = verify_checkpoint(spec, snapshot)
+            return ResolvedCheckpoint(spec, snapshot, f'/checkpoints/resolved/{spec.resource_id}',
+                                      'workflow-training-output', count, False)
         global_value = self._environment_value(plan, "OVLAB_GLOBAL_HF_CACHE")
         global_cache = (
             Path(global_value).expanduser().resolve()

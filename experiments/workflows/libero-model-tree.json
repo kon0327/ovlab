@@ -3,6 +3,7 @@
   "kind": "workflow",
   "id": "libero-model-tree",
   "name": "LIBERO model, task and quantization comparison",
+  "execution": {"max_workers": 1},
   "config": {
     "train": {
       "profile": "openvla-lora-libero10-smoke.yaml",
@@ -21,6 +22,7 @@
       "id": "lora",
       "name": "Merged OpenVLA LoRA",
       "execute": ["train", "evaluate"],
+      "config": {"evaluate": {"checkpoint_from": "lora"}},
       "children": [
         {
           "id": "task-0",

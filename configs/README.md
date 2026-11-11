@@ -19,22 +19,23 @@ contract. Canonical camera names are checked in the same way.
 ## Scenario directories
 
 - `../experiments/workflows/`: hierarchical YAML or JSON experiments selected by
-  `ovlab run experiment plan|run --spec FILE`; see the
+  `ovlab run FILE` (add `--plan` to preview); see the
   [experiment workflow guide](../docs/EXPERIMENT_WORKFLOW.md).
-- `../experiments/training/`: training scenarios selected by `ovlab run train run TARGET`.
-- `../experiments/evaluation/`: evaluation scenarios selected by `ovlab run eval run TARGET`.
+- `../experiments/training/`: training scenarios selected by `ovlab run TARGET`.
+- `../experiments/evaluation/`: evaluation scenarios selected by `ovlab run TARGET`.
 - `deploy/`: policy-only deployment configs selected by `ovlab deploy run TARGET`.
 
 Commented reference files: [`evaluation/example.yaml`](../experiments/evaluation/example.yaml),
 [`training/example.yaml`](../experiments/training/example.yaml) and
 [`workflows/example.yaml`](../experiments/workflows/example.yaml). Each contains a
-valid example plus commented alternatives; validate with `ovlab run eval run --dry-run`,
-`ovlab run train validate` or `ovlab run experiment plan`, respectively.
+valid example plus commented alternatives; validate any of them with
+`ovlab run FILE --verify`, or display its tree with `ovlab run FILE --plan`.
 
-Workflow specs accept YAML or JSON paths. Training, evaluation and deployment
-scenarios accept YAML names or paths; their run commands support `--dry-run`.
-Training/evaluation `inspect` and `verify` take run references; deployment
-uses service IDs or config names. See [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
+Workflow specs accept YAML or JSON paths. Training and evaluation scenarios
+accept YAML names or paths through the same `ovlab run` entry point. Use
+`ovlab run INSTANCE_OR_RUN_ID --verify` for canonical evidence. Persistent
+deployment uses `ovlab deploy` with service IDs or deployment config names.
+See [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
 for deployment schema, image building, ports, quantization, readiness, and
 service lifecycle.
 
@@ -111,8 +112,8 @@ paths may differ; checkpoint/data identities, episode split, normalization, seed
 optimizer budget and resource contract must remain shared.
 
 ```bash
-./ovlab run train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab run train ablate materialize --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab train ablate materialize --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-plan
 ```
 

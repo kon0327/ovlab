@@ -120,7 +120,7 @@ def test_experiment_positional_plan_and_named_alias_are_equivalent():
 
 
 @pytest.mark.parametrize("action,options,expected", [
-    ("plan", [], {"mode": "parallel", "max_workers": 2}),
+    ("plan", [], {"mode": "sequential", "max_workers": 1}),
     ("plan", ["--sequential"], {"mode": "sequential", "max_workers": 1}),
     ("run", ["--dry-run", "--max-workers", "4"], {"mode": "parallel", "max_workers": 4}),
     ("run", ["--dry-run", "--sequential"], {"mode": "sequential", "max_workers": 1}),

@@ -5,6 +5,10 @@ relative `extends`, strict YAML, the existing training planner, isolated trainer
 checkpoint finalizer, and training reports. The imported project does not become
 an alternative experiment runner.
 
+The public entry point is `ovlab run PROFILE_OR_WORKFLOW`; use a workflow tree
+for hierarchical comparisons. The specialized suite utility below remains a
+compatibility interface for its stricter shared-factor checks.
+
 A suite uses `ovlab.training-ablation/v1`, a base profile, declared factor paths,
 and a mapping from variant IDs to profiles. See
 [`openvla-quic-placement-smoke.yaml`](../configs/ablations/openvla-quic-placement-smoke.yaml)
@@ -15,27 +19,27 @@ normalization statistics. A9 is the source project's local placement extension.
 
 ```bash
 # Pure schema/invariant validation: no dataset/model imports or GPU allocation.
-./ovlab run train ablate validate \
+./ovlab train ablate validate \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml
 
 # Resolve and verify the same immutable checkpoint and dataset for all variants.
-./ovlab run train ablate plan \
+./ovlab train ablate plan \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml
 
 # Reviewable resolved profiles, a scientific plan and exact child commands.
 # OUTPUT must be a new directory; plans and profiles are immutable.
-./ovlab run train ablate materialize \
+./ovlab train ablate materialize \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-plan
 
 # Sequential ordinary OVLAB training containers, finalizers and reports.
-./ovlab run train ablate run \
+./ovlab train ablate run \
   --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --output /tmp/quic-placement-run
 ```
 
 `materialize` and `run` preflight local resources; fetch datasets explicitly
-first. A materialized profile can also be passed directly to `ovlab run train run`.
+first. A materialized profile can also be passed directly to `ovlab run`.
 Relative parent paths are confined to `configs/`, cycles fail, mappings merge,
 and lists replace. Every final resolved profile is validated normally. The
 suite allows only declared changes beneath `training.peft.adapter`,
@@ -92,8 +96,9 @@ Each run writes immutable `data-partition.json`: selected IDs, groups, source an
 selected frame counts, split membership, source content identity, metadata and
 standardizer hashes, preprocessing, frozen normalization and manifest identity.
 QuIC defaults to explicitly selected host statistics for both training and
-validation. Set `dataset.partition.action_normalization: train-q99` or use
-`--fit-action-normalization` to fit q01/q99 on selected training frames only.
+validation. Set `dataset.partition.action_normalization: train-q99` to fit
+q01/q99 on selected training frames only. The compatibility suite utility also
+accepts `--fit-action-normalization`.
 The CLI flag resolves into the profile before planning and changes its scientific
 identity; it does not rewrite source YAML. It requires an explicit episode
 partition. Validation actions never fit those bounds. The source bridge's action
@@ -104,16 +109,15 @@ fitted statistics are separate scientific conditions. Reference full/LoRA
 partition profiles also support `train-q99`.
 
 ```bash
-./ovlab run train validate --profile experiments/training/openvla-libero10-quic-smoke.yaml \
-  --fit-action-normalization
-./ovlab run train run experiments/training/openvla-libero10-quic-smoke.yaml \
-  --fit-action-normalization
-./ovlab run train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
+./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
   --fit-action-normalization --output /tmp/quic-placement-fitted-run
 ```
 
-The flag also applies to `train plan` and ablation `validate`, `plan`, and
-`materialize`. For a suite, the override applies to its base and every variant;
+For `ovlab run`, set `dataset.partition.action_normalization: train-q99` in
+the profile before planning or running. The compatibility ablation utility also
+accepts the fitting override for `validate`, `plan`, and `materialize`. For a suite, the override applies to its base and every variant;
 the shared immutable manifest must contain the same selected episodes and
 fitted statistics across all children. Use a new study output directory when
 changing normalization. Existing manifests are verified and never overwritten.

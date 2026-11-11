@@ -132,7 +132,7 @@ def test_yaml_run_preserves_original_source_and_canonical_json(tmp_path):
     def fake_runner(command, **kwargs):
         instance = kwargs["env"]["OVLAB_EXPERIMENT_ID"]
         result = ({"run_path": str(tmp_path / "runs" / instance / "evaluate" / "run-one")}
-                  if command[1] == "run" else {"status": "completed", "report": {"interactive_output": "report.html"}})
+                  if command[1] == "_native-run" else {"status": "completed", "report": {"interactive_output": "report.html"}})
         return SimpleNamespace(returncode=0, stdout=json.dumps({"status": "success", "result": result}))
 
     workflow = ExperimentWorkflow(ROOT, environment={"OVLAB_DATA_ROOT": str(tmp_path)}, runner=fake_runner)
@@ -188,7 +188,7 @@ def test_plan_inherits_resolved_profiles_and_tracks_field_provenance(tmp_path):
     benchmark = nodes["model-a/task-a"]["configuration"]["evaluate"]["component_documents"]["benchmark"]
     assert benchmark["document"]["settings"]["task_indices"] == [0]
     assert benchmark["field_sources"]["settings.task_indices"] == "experiment:model-a/task-a:settings.task_indices"
-    assert plan["dependency_semantics"].startswith("scheduling only")
+    assert "checkpoint_from binds a finalized training checkpoint" in plan["dependency_semantics"]
 
 
 def test_plan_can_select_one_node_without_descendants_or_external_dependency(tmp_path):
@@ -487,12 +487,12 @@ def test_host_evaluation_publishes_report_after_run(tmp_path):
         seen.append(command[1:3])
         instance = kwargs["env"]["OVLAB_EXPERIMENT_ID"]
         result = ({"run_path": str(tmp_path / "runs" / instance / "evaluate" / "mock-run")}
-                  if command[1] == "run" else {"status": "completed", "report": {"interactive_output": "report.html"}})
+                  if command[1] == "_native-run" else {"status": "completed", "report": {"interactive_output": "report.html"}})
         return SimpleNamespace(returncode=0, stdout=json.dumps({"status": "success", "result": result}))
 
     env = {"OVLAB_RUNS_ROOT": str(tmp_path / "runs"), "OVLAB_EXPORTS_ROOT": str(tmp_path / "exports")}
     result = ExperimentWorkflow(ROOT, environment=env, runner=fake_runner).run(_write(tmp_path, spec))
-    assert [step[0] for step in seen] == ["run", "report"]
+    assert [step[0] for step in seen] == ["_native-run", "report"]
     assert result["nodes"][""]["evaluate"]["postprocessing"]["report"]["interactive_output"] == "report.html"
 
 
