@@ -15,7 +15,7 @@ devices:
 resources:
   checkpoints:
     quic-libero10-v1:
-      local_path: /absolute/path/to/ovlab-data/checkpoints/local/quic-libero10-v1
+      local_path: /absolute/path/to/ovlab-data/checkpoints/others/quic-libero10-v1
 
 # Optional machine-local override for the EGL device selected by a portable
 # execution profile. It does not select the renderer backend.

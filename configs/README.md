@@ -76,7 +76,7 @@ New exports use built-in, versioned `isolated-default-v1` and
 selection and every source run's canonical configuration identity are recorded
 in the resulting `metadata.json`. Files below `exports/` retain only the legacy
 `ovlab.export-spec/v1` grouped bridge; new grouped comparisons should use
-`ovlab export grouped`. Python expressions, YAML tags, arbitrary imports, and
+`ovlab report export grouped`. Python expressions, YAML tags, arbitrary imports, and
 remote assets are not supported.
 
 ## Checkpoint resources

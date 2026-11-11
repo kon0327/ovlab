@@ -7,6 +7,18 @@ evidence from `runs/` and writes all generated outputs below `exports/`.
 Reporting never starts LIBERO, loads a policy checkpoint, or performs model
 inference. Canonical run artifacts remain authoritative and read-only.
 
+Use `ovlab report RUN_ID` for an isolated export of one training or evaluation
+run. Use `ovlab report EXPERIMENT_ID` for a completed experiment: every run
+receives an isolated export at its node. At each parent, training and evaluation
+are compared separately when at least two child branches contain runs of that
+category. Each comparison includes descendants of those child branches; a run
+executed directly at the parent receives its own isolated export. The command
+prints each node, source runs, export type and output path. Specialized exports remain available under
+`ovlab report export`, and `ovlab export` remains a compatibility alias.
+
+`ovlab report publish RUN_ID` separately retains the existing evaluation HTML
+report plus isolated export workflow.
+
 ## Experiment-scoped reports
 
 The current YAML or JSON experiment workflow writes
@@ -462,7 +474,7 @@ A successful benchmark run automatically receives a complete isolated export.
 It can also be regenerated explicitly:
 
 ```bash
-./ovlab export isolated --run RUN_ID
+./ovlab report export isolated --run RUN_ID
 ```
 
 Open `index.html` inside the isolated export to browse image previews, PDFs,
@@ -474,7 +486,7 @@ the export's integrity checks.
 To export exactly one episode instead of the full run:
 
 ```bash
-./ovlab export isolated --run RUN_ID --episode EPISODE_ID
+./ovlab report export isolated --run RUN_ID --episode EPISODE_ID
 ```
 
 The layout is:
@@ -522,17 +534,17 @@ selection mode:
 
 ```bash
 # Manually selected run names
-./ovlab export grouped \
+./ovlab report export grouped \
   --name paper-ablation \
   --runs RUN_ID_A RUN_ID_B RUN_ID_C
 
 # Every completed run with the same model and checkpoint as a reference run
-./ovlab export grouped \
+./ovlab report export grouped \
   --name openvla-family \
   --same-model-as REFERENCE_RUN_ID
 
 # Every compatible completed run, optionally restricted to a suite
-./ovlab export grouped \
+./ovlab report export grouped \
   --name libero10-study \
   --all-runs \
   --suite libero_10
@@ -607,8 +619,8 @@ Every export has one `metadata.json` containing:
 Verify either branch with:
 
 ```bash
-./ovlab export verify --kind isolated --name RUN_ID --json
-./ovlab export verify --kind grouped --name GROUP_NAME --json
+./ovlab report export verify --kind isolated --name RUN_ID --json
+./ovlab report export verify --kind grouped --name GROUP_NAME --json
 ```
 
 Every selected run must pass canonical verification. Empty selections, mixed
@@ -732,7 +744,7 @@ Before sharing a result:
 1. run `ovlab run eval verify` on every canonical source run;
 2. regenerate the report from its profile or the export from its template and selection;
 3. retain the derived report build ID where applicable;
-4. run `ovlab report verify` with that build ID or `ovlab export verify` with the export kind and name;
+4. run `ovlab report verify` with that build ID or `ovlab report export verify` with the export kind and name;
 5. confirm that source run IDs and checksums appear in the report manifest or export metadata;
 6. share `exports/` for publication artifacts and preserve `runs/` separately as
    the immutable evidence needed for reproduction.

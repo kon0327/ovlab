@@ -993,3 +993,46 @@ def test_grouped_training_report_uses_reporting_container(tmp_path):
     })
     assert result.returncode == 0
     assert log.read_text().splitlines()[-4:] == ["train", "report", "run-1", "--json"]
+
+
+def test_unified_report_parses_single_run_and_export_subcommands():
+    direct = _parser().parse_args(["report", "run-123", "--json"])
+    assert direct.command == "report" and direct.report_command == "auto"
+    assert direct.reference == "run-123" and direct.json
+    grouped = _parser().parse_args(["report", "export", "grouped", "comparison", "run-123", "run-456"])
+    assert grouped.command == "export" and grouped.export_command == "grouped"
+    assert grouped.group_targets == ["comparison", "run-123", "run-456"]
+
+
+def test_report_shortcut_uses_isolated_export_in_reporting_image(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    docker = binaries / "docker"
+    log = tmp_path / "docker-arguments.txt"
+    docker.write_text(
+        '#!/bin/sh\nif [ "${1:-}" = image ]; then exit 0; fi\n'
+        'printf "%s\\n" "$@" > "$OVLAB_FAKE_DOCKER_LOG"\n'
+        "printf '%s\\n' '{\"status\":\"success\",\"result\":{\"output\":\"/exports/run-123\",\"integrity\":\"verified\"}}'\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    data = tmp_path / "data"
+    run = data / "runs/evaluate/run-123"
+    run.mkdir(parents=True)
+    (run / "manifest.completed.json").write_text("{}")
+    env = {"PATH": f"{binaries}:{os.environ['PATH']}", "OVLAB_DATA_ROOT": str(data),
+           "OVLAB_FAKE_DOCKER_LOG": str(log)}
+    result = _run("report", "run-123", "--json", environment=env)
+    assert result.returncode == 0, result.stderr
+    exported = json.loads(result.stdout)["result"]["exports"][0]
+    assert exported["type"] == "isolated" and exported["runs"] == ["run-123"]
+    assert exported["output"] == "/exports/run-123"
+    assert log.read_text().splitlines()[-7:] == ["export", "isolated", "--category", "evaluate", "--run", "run-123", "--json"]
+
+
+def test_report_shortcut_dispatches_to_automatic_export(monkeypatch):
+    import ovlab_benchctl.report_auto as report_auto
+    expected = {"source_type": "run", "source": "run-123", "exports": []}
+    monkeypatch.setattr(report_auto, "generate_report", lambda reference, **kwargs: expected)
+    result, json_mode, _ = _dispatch(_parser().parse_args(["report", "run-123", "--json"]))
+    assert result == expected and json_mode

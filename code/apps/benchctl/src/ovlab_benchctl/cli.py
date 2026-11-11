@@ -85,11 +85,18 @@ class _RootParser(argparse.ArgumentParser):
         # The original low-level `run TARGET` is still accepted for existing scripts.
         if arguments and arguments[0] == "run" and (len(arguments) == 1 or arguments[1] not in {"eval", "train", "experiment", "--help", "-h"}):
             arguments[0] = "_native-run"
+        if (len(arguments) > 1 and arguments[0] == "report"
+                and not arguments[1].startswith("-")
+                and arguments[1] not in {"auto", "generate", "publish", "verify", "profiles", "export"}):
+            arguments.insert(1, "auto")
         parsed = super().parse_args(arguments, namespace)
         if parsed.command == "_native-run":
             parsed.command = "run"
         elif parsed.command == "run" and getattr(parsed, "run_category", None):
             parsed.command = parsed.run_category
+        elif parsed.command == "report" and getattr(parsed, "report_command", None) == "export":
+            parsed.command = "export"
+            parsed.report_command = None
         return parsed
 
 
@@ -221,8 +228,12 @@ def _parser() -> argparse.ArgumentParser:
     recompute.add_argument("run_path", metavar="RUN_PATH_OR_REFERENCE")
     _output_options(recompute)
 
-    report = commands.add_parser("report", help="generate and verify offline reports from immutable runs")
+    report = commands.add_parser("report", help="create and verify reports and exports",
+                                 epilog="Export a run or experiment automatically: ovlab report RUN_OR_EXPERIMENT_ID")
     report_commands = report.add_subparsers(dest="report_command", required=True)
+    auto = report_commands.add_parser("auto", help="export a run or all runs in an experiment")
+    auto.add_argument("reference", help="run ID, run hash, or completed experiment ID")
+    _output_options(auto)
     generate = report_commands.add_parser(
         "generate", help="build a reproducible report (example: ovlab report generate --run RUN_ID --profile libero-task-default)",
     )
@@ -283,6 +294,10 @@ def _parser() -> argparse.ArgumentParser:
     export_selector.add_argument("--name", dest="export_name", help="alias for NAME")
     export_selector.add_argument("--export", dest="legacy_export_id", help="legacy grouped export alias")
     _output_options(export_verify)
+    report_commands._name_parser_map["export"] = export
+    report_commands._choices_actions.append(
+        report_commands._ChoicesPseudoAction("export", (), "create and verify isolated or grouped exports")
+    )
 
     data = commands.add_parser(
         "data", help="list, archive, and safely delete runs, reports, and exports"
@@ -440,9 +455,10 @@ def _parser() -> argparse.ArgumentParser:
             grouped_commands._ChoicesPseudoAction(name, (), help_text)
         )
         set_grouped_prog(subparser, f"ovlab run {name}")
+    set_grouped_prog(export, "ovlab report export")
     # Keep the old entry points usable, but show the grouped interface in help.
     commands._choices_actions = [action for action in commands._choices_actions
-                                 if action.dest not in {"eval", "train", "experiment", "_native-run"}]
+                                 if action.dest not in {"eval", "train", "experiment", "export", "_native-run"}]
     return parser
 
 
@@ -852,6 +868,20 @@ def _compact(command: str, result) -> str:
             if key in result:
                 lines.append(f"{key:<11} {result[key]}")
         return "\n".join(lines)
+    if command == "report auto" and isinstance(result, dict):
+        lines = [f"source  {result.get('source_type', '-')}  {result.get('source', '-')}"]
+        for item in result.get("exports", []):
+            lines.append("")
+            lines.append(f"{item.get('category', '-')}  {item.get('type', '-')} export")
+            if item.get("node") is not None:
+                lines.append(f"  node       {item['node'] or '<root>'}")
+            lines.append(f"  runs       {', '.join(item.get('runs', []))}")
+            lines.append(f"  output     {item.get('output', '-')}")
+            if item.get("integrity") is not None:
+                lines.append(f"  integrity  {item['integrity']}")
+            if item.get("reused") is not None:
+                lines.append(f"  reused     {_scalar(item['reused'])}")
+        return "\n".join(lines)
     if command == "doctor":
         counts = result["counts"]
         lines = [
@@ -1153,6 +1183,9 @@ def _dispatch(args):
     if args.command == "metrics":
         return _application().recompute_metrics(args.run_path), args.json, None
     if args.command == "report":
+        if args.report_command == "auto":
+            from .report_auto import generate_report
+            return generate_report(args.reference, repository_root=_repository_root()), args.json, None
         app = _application()
         if args.report_command == "profiles":
             return app.report_profiles(), args.json, None

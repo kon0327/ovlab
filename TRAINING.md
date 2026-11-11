@@ -45,13 +45,27 @@ ovlab-data/
 │   ├── staging-checkpoints/
 │   ├── result.json
 │   └── manifest.json
-└── checkpoints/<immutable-checkpoint-id>/
+└── checkpoints/local/<immutable-checkpoint-id>/
     ├── weights-or-adapter/
     ├── processor/
     ├── auxiliary/
     ├── checkpoint.json
     └── manifest.json
 ```
+
+Checkpoint storage separates `checkpoints/huggingface/` (managed downloads),
+`checkpoints/local/` (OVLAB training bundles), and `checkpoints/others/`
+(manually obtained or externally supplied artifacts). Existing finalized bundles
+at the old `checkpoints/checkpoint-...` location remain readable by ID.
+To inspect the migration plan and verify every existing legacy bundle, run
+`python deploy/scripts/migrate-checkpoint-layout.py --model-data-root /path/to/ovlab-data`.
+Run the same command with `--apply` when no checkpoint finalizers are active
+to move the verified bundles. Sealed directories owned by a container account
+may require administrator privileges. The migration leaves immutable training
+run evidence untouched, including its historical checkpoint path. Rebuild the
+dataset image with `bash deploy/scripts/build-images.sh dataset` before the next
+isolated training run so its finalizer writes to the new location. Externally
+supplied checkpoints can be referenced from `others/` via a local profile.
 
 Ready datasets and finalized checkpoints are read-only and content-addressed.
 Evaluation evidence is stored alongside it under `runs/evaluate/<run-id>/`.

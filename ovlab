@@ -362,6 +362,26 @@ if [[ ( "${1:-}" == "train" && "${2:-}" == "report" && "${3:-}" != "--help" && "
     fi
 fi
 
+# Render help from the checkout, including the unified report interface.
+if [[ "${1:-}" == "report" ]]; then
+    for argument in "$@"; do
+        if [[ "$argument" == "--help" || "$argument" == "-h" ]]; then
+            exec "$python_executable" -m ovlab_benchctl.cli "$@"
+        fi
+    done
+fi
+
+# Present report and export through one command while keeping older container
+# images compatible with their existing `report publish` and `export` entry points.
+if [[ "${1:-}" == "report" && "${2:-}" != "" ]]; then
+    if [[ "${2:-}" == "export" ]]; then
+        set -- export "${@:3}"
+    elif [[ "${2:-}" == "auto" || ( "${2:-}" != -* && "${2:-}" != "generate" && "${2:-}" != "publish" && "${2:-}" != "verify" && "${2:-}" != "profiles" ) ]]; then
+        # Selection runs on the host; each export still runs in the isolated image.
+        exec "$python_executable" -m ovlab_benchctl.cli "$@"
+    fi
+fi
+
 # Reporting and export use their purpose-built image by default. Host execution
 # remains an explicit diagnostic escape hatch, never an implicit Conda dependency.
 if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then

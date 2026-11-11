@@ -431,7 +431,20 @@ def _validate_lora_staging(weights, training):
 class CheckpointBundleStore:
     def __init__(self, model_data_root: str | Path):
         self.model_data_root = Path(model_data_root).expanduser().resolve()
-        self.root = self.model_data_root / "checkpoints"
+        self.legacy_root = self.model_data_root / "checkpoints"
+        self.root = self.legacy_root / "local"
+
+    def _existing_path(self, checkpoint_id: str) -> Path | None:
+        if not re.fullmatch(r"checkpoint-[0-9a-f]{32}", checkpoint_id):
+            raise CheckpointBundleError("checkpoint ID must be an immutable checkpoint-<32 hex> ID")
+        candidates = [root / checkpoint_id for root in (self.root, self.legacy_root)]
+        for path in candidates:
+            if path.is_symlink():
+                raise CheckpointBundleError(f"checkpoint path must not be a symlink: {path}")
+        found = [path for path in candidates if path.exists()]
+        if len(found) > 1:
+            raise CheckpointBundleError(f"checkpoint exists in both local and legacy locations: {checkpoint_id}")
+        return found[0] if found else None
 
     @contextmanager
     def _publication_lock(self, checkpoint_id: str):
@@ -502,10 +515,11 @@ class CheckpointBundleStore:
         }
         checkpoint_id = identity("checkpoint", semantics, 32)
         final = self.root / checkpoint_id
-        if final.exists():
+        existing_path = self._existing_path(checkpoint_id)
+        if existing_path is not None:
             existing = self.inspect(checkpoint_id)
             self.verify(checkpoint_id)
-            result = self._complete_run(context, staged_result, checkpoint_id, final)
+            result = self._complete_run(context, staged_result, checkpoint_id, existing_path)
             return {**result, "checkpoint": existing["checkpoint"], "reused": True}
         temporary = self.root / f".{checkpoint_id}.{uuid.uuid4().hex}.staging"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -556,7 +570,8 @@ class CheckpointBundleStore:
                 path.chmod(0o444 if path.is_file() else 0o555)
             temporary.chmod(0o555)
             with self._publication_lock(checkpoint_id):
-                if final.exists():
+                existing_path = self._existing_path(checkpoint_id)
+                if existing_path is not None:
                     existing = self.inspect(checkpoint_id)
                     self.verify(checkpoint_id)
                     temporary.chmod(0o755)
@@ -564,7 +579,7 @@ class CheckpointBundleStore:
                         if path.is_dir():
                             path.chmod(0o755)
                     shutil.rmtree(temporary)
-                    result = self._complete_run(context, staged_result, checkpoint_id, final)
+                    result = self._complete_run(context, staged_result, checkpoint_id, existing_path)
                     return {**result, "checkpoint": existing["checkpoint"], "reused": True}
                 os.replace(temporary, final)
                 final.chmod(0o555)
@@ -618,9 +633,12 @@ class CheckpointBundleStore:
         return result
 
     def _manifest(self, checkpoint_id: str) -> tuple[Path, dict[str, object]]:
-        root = self.root / checkpoint_id
+        root = self._existing_path(checkpoint_id)
+        if root is None:
+            raise CheckpointBundleError(f"finalized checkpoint does not exist: {checkpoint_id}")
+        parent = root.parent
         manifest_path = root / "manifest.json"
-        if not root.is_dir() or not root.resolve().is_relative_to(self.root.resolve()) or not manifest_path.is_file():
+        if not root.is_dir() or not root.resolve().is_relative_to(parent.resolve()) or not manifest_path.is_file():
             raise CheckpointBundleError(f"finalized checkpoint does not exist: {checkpoint_id}")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("schema_version") != CHECKPOINT_MANIFEST_SCHEMA or manifest.get("state") != "finalized":
@@ -628,16 +646,24 @@ class CheckpointBundleStore:
         return root, manifest
 
     def list(self) -> list[dict[str, object]]:
-        if not self.root.is_dir():
-            return []
         results = []
-        for path in sorted(self.root.glob("checkpoint-*/manifest.json")):
-            try:
-                document = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+        seen = set()
+        for root in (self.root, self.legacy_root):
+            if not root.is_dir():
                 continue
-            if document.get("state") == "finalized":
-                results.append({**document, "host_path": str(path.parent)})
+            for path in sorted(root.glob("checkpoint-*/manifest.json")):
+                if path.parent.is_symlink():
+                    continue
+                try:
+                    document = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if document.get("state") == "finalized":
+                    checkpoint_id = path.parent.name
+                    if checkpoint_id in seen:
+                        raise CheckpointBundleError(f"checkpoint exists in both local and legacy locations: {checkpoint_id}")
+                    seen.add(checkpoint_id)
+                    results.append({**document, "host_path": str(path.parent)})
         return results
 
     def inspect(self, checkpoint_id: str) -> dict[str, object]:
@@ -654,9 +680,18 @@ class CheckpointBundleStore:
         checkpoint = json.loads((root / "checkpoint.json").read_text(encoding="utf-8"))
         if checkpoint.get("kind") == "peft_adapter":
             weight_files = sorted((root / "weights-or-adapter").glob("*.safetensors"))
-            if len(weight_files) != 1:
+            if checkpoint.get("expected_loader") == "ovlab-openvla-quic":
+                expected = {"adapter.safetensors"}
+                adapter = checkpoint.get("adapter") or {}
+                metadata = adapter.get("metadata") or {} if isinstance(adapter, dict) else {}
+                if isinstance(metadata, dict) and metadata.get("action_head") is not None:
+                    expected.add("action_head.safetensors")
+                if {path.name for path in weight_files} != expected:
+                    raise CheckpointBundleError("QuIC checkpoint has an invalid weight inventory")
+            elif len(weight_files) != 1:
                 raise CheckpointBundleError("adapter checkpoint has an invalid weight inventory")
-            inspect_safetensors(weight_files[0])
+            for weight_file in weight_files:
+                inspect_safetensors(weight_file)
         return {
             "schema_version": "ovlab.checkpoint-verification/v1",
             "checkpoint_id": checkpoint_id,

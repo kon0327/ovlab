@@ -107,3 +107,44 @@ def test_host_cli_publishes_only_interactive_and_isolated_for_scoped_eval(tmp_pa
     assert (report / "index.html").is_file()
     assert isolated == exports / "study-1/evaluate/model-a/task-0/isolated" / run_id
     assert not list(exports.rglob("derived"))
+
+
+def test_report_automatically_exports_completed_experiment_as_group(tmp_path):
+    repository = Path(__file__).resolve().parents[3]
+    runs = tmp_path / "runs"
+    first = _run(runs / "study-auto/evaluate/family/model-a", "first", (0, 1))
+    second = _run(runs / "study-auto/evaluate/family/model-b", "second", (1,))
+    third = _run(runs / "study-auto/evaluate/other", "third", (1,))
+    manifest = runs / "study-auto/.experiment/result.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({
+        "experiment_id": "study-auto", "status": "completed", "nodes": {
+            "family/model-a": {"evaluate": {"run_id": first}},
+            "family/model-b": {"evaluate": {"run_id": second}},
+            "other": {"evaluate": {"run_id": third}},
+        },
+    }))
+    (manifest.parent / "plan.json").write_text(json.dumps({
+        "experiment_id": "study-auto", "id": "study", "nodes": [
+            {"id": "study", "path": "", "children": ["family", "other"]},
+            {"id": "family", "path": "family", "children": ["model-a", "model-b"]},
+            {"id": "model-a", "path": "family/model-a", "children": []},
+            {"id": "model-b", "path": "family/model-b", "children": []},
+            {"id": "other", "path": "other", "children": []},
+        ],
+    }))
+    environment = {
+        **os.environ, "OVLAB_PYTHON": sys.executable, "OVLAB_REPORTING_RUNTIME": "host",
+        "OVLAB_DATA_ROOT": str(tmp_path), "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(tmp_path / "exports"), "MPLCONFIGDIR": str(tmp_path / "mpl"),
+    }
+    result = subprocess.run([str(repository / "ovlab"), "report", "study-auto", "--json"],
+                            cwd=repository, env=environment, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+    exports = json.loads(result.stdout)["result"]["exports"]
+    groups = {item["node"]: item for item in exports if item["type"] == "grouped"}
+    assert set(groups["family"]["runs"]) == {first, second}
+    assert set(groups[""]["runs"]) == {first, second, third}
+    assert all(item["integrity"] == "verified" for item in exports)
+    assert (Path(groups["family"]["output"]) / "tables/run-summary.csv").is_file()
+    assert (Path(groups[""]["output"]) / "tables/run-summary.csv").is_file()

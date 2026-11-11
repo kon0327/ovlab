@@ -198,6 +198,15 @@ For diagnostics, a LIBERO execution profile can be selected with:
 export OVLAB_EXECUTION_PROFILE=configs/profiles/libero-bench-egl.yaml
 ```
 
+Use `ovlab report RUN_ID` to export one canonical run, or `ovlab report
+EXPERIMENT_ID` to export all runs in a completed experiment. Each run gets an
+isolated export at its node. Each parent with at least two child branches holding
+runs of the same category also gets a grouped export of those descendants.
+Training and evaluation are handled separately. The output lists each node,
+export, source runs and destination. Specialized
+exports are available under `ovlab report export`; the former top-level
+`ovlab export` commands remain compatibility aliases.
+
 ## Command overview
 
 ```text
@@ -229,15 +238,16 @@ ovlab
 ├── run inspect RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── run verify RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
 ├── metrics recompute RUN_PATH|RUN_ID|RUN_HASH [--detail | --json]
+├── report RUN_ID|EXPERIMENT_ID [--detail | --json]
 ├── report profiles [--detail | --json]
 ├── report generate --run RUN_ID|RUN_HASH [--task TASK_ID] [--profile PROFILE] [--detail | --json]
 ├── report publish --run RUN_ID|RUN_HASH [--profile PROFILE] [--report-enabled true|false] [--detail | --json]
 ├── report verify --run RUN_ID|RUN_HASH [--profile PROFILE] [--build BUILD_ID] [--detail | --json]
-├── export isolated --run RUN_ID|RUN_HASH [--episode EPISODE_ID] [--template TEMPLATE] [--detail | --json]
-├── export grouped --name GROUP (--all-runs | --same-model-as RUN_REFERENCE | --runs RUN_REFERENCE...)
+├── report export isolated --run RUN_ID|RUN_HASH [--episode EPISODE_ID] [--template TEMPLATE] [--detail | --json]
+├── report export grouped --name GROUP (--all-runs | --same-model-as RUN_REFERENCE | --runs RUN_REFERENCE...)
 │   [--suite SUITE] [--template TEMPLATE] [--detail | --json]
-├── export verify --kind isolated|grouped --name NAME [--detail | --json]
-├── export generate --spec SPEC.yaml [--detail | --json]  # legacy grouped bridge
+├── report export verify --kind isolated|grouped --name NAME [--detail | --json]
+├── report export generate --spec SPEC.yaml [--detail | --json]  # legacy grouped bridge
 ├── data
 │   ├── list [--kind runs|reports|all] [--archived] [--detail | --json]
 │   ├── archive (--run RUN_REFERENCE | --report REPORT_REFERENCE | --all) [--dry-run] [--yes] [--detail | --json]
@@ -453,12 +463,12 @@ complete recorded and recomputed `MetricResult` objects.
 ./ovlab report verify --run RUN_ID --profile libero-task-default --build DERIVED_BUILD_ID
 ./ovlab run train report --run TRAINING_RUN_ID
 ./ovlab run train report --run TRAINING_RUN_ID --verify --build DERIVED_BUILD_ID
-./ovlab export isolated --run RUN_ID
-./ovlab export isolated --run RUN_ID --episode EPISODE_ID
-./ovlab export grouped --name paper-ablation --runs RUN_ID_A RUN_ID_B
-./ovlab export grouped --name model-family --same-model-as REFERENCE_RUN_ID
-./ovlab export grouped --name complete-study --all-runs --suite libero_10
-./ovlab export verify --kind grouped --name paper-ablation
+./ovlab report export isolated --run RUN_ID
+./ovlab report export isolated --run RUN_ID --episode EPISODE_ID
+./ovlab report export grouped --name paper-ablation --runs RUN_ID_A RUN_ID_B
+./ovlab report export grouped --name model-family --same-model-as REFERENCE_RUN_ID
+./ovlab report export grouped --name complete-study --all-runs --suite libero_10
+./ovlab report export verify --kind grouped --name paper-ablation
 ```
 
 Reports read canonical evidence from `OVLAB_RUNS_ROOT` and publish staged,

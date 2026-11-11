@@ -78,6 +78,7 @@ def test_adapter_bundle_finalizes_unmerged_and_verifies(tmp_path):
     }), encoding="utf-8")
     result = CheckpointBundleStore(tmp_path).finalize(context)
     checkpoint_id = result["checkpoint_id"]
+    assert Path(result["checkpoint_path"]) == tmp_path / "checkpoints" / "local" / checkpoint_id
     assert result["checkpoint"]["merge_status"] == "unmerged"
     verified = CheckpointBundleStore(tmp_path).verify(checkpoint_id)
     assert verified["status"] == "verified"
@@ -105,7 +106,7 @@ def test_finalizer_copies_across_bind_mounts_and_propagates_other_link_errors(tm
         with pytest.raises(OSError) as failure:
             CheckpointBundleStore(tmp_path).finalize(context)
         assert failure.value.errno == link_error
-        assert not list((tmp_path / "checkpoints").glob("checkpoint-*"))
+        assert not list((tmp_path / "checkpoints/local").glob("checkpoint-*"))
         return
     result = CheckpointBundleStore(tmp_path).finalize(context)
     assert CheckpointBundleStore(tmp_path).verify(result["checkpoint_id"])["status"] == "verified"
@@ -169,7 +170,7 @@ def test_parallel_finalizers_publish_identical_checkpoint_once(tmp_path, monkeyp
     assert CheckpointBundleStore(tmp_path).verify(results[0]["checkpoint_id"])["status"] == "verified"
     assert all(TrainingRunStore(tmp_path, training_runs_root=context.root.parent).verify(context.run_id)["status"] == "verified"
                for context in (first, second))
-    assert not list((tmp_path / "checkpoints").glob("*.staging"))
+    assert not list((tmp_path / "checkpoints/local").glob("*.staging"))
 
 
 def test_incompatible_adapter_configuration_is_rejected(tmp_path):
@@ -239,3 +240,79 @@ def test_deployment_handoff_rejects_alias_incomplete_and_incompatible_artifacts(
     result = CheckpointBundleStore(tmp_path).finalize(_context(tmp_path))
     with pytest.raises(CheckpointResolutionError, match="registry resource"):
         resolve_finalized_training_checkpoint(ROOT, tmp_path, result["checkpoint_id"])
+
+
+def test_legacy_training_checkpoint_remains_listable_and_verifiable(tmp_path):
+    context = _context(tmp_path)
+    store = CheckpointBundleStore(tmp_path)
+    result = store.finalize(context)
+    checkpoint_id = result["checkpoint_id"]
+    current = Path(result["checkpoint_path"])
+    legacy = tmp_path / "checkpoints" / checkpoint_id
+    current.chmod(0o755)
+    current.rename(legacy)
+    legacy.chmod(0o555)
+
+    assert store.inspect(checkpoint_id)["host_path"] == str(legacy)
+    assert store.verify(checkpoint_id)["status"] == "verified"
+    assert [row["checkpoint_id"] for row in store.list()] == [checkpoint_id]
+
+
+def test_checkpoint_cannot_exist_in_both_local_and_legacy_locations(tmp_path):
+    store = CheckpointBundleStore(tmp_path)
+    result = store.finalize(_context(tmp_path))
+    checkpoint_id = result["checkpoint_id"]
+    shutil.copytree(Path(result["checkpoint_path"]), tmp_path / "checkpoints" / checkpoint_id)
+    with pytest.raises(CheckpointBundleError, match="both local and legacy"):
+        store.inspect(checkpoint_id)
+    with pytest.raises(CheckpointBundleError, match="both local and legacy"):
+        store.list()
+
+
+def test_quic_action_head_bundle_verifies_both_tensor_files(tmp_path):
+    from ovlab_benchctl.training_runs import CHECKPOINT_MANIFEST_SCHEMA
+    from ovlab_benchctl.training_identity import inventory
+
+    checkpoint_id = "checkpoint-" + "a" * 32
+    root = tmp_path / "checkpoints/local" / checkpoint_id
+    weights = root / "weights-or-adapter"
+    weights.mkdir(parents=True)
+    _safetensors(weights / "adapter.safetensors")
+    _safetensors(weights / "action_head.safetensors")
+    (root / "checkpoint.json").write_text(json.dumps({
+        "kind": "peft_adapter", "expected_loader": "ovlab-openvla-quic",
+        "adapter": {"metadata": {"action_head": {"config": {"horizon": 8}}}},
+    }))
+    files, _, size = inventory(root)
+    (root / "manifest.json").write_text(json.dumps({
+        "schema_version": CHECKPOINT_MANIFEST_SCHEMA, "state": "finalized",
+        "checkpoint_id": checkpoint_id, "files": files, "total_size": size,
+    }))
+    store = CheckpointBundleStore(tmp_path)
+    assert store.verify(checkpoint_id)["status"] == "verified"
+    (weights / "action_head.safetensors").write_bytes(b"tampered")
+    with pytest.raises(CheckpointBundleError, match="integrity failure"):
+        store.verify(checkpoint_id)
+
+
+def test_checkpoint_migration_dry_run_and_apply(tmp_path):
+    import subprocess
+    import sys
+
+    store = CheckpointBundleStore(tmp_path)
+    finalized = store.finalize(_context(tmp_path))
+    checkpoint_id = finalized["checkpoint_id"]
+    local = Path(finalized["checkpoint_path"])
+    legacy = tmp_path / "checkpoints" / checkpoint_id
+    local.chmod(0o755)
+    local.rename(legacy)
+    script = ROOT / "deploy/scripts/migrate-checkpoint-layout.py"
+    base = [sys.executable, str(script), "--model-data-root", str(tmp_path)]
+    planned = subprocess.run(base, text=True, capture_output=True, check=False)
+    assert planned.returncode == 0 and "Dry run" in planned.stdout
+    assert legacy.is_dir() and not local.exists()
+    moved = subprocess.run([*base, "--apply"], text=True, capture_output=True, check=False)
+    assert moved.returncode == 0, moved.stderr
+    assert local.is_dir() and not legacy.exists()
+    assert (tmp_path / "checkpoints/others").is_dir()
+    assert store.verify(checkpoint_id)["status"] == "verified"

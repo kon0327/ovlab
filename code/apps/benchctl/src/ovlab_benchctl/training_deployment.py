@@ -166,6 +166,11 @@ class TrainingDeployment:
         ):
             directory.mkdir(parents=True, exist_ok=True)
             directory.chmod(0o2770)
+        checkpoint_local = self.model_data_root / "checkpoints" / "local"
+        checkpoint_local.mkdir(parents=True, exist_ok=True)
+        if checkpoint_local.stat().st_uid == os.getuid():
+            checkpoint_local.chmod(0o2770)
+        (self.model_data_root / "checkpoints" / "others").mkdir(parents=True, exist_ok=True)
         self.runs_root.mkdir(parents=True, exist_ok=True)
         if scope is not None:
             self._prepare_scoped_hierarchy(self.runs_root, scope, "train")

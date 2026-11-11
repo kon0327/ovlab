@@ -66,7 +66,7 @@ Training, evaluation and workflow scenarios live in the separate
   selects the filesystem store using the logical `runs_root` resource.
 - **`exports/`** holds legacy `ovlab.export-spec/v1` grouped export
   specifications. New exports use built-in versioned templates; use
-  `ovlab export grouped` for new grouped comparisons.
+  `ovlab report export grouped` for new grouped comparisons.
 
 ## Resources and execution environment
 

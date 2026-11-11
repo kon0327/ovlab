@@ -129,3 +129,34 @@ def test_host_cli_train_report_publishes_and_verifies_inside_experiment(tmp_path
                               cwd=repository, env=environment, text=True, capture_output=True, check=False)
     assert verified.returncode == 0, verified.stderr
     assert json.loads(verified.stdout)["result"]["integrity"] == "verified"
+
+
+def test_report_automatically_groups_experiment_training_runs(tmp_path):
+    repository = Path(__file__).resolve().parents[4]
+    runs = tmp_path / "runs"
+    _run(runs / "study-auto/train/model-a", "train-a")
+    _run(runs / "study-auto/train/model-b", "train-b")
+    manifest = runs / "study-auto/.experiment/result.json"
+    manifest.parent.mkdir(parents=True)
+    _json(manifest, {"experiment_id": "study-auto", "status": "completed", "nodes": {
+        "model-a": {"train": {"run_id": "train-a"}},
+        "model-b": {"train": {"run_id": "train-b"}},
+    }})
+    (manifest.parent / "plan.json").write_text(json.dumps({
+        "experiment_id": "study-auto", "id": "study", "nodes": [
+            {"id": "study", "path": "", "children": ["model-a", "model-b"]},
+            {"id": "model-a", "path": "model-a", "children": []},
+            {"id": "model-b", "path": "model-b", "children": []},
+        ],
+    }))
+    env = {**os.environ, "OVLAB_PYTHON": sys.executable, "OVLAB_REPORTING_RUNTIME": "host",
+           "OVLAB_DATA_ROOT": str(tmp_path), "OVLAB_RUNS_ROOT": str(runs),
+           "OVLAB_EXPORTS_ROOT": str(tmp_path / "exports")}
+    result = subprocess.run([str(repository / "ovlab"), "report", "study-auto", "--json"],
+                            cwd=repository, env=env, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+    export = next(item for item in json.loads(result.stdout)["result"]["exports"] if item["type"] == "grouped")
+    assert export["category"] == "train" and export["type"] == "grouped"
+    assert set(export["runs"]) == {"train-a", "train-b"}
+    assert export["integrity"] == "verified"
+    assert (Path(export["output"]) / "comparison.json").is_file()
