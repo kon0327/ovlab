@@ -13,6 +13,10 @@ All three domains accept a YAML name or explicit path as `run TARGET` and suppor
 | `eval` | `experiments/evaluation/` | Evaluation run path, ID, or hash |
 | `deploy` | `configs/deploy/` | Deployment ID or deployment YAML name/path |
 
+Policy types, source commits and image recipes are supplied by the
+[plugin registry](docs/POLICY_PLUGINS.md). A new registered policy uses the same
+commands below; its plugin owns model validation and adapter construction.
+
 ## Starting and managing a service
 
 ```bash

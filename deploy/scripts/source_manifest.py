@@ -8,11 +8,15 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
+
+# The build manifest also runs directly without the host Python environment.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "code/apps/benchctl/src"))
 
 
 EXCLUDED_PREFIXES = (
     ".git/", "configs/", "experiments/", "runs/", "checkpoints/", "datasets/",
-    "docs/", "notebooks/", "code/tests/",
+    "docs/", "notebooks/", "code/tests/", "references/", "examples/",
 )
 
 
@@ -37,7 +41,7 @@ def _included(relative: str) -> bool:
     # must not invalidate images that contain exactly the same runtime source.
     if "/" not in relative and relative.endswith(".md"):
         return False
-    return not relative.startswith(EXCLUDED_PREFIXES) and relative != ".git"
+    return relative == "configs/plugins/registry.json" or (not relative.startswith(EXCLUDED_PREFIXES) and relative != ".git")
 
 
 def _included_status(line: str) -> bool:
@@ -66,7 +70,7 @@ def _submodule_changes(root: Path) -> list[dict[str, object]]:
     return rows
 
 
-def build_manifest(root: Path) -> dict[str, object]:
+def build_manifest(root: Path, *, registry=None, source_rows=None) -> dict[str, object]:
     root = root.resolve()
     head = _git(root, "rev-parse", "HEAD").strip()
     status = tuple(
@@ -100,10 +104,18 @@ def build_manifest(root: Path) -> dict[str, object]:
             files.append({"path": relative, "size": path.stat().st_size, "sha256": _sha(path)})
         elif path.is_symlink():
             files.append({"path": relative, "symlink": path.readlink().as_posix()})
+    from ovlab_benchctl.policy_plugins import registry_document, registry_identity
+    from ovlab_benchctl.plugin_sources import inspect_sources
+    registry = registry if registry is not None else registry_document(root)
+    source_rows = source_rows if source_rows is not None else inspect_sources(root)
+    registered_sources = [{key: value for key, value in row.items() if key != "path"} for row in source_rows]
     payload = {
         "schema_version": "ovlab-source-manifest/1.0.0",
         "repository_revision": head,
-        "dirty": bool(status) or any(row["dirty"] for row in submodule_rows),
+        "dirty": bool(status) or any(row["dirty"] for row in submodule_rows) or any(row.get("dirty", False) for row in source_rows),
+        "plugin_registry": registry,
+        "plugin_registry_sha256": registry_identity(root),
+        "registered_sources": registered_sources,
         "status": list(status),
         "submodules": sorted(submodule_rows, key=lambda row: row["path"]),
         "files": files,
@@ -113,6 +125,8 @@ def build_manifest(root: Path) -> dict[str, object]:
     content = {
         "schema_version": "ovlab-source-content/1.0.0",
         "files": files,
+        "plugin_registry": registry,
+        "registered_sources": registered_sources,
         "submodules": [
             {"path": row["path"], "revision": row["revision"],
              "dirty_files": row["dirty_files"]}

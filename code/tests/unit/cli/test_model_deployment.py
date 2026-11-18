@@ -13,6 +13,7 @@ from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 from ovlab_benchctl.config_paths import resolve_config_path
 from ovlab_benchctl.errors import ConfigCompatibilityError, ConfigSchemaError
 from ovlab_benchctl.image_metadata import IMAGE_CONTRACT_LABEL
+from ovlab_benchctl.plugin_identity import PLUGIN_BUILD_LABEL, plugin_build_identity
 from ovlab_benchctl.model_deployment import ModelDeployment, resolve_policy_service
 from ovlab_benchctl.strict_yaml import load
 
@@ -42,7 +43,9 @@ class Docker:
         elif command[:3] == ["docker", "image", "inspect"]:
             value = json.dumps([{"Id": "image-1", "Config": {"Labels": {
                 IMAGE_CONTRACT_LABEL: "resolved-checkpoint-quantization-config-bundle-v2",
-                "io.github.ovlab.service.transport": "tcp-persistent-v1"}}}])
+                "io.github.ovlab.service.transport": "tcp-persistent-v1",
+                "io.github.ovlab.role": self.plan.role,
+                PLUGIN_BUILD_LABEL: plugin_build_identity(ROOT, self.plan.role)}}}])
         elif command[:2] == ["docker", "run"]:
             self.created = True
             value = "container-1"
@@ -92,6 +95,8 @@ def test_model_deployment_dry_run_has_no_docker_or_disk_side_effects(deployment)
     assert result["quantization"] == "8bit"
     assert result["side_effects_performed"] is False
     assert not docker.commands and not owner.state_root.exists()
+    offline = owner.run(owner.plan("openvla-libero10", offline=True), dry_run=True)
+    assert offline["build_command"][-2:] == ["policy-openvla", "--offline"]
 
 
 def test_deployment_rejects_existing_container_and_cleans_failed_start(deployment):

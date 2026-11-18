@@ -6,6 +6,15 @@ isolated policy services, canonical evidence, offline reporting, dataset
 management and training. Configuration, contract and wire-protocol versions are
 independent of the product version and are identified explicitly below.
 
+Policy implementation discovery, model-specific validation and adapter construction
+are delegated to versioned plugins. The registry binds source projects/commits and
+build recipes; `external/` is an ignored materialization workspace. The developer
+contract, lifecycle, example and migration procedure are in
+[POLICY_PLUGINS.md](docs/POLICY_PLUGINS.md). Generic evaluation services are generated
+from one shared Compose template; policy families do not add branches to the core
+resolver or new Compose service stanzas. Specialized training components retain
+their own training algorithms and configuration interfaces.
+
 ## 1. Design goals
 
 OVLAB is a reproducible experimental framework for evaluating OpenVLA-derived
@@ -641,7 +650,7 @@ implemented PEFT method; QuIC and QLoRA training are outside the current path.
 
 | Concern | Architectural control |
 | --- | --- |
-| Dependency drift | Pinned Git submodules, base-image digests, Python lock files and source manifests |
+| Dependency drift | Registered Git commits and local content hashes, base-image digests, Python lock files and source manifests |
 | Resource drift | Registry revisions, sizes and SHA-256 verification before use |
 | Configuration drift | Strict schemas, explicit composition, two hashes and a config-bundle digest |
 | Accidental privileged input | Separate observation/signal types plus an exact RPC schema |
@@ -722,4 +731,4 @@ repair source evidence while rendering.
 | Runtime topology | `deploy/compose/compose.yaml` |
 | Portable experiments | `experiments/evaluation/` |
 | Resource identities | `configs/resources/registry.yaml` |
-| External source pins | `.gitmodules` and root Git submodule gitlinks |
+| External source pins | Versioned policy/source/build registry (`ovlab.plugins/v1`) |

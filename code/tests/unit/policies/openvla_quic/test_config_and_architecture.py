@@ -121,6 +121,7 @@ def test_quic_package_contains_only_wrapper_contract_layers():
     assert production_files == {
         "__init__.py", "adapter.py", "config.py", "descriptors.py", "errors.py",
         "provider.py", "registration.py", "service.py", "source.py", "runtime.py",
+        "plugin.py", "plugin_documents.py",
     }
     source = "\n".join(
         path.read_text(encoding="utf-8")

@@ -19,7 +19,7 @@ Research-specific QP/A presets and placement selectors belong to
 policy. Descriptor validation, episode lifecycle and action conversions stay in
 OVLAB. The external package contains no OVLAB provider or WC backend.
 
-`external/compound-peft` remains an immutable historical reference. Its bundled
+`references/compound-peft` remains an immutable historical reference. Its bundled
 package named `peft` is never imported by the current runtime. The legacy
 `quic-peft-bones.yaml` descriptor still represents its original unavailable
 runtime. QuIC-WC remains a distinct, fail-closed proposed extension; it does not
@@ -28,12 +28,11 @@ reuse the dense adapter implementation and has no runnable policy.
 ## Initialize the external sources
 
 ```bash
-git submodule update --init external/openvla-quic external/quic-peft-vla
+./ovlab plugin sync quic-peft
 ```
 
-Image builds use the checked-out source trees as they are. The submodule
-revision is recorded by Git for provenance; build and deployment do not require
-it to match a separate migration snapshot.
+Image builds verify the source commits in the plugin registry and record their
+content in the source manifest. Register local projects explicitly for development.
 
 ## Training and serving
 

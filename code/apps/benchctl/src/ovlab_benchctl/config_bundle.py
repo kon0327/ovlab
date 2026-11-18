@@ -12,6 +12,8 @@ import shutil
 import tempfile
 from typing import Iterator
 
+from .policy_plugins import with_registry
+
 from .schema import validate
 from .strict_yaml import dumps, load
 
@@ -88,7 +90,8 @@ class ConfigBundle:
 class ConfigBundleBuilder:
     """Collect and materialize only the transitive YAML closure for one run."""
 
-    def __init__(self, repository_root: str | Path) -> None:
+    def __init__(self, repository_root: str | Path, *, environment=None) -> None:
+        self.environment = environment
         self.repository_root = Path(repository_root).resolve()
         self.config_root = (self.repository_root / "configs").resolve()
         if not self.config_root.is_dir():
@@ -145,13 +148,15 @@ class ConfigBundleBuilder:
             if document.get("type") != parent_document.get("type"):
                 raise ValueError(f"{relative}.type must match its parent")
             resolved = _merge(parent_document, document)
-        validate(resolved, relative, expected_kind)
+        validate(resolved, relative, expected_kind, repository_root=self.repository_root)
         return resolved
 
+    @with_registry
     def load_component(self, reference: str, expected_kind: str) -> dict[str, object]:
         """Resolve inheritance for host orchestration using only the stdlib."""
         return self._extends_closure(reference, expected_kind, set())
 
+    @with_registry
     def build(
         self, experiment: str, execution_profile: str | None, *, quantization: str | None = None,
         kind: str = "experiment",
@@ -183,7 +188,7 @@ class ConfigBundleBuilder:
             if name == "policy":
                 if quantization is not None:
                     component["settings"]["runtime"]["quantization"] = quantization
-                    validate(component, reference, "policy")
+                    validate(component, reference, "policy", repository_root=self.repository_root)
                     policy_leaf = load(self.config_root / reference)
                     policy_leaf.setdefault("settings", {}).setdefault("runtime", {})[
                         "quantization"
@@ -198,6 +203,27 @@ class ConfigBundleBuilder:
         if execution_reference is not None:
             self._extends_closure(execution_reference, "execution_profile", selected)
 
+        from .policy_plugins import registry_document
+        registry_snapshot = registry_document(self.repository_root)
+        from .plugin_sources import inspect_sources
+        policy_ref = experiment_document["components"]["policy"]
+        policy_doc = self.load_component(policy_ref, "policy")
+        plugin = registry_snapshot["plugins"].get(policy_doc["type"], {})
+        identities = inspect_sources(self.repository_root, plugin.get("sources", []))
+        from .plugin_identity import source_identities
+        registry_snapshot["source_identities"] = source_identities(registry_snapshot, identities)
+        gpu = experiment_document.get("runtime", {}).get("gpu", "all" if plugin.get("deployment", {}).get("gpu", True) else None)
+        runtime_profile = "plugins/runtime-profile.yaml"
+        selected.add(runtime_profile)
+        overlays[runtime_profile] = dumps({
+            "schema_version": "0.1.0", "kind": "local_profile", "id": "plugin-container-runtime",
+            "paths": {"checkpoint_root": "/checkpoints/resolved", "dataset_root": "/datasets", "runs_root": "/var/lib/ovlab/runs"},
+            "devices": {"primary_gpu": "cpu" if gpu is None else "cuda:0"},
+        })
+        plugin_reference = "plugins/registry.json"
+        selected.add(plugin_reference)
+        overlays[plugin_reference] = json.dumps(registry_snapshot, sort_keys=True, indent=2) + "\n"
+
         files = tuple(
             {
                 "path": relative,
@@ -209,7 +235,7 @@ class ConfigBundleBuilder:
                     hashlib.sha256(overlays[relative].encode("utf-8")).hexdigest()
                     if relative in overlays else _sha256(self._source(relative))
                 ),
-                **({"source_sha256": _sha256(self._source(relative))} if relative in overlays else {}),
+                **({"source_sha256": _sha256(self._source(relative))} if relative in overlays and self._source(relative).is_file() else {}),
             }
             for relative in sorted(selected)
         )

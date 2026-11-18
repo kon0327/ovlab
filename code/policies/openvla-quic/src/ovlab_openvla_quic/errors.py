@@ -45,7 +45,7 @@ class QuICPEFTIntegrationIncompleteError(QuICImplementationUnavailableError):
             "ovlab_openvla_quic.runtime",
             "legacy_reference_available_openvla_integration_skeleton",
             "I",
-            "external/openvla-quic -> external/compound-peft",
+            "external/openvla-quic -> references/compound-peft",
         )
 
 

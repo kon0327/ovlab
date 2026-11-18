@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 
+from .policy_plugins import with_registry
+
 from .config_bundle import ConfigBundleBuilder
 from .config_paths import resolve_config_path
 from .errors import ConfigCompatibilityError, ConfigReferenceError
@@ -22,13 +24,6 @@ from .strict_yaml import load
 from .training_identity import atomic_json
 
 
-_ROLES = {
-    "openvla_vanilla": "policy-openvla",
-    "openvla_lora_merged": "policy-openvla",
-    "openvla_oft": "policy-openvla-oft",
-    "openvla_quic": "policy-openvla-quic",
-}
-_IMAGES = {role: f"ovlab-{role}:local" for role in set(_ROLES.values())}
 _CONTRACT = "resolved-checkpoint-quantization-config-bundle-v2"
 
 
@@ -48,7 +43,7 @@ class ModelDeploymentPlan:
     container_port: int
     restart: str
     readiness_timeout_s: int
-    gpu: str
+    gpu: str | None
     quantization: str
     quantization_override: str | None
     offline: bool
@@ -72,6 +67,7 @@ class ModelDeployment:
         self.data_root = Path(data).expanduser().resolve()
         self.state_root = self.data_root / "deployments"
 
+    @with_registry
     def plan(self, target, *, quantization=None, port=None, offline=False, local_profile=None):
         path = resolve_config_path(target, self.repository_root, "deploy")
         config_root = self.repository_root / "configs"
@@ -81,10 +77,12 @@ class ModelDeployment:
         reference = path.relative_to(config_root).as_posix()
         doc = builder.load_component(reference, "deployment")
         policy = builder.load_component(doc["components"]["policy"], "policy")
-        role = _ROLES.get(policy["type"])
+        from .policy_plugins import plugin_for_type
+        deployment = plugin_for_type(policy["type"], self.repository_root).descriptor.get("deployment", {})
+        role = deployment.get("role")
         if role is None:
             raise ConfigCompatibilityError("deployment requires a production policy")
-        if policy["settings"]["checkpoint_id"] != policy["settings"]["processor_id"]:
+        if policy["settings"]["checkpoint_id"] != policy["settings"].get("processor_id", policy["settings"]["checkpoint_id"]):
             raise ConfigCompatibilityError("model deployment requires a shared model and processor checkpoint")
         selected = quantization if quantization is not None else doc.get("runtime", {}).get("quantization")
         bundle = builder.build(f"configs/{reference}", None, quantization=selected, kind="deployment")
@@ -102,14 +100,27 @@ class ModelDeployment:
             profile = str(profile.resolve())
         normalized = {**doc, "effective_quantization": effective, "published_port": selected_port}
         return ModelDeploymentPlan(
-            doc["id"], f"configs/{reference}", role, doc.get("image", _IMAGES[role]), doc.get("build", True),
+            doc["id"], f"configs/{reference}", role, doc.get("image", deployment["image"]), doc.get("build", True),
             settings.get("host", "127.0.0.1"), selected_port, settings.get("container_port", 8000),
             settings.get("restart", "unless-stopped"), settings.get("readiness_timeout_s", 900),
-            doc.get("runtime", {}).get("gpu", "all"), effective, selected, offline, profile,
+            doc.get("runtime", {}).get("gpu", "all" if deployment.get("gpu", True) else None), effective, selected, offline, profile,
             str(self.state_root / doc["id"]), _hash(normalized), bundle.sha256,
         )
 
-    def _command(self, plan, checkpoint=None):
+    @with_registry
+    def _runtime_mounts(self, plan, *, check_files=False):
+        from .policy_plugins import plugin_for_type, call_plugin
+        from .plugin_mounts import validate_runtime_mounts
+        builder = ConfigBundleBuilder(self.repository_root)
+        document = builder.load_component(plan.target.removeprefix("configs/"), "deployment")
+        policy = builder.load_component(document["components"]["policy"], "policy")
+        policy["settings"]["runtime"]["quantization"] = plan.quantization
+        mounts = call_plugin(plugin_for_type(policy["type"], self.repository_root), "runtime_mounts",
+                             policy, self.repository_root, self.environment)
+        return validate_runtime_mounts(mounts, check_files=check_files)
+
+    def _command(self, plan, checkpoint=None, *, mounts=None, image_id=None):
+        from .plugin_mounts import docker_bind
         checkpoint_id = checkpoint.spec.resource_id if checkpoint else "<checkpoint-id>"
         checkpoint_path = str(checkpoint.host_path) if checkpoint else "<resolved-checkpoint-path>"
         state = Path(plan.state_directory)
@@ -119,13 +130,15 @@ class ModelDeployment:
             "--label", "ovlab.managed=model-deployment", "--label", f"ovlab.config-hash={plan.config_hash}",
             "--read-only", "--user", "10001:10001", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true", "--restart", plan.restart,
-            "--gpus", plan.gpu, "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700",
-            "--mount", f"type=bind,source={state / 'configs'},target=/opt/ovlab/configs,readonly",
-            "--mount", f"type=bind,source={checkpoint_path},target=/checkpoints/resolved/{checkpoint_id},readonly",
+            "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700",
+            "--mount", docker_bind(state / "configs", "/opt/ovlab/configs"),
+            "--mount", docker_bind(checkpoint_path, f"/checkpoints/resolved/{checkpoint_id}"),
             "--health-cmd", f"ovlab service health --host 127.0.0.1 --port {port} --json",
             "--health-interval", "5s", "--health-timeout", "8s", "--health-start-period", f"{plan.readiness_timeout_s}s",
             "--health-retries", "3",
         ]
+        if plan.gpu is not None:
+            command += ["--gpus", plan.gpu]
         if plan.port is not None:
             command += ["--publish", f"{plan.host}:{plan.port}:{plan.container_port}"]
         env = {
@@ -137,26 +150,24 @@ class ModelDeployment:
         if checkpoint:
             env.update(OVLAB_CHECKPOINT_REVISION=checkpoint.spec.revision,
                        OVLAB_CHECKPOINT_SHA256=checkpoint.spec.expected_sha256)
-        policy = ConfigBundleBuilder(self.repository_root).load_component(
-            ConfigBundleBuilder(self.repository_root).load_component(
-                plan.target.removeprefix("configs/"), "deployment")["components"]["policy"], "policy")
-        if policy["type"] == "openvla_quic":
-            adapter = self.environment.get("OVLAB_QUIC_ADAPTER_HOST_PATH", policy["settings"]["quic"]["adapter_path"])
-            adapter_path = Path(adapter).expanduser()
-            if not adapter_path.is_absolute():
-                adapter_path = self.repository_root / adapter_path
-            command += ["--mount", f"type=bind,source={adapter_path.resolve()},target=/checkpoints/quic-adapter,readonly"]
-            env["OVLAB_QUIC_ADAPTER_PATH"] = "/checkpoints/quic-adapter"
+        from .plugin_mounts import docker_bind
+        mounts = self._runtime_mounts(plan) if mounts is None else mounts
+        for mount in mounts:
+            command += ["--mount", docker_bind(mount["source"], mount["target"])]
+            if mount.get("environment"): env[mount["environment"]] = mount["target"]
+        env["OVLAB_PLUGIN_REGISTRY"] = "/opt/ovlab/configs/plugins/registry.json"
+        env["OVLAB_LOCAL_PROFILE"] = "/opt/ovlab/configs/plugins/runtime-profile.yaml"
         for key, value in env.items():
             command += ["--env", f"{key}={value}"]
-        command += [plan.image, "service", "serve", f"/opt/ovlab/{plan.target}",
+        command += [image_id or plan.image, "service", "serve", f"/opt/ovlab/{plan.target}",
                     "--host", "0.0.0.0", "--port", port, "--persistent"]
         return command
 
     def _exec(self, command, *, capture=True):
         output = {"capture_output": True} if capture else {"stdout": sys.stderr, "stderr": sys.stderr}
+        timeout = 3600 if command[0] == "bash" else 60
         return self.runner(command, cwd=self.repository_root, env=self.environment,
-                           text=True, check=False, **output)
+                           text=True, check=False, timeout=timeout, **output)
 
     def _checked(self, command, *, capture=True):
         result = self._exec(command, capture=capture)
@@ -188,8 +199,11 @@ class ModelDeployment:
                                            mode=spec.mode, allow_download=not plan.offline)
         return resolver.resolve(spec, local_path=override, offline=plan.offline)
 
+    @with_registry
     def run(self, plan, *, dry_run=False):
         build_command = ["bash", str(self.repository_root / "deploy/scripts/build-images.sh"), plan.role]
+        if plan.offline:
+            build_command.append("--offline")
         preview = {**asdict(plan), "container_name": plan.container_name, "build_command": build_command if plan.build else None,
                    "run_command": self._command(plan), "side_effects_performed": False}
         if dry_run:
@@ -213,14 +227,19 @@ class ModelDeployment:
     def _start(self, plan, build_command):
         if self._container(plan.container_name, required=False) is not None:
             raise ConfigCompatibilityError(f"deployment {plan.deployment_id} already exists; stop it before redeploying")
+        mounts = self._runtime_mounts(plan, check_files=True)
         if plan.build:
             self._checked(build_command, capture=False)
-            if plan.image != _IMAGES[plan.role]:
-                self._checked(["docker", "tag", _IMAGES[plan.role], plan.image])
+            from .policy_plugins import registry_document
+            built_image = registry_document(self.repository_root)["builds"][plan.role]["image"]
+            if plan.image != built_image:
+                self._checked(["docker", "tag", built_image, plan.image])
         image = json.loads(self._checked(["docker", "image", "inspect", plan.image]).stdout)[0]
         labels = image["Config"].get("Labels", {})
         if labels.get(IMAGE_CONTRACT_LABEL) != _CONTRACT or labels.get("io.github.ovlab.service.transport") != "tcp-persistent-v1":
             raise ConfigCompatibilityError("deployment image has an incompatible policy contract")
+        from .plugin_identity import verify_plugin_image
+        verify_plugin_image(labels, self.repository_root, plan.role)
         checkpoint = self._checkpoint(plan)
         state = Path(plan.state_directory)
         state.mkdir(parents=True, exist_ok=True)
@@ -238,7 +257,7 @@ class ModelDeployment:
         atomic_json(state / "deployment.json", manifest, exclusive=False, mode=0o644)
         created = False
         try:
-            self._checked(self._command(plan, checkpoint))
+            self._checked(self._command(plan, checkpoint, mounts=mounts, image_id=image["Id"]))
             created = True
             deadline = time.monotonic() + plan.readiness_timeout_s
             while True:
@@ -247,15 +266,23 @@ class ModelDeployment:
                 if status.get("Running") and status.get("Health", {}).get("Status") == "healthy":
                     break
                 if not status.get("Running") or time.monotonic() >= deadline:
-                    raise RuntimeError(f"deployment did not become ready: {plan.container_name}")
+                    logs = self._exec(["docker", "logs", "--tail", "30", plan.container_name])
+                    diagnostics = ((logs.stdout or "") + (logs.stderr or ""))[-6000:].strip()
+                    raise RuntimeError(f"deployment did not become ready: {plan.container_name}\n{diagnostics}")
                 time.sleep(1)
             manifest.update(status="ready", container_id=container["Id"])
             atomic_json(state / "deployment.json", manifest, exclusive=False, mode=0o644)
         except BaseException:
-            if created:
-                self._exec(["docker", "container", "rm", "--force", plan.container_name])
             manifest["status"] = "failed"
             atomic_json(state / "deployment.json", manifest, exclusive=False, mode=0o644)
+            if created:
+                try:
+                    cleaned = self._exec(["docker", "container", "rm", "--force", plan.container_name])
+                    if cleaned.returncode:
+                        raise RuntimeError(cleaned.stderr or "container removal failed")
+                except (OSError, RuntimeError, subprocess.TimeoutExpired) as cleanup:
+                    manifest["cleanup_error"] = str(cleanup)
+                    atomic_json(state / "deployment.json", manifest, exclusive=False, mode=0o644)
             raise
         return {**manifest, "side_effects_performed": True}
 
@@ -344,7 +371,7 @@ def resolve_policy_service(application, path):
     policy = resolver.load_component(doc["components"]["policy"], "policy")
     if "quantization" in doc.get("runtime", {}):
         policy["settings"]["runtime"]["quantization"] = doc["runtime"]["quantization"]
-        validate(policy, doc["components"]["policy"], "policy")
+        validate(policy, doc["components"]["policy"], "policy", repository_root=resolver.repository_root)
     local = load(application._local_profile())
     validate(local, "local profile", "local_profile")
     registry = resolver.load_component(doc["resources"]["registry"], "resource_registry")
@@ -362,14 +389,14 @@ def resolve_policy_service(application, path):
             resolved.update(local_path=env["OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH"],
                             revision=env["OVLAB_CHECKPOINT_REVISION"], expected_sha256=env["OVLAB_CHECKPOINT_SHA256"])
         checkpoints[key] = resolved
+    from .policy_plugins import plugin_for_type
     settings = policy["settings"]
     # Existing policy owners use this observation context to validate image shape
     # and artifact adaptation; no benchmark, task, protocol, or renderer is started.
     observation = {"height": doc.get("input", {}).get("height", 224),
                    "width": doc.get("input", {}).get("width", 224),
-                   "profile": "native_oft" if policy["type"] == "openvla_oft" else "primary_rgb"}
-    context = {"settings": {"suite": settings["unnorm_key"], "observation": observation}}
+                   "profile": plugin_for_type(policy["type"], resolver.repository_root).descriptor["deployment"]["observation_profile"]}
+    context = {"settings": {"suite": settings.get("unnorm_key"), "observation": observation}}
     action = resolver.load_component(settings["action"]["action_interface"], "action_interface")
-    adapter = env.get("OVLAB_QUIC_ADAPTER_PATH", settings.get("quic", {}).get("adapter_path"))
-    typed = resolver._policy(policy, context, resolver._action_spec(action), checkpoints, local["devices"], quic_adapter_path=adapter)
-    return SimpleNamespace(policy_settings=typed, experiment_id=doc["id"], protocol_settings=SimpleNamespace(base_seed=0))
+    typed = resolver._policy(policy, context, resolver._action_spec(action), checkpoints, local["devices"], environment=env)
+    return SimpleNamespace(policy_type=policy["type"], policy_settings=typed, experiment_id=doc["id"], protocol_settings=SimpleNamespace(base_seed=0))

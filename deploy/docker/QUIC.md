@@ -3,7 +3,7 @@
 Build the dedicated serving and training roles from the repository root:
 
 ```bash
-git submodule update --init external/openvla-quic external/quic-peft-vla
+./ovlab plugin sync quic-peft
 bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic dataset
 ```
 

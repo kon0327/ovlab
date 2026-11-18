@@ -2,7 +2,7 @@ schema_version: "0.1.0"
 kind: external_source_intake
 id: compound-peft-user-supplied-b024ba61
 
-source_path: external/compound-peft
+source_path: references/compound-peft
 source_origin: user_supplied_archive
 source_revision_kind: content_hash
 upstream_git_revision: unavailable
@@ -18,7 +18,7 @@ archive:
   safety_inspection: unavailable_archive_already_extracted_by_user
 
 extracted_tree:
-  manifest_path: external/compound-peft.manifest.sha256
+  manifest_path: references/compound-peft.manifest.sha256
   manifest_sha256: 8084213849149a47f9bf84dd0c9220b319faf7df8dba39cdef3894e85e00f845
   manifest_format: sha256sum_sorted_dot_relative_paths
   file_count: 130
@@ -35,7 +35,7 @@ package:
   name: peft
   version: 0.12.1.dev0
   license: Apache-2.0
-  license_path: external/compound-peft/peft/LICENSE
+  license_path: references/compound-peft/peft/LICENSE
   compound_tuner_lines: 721
 
 paper_identity:

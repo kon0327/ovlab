@@ -16,6 +16,8 @@ import uuid
 from ovlab_core.contracts import OVLAB_VERSION
 from ovlab_core.experiment_scope import ExperimentScope
 
+from .policy_plugins import with_registry
+
 from .catalog import registered_policies
 from .errors import ConfigCompatibilityError, ConfigReferenceError
 from .models import MockPolicySettings, ResolvedExperimentConfig
@@ -133,7 +135,7 @@ class OvlabApplication:
         images that intentionally contain no portable experiment tree.
         """
         if self._resolver is None:
-            self._resolver = ConfigResolver(self.config_root, repository_root=self.repository_root)
+            self._resolver = ConfigResolver(self.config_root, repository_root=self.repository_root, environment=self.environment)
         return self._resolver
 
     def _config_path(self, config: str | Path) -> Path:
@@ -278,15 +280,7 @@ class OvlabApplication:
         except ArtifactError as exc:
             raise ConfigSchemaError(f"invalid training report parameters: {exc}") from exc
 
-    def _quic_descriptor(self, path: Path, *, runtime: bool):
-        from ovlab_openvla_quic import descriptor_from_document
-
-        document = self.resolver.load_component(self._relative(path), "quic_policy_descriptor")
-        descriptor = descriptor_from_document(document)
-        if runtime:
-            descriptor.require_runtime_ready()
-        return document, descriptor
-
+    @with_registry
     def resolve(
         self, config: str | Path, *, mode: str = "descriptor",
         local_profile: str | Path | None = None,
@@ -295,17 +289,11 @@ class OvlabApplication:
             raise ValueError("mode must be descriptor or runtime")
         path = self._config_path(config)
         header = load(path)
-        if header.get("kind") == "quic_policy_descriptor":
-            document, descriptor = self._quic_descriptor(path, runtime=mode == "runtime")
-            return {
-                "schema_version": CLI_SCHEMA_VERSION,
-                "kind": "resolved_policy_descriptor",
-                "source": self._relative(path),
-                "descriptor": descriptor.as_metadata(),
-                "scientific_config_hash": descriptor.scientific_hash,
-                "execution_config_hash": None,
-                "runtime_ready": mode == "runtime",
-            }
+        from .policy_plugins import plugin_for_document, call_plugin
+        plugin = plugin_for_document(header.get("kind"), self.repository_root)
+        if plugin:
+            document = self.resolver.load_component(self._relative(path), header["kind"])
+            return {**call_plugin(plugin, "resolve_document", document, runtime=mode == "runtime"), "source": self._relative(path)}
         if header.get("kind") != "experiment":
             kind = header.get("kind")
             document = self.resolver.load_component(self._relative(path), kind)
@@ -345,40 +333,24 @@ class OvlabApplication:
     def policy_list() -> list[dict[str, object]]:
         return registered_policies()
 
+    @with_registry
     def policy_describe(self, config: str | Path) -> dict[str, object]:
         path = self._config_path(config)
         header = load(path)
-        if header.get("kind") == "quic_policy_descriptor":
-            _, descriptor = self._quic_descriptor(path, runtime=False)
-            metadata = descriptor.as_metadata()
-            return {
-                "method": descriptor.variant.value,
-                "family": descriptor.family,
-                "artifact": metadata["artifact_identity"],
-                "capabilities": metadata["capability_identity"],
-                "readiness": {
-                    "runtime_ready": False,
-                    "implementation_status": metadata["implementation_status"],
-                    "openvla_integration_status": metadata["openvla_integration_status"],
-                },
-                "profile": metadata["profile"],
-                "scientific_config_hash": descriptor.scientific_hash,
-                "execution_config_hash": None,
-                "unavailable_fields": metadata["unavailable_fields"],
-            }
+        from .policy_plugins import plugin_for_document, call_plugin
+        plugin = plugin_for_document(header.get("kind"), self.repository_root)
+        if plugin:
+            document = self.resolver.load_component(self._relative(path), header["kind"])
+            return call_plugin(plugin, "describe_document", document)
         resolved = self.resolve(path, mode="descriptor")
         if not isinstance(resolved, ResolvedExperimentConfig):
-            raise ConfigCompatibilityError("policy describe requires an experiment or QuIC descriptor")
+            raise ConfigCompatibilityError("policy describe requires an experiment or plugin descriptor")
         policy = resolved.scientific_config["components"]["policy"]
         settings = policy["settings"]
+        from .policy_plugins import plugin_for_type
         return {
             "method": policy["type"],
-            "family": {
-                "openvla_vanilla": "openvla",
-                "openvla_lora_merged": "lora",
-                "openvla_oft": "openvla_oft",
-                "mock": "mock",
-            }[policy["type"]],
+            "family": ("mock" if policy["type"] == "mock" else plugin_for_type(policy["type"], self.repository_root).descriptor["family"]),
             "artifact": {"checkpoint_id": settings.get("checkpoint_id", "unavailable")},
             "capabilities": {
                 "action_spec": _action_spec(resolved.action_spec),
@@ -413,37 +385,18 @@ class OvlabApplication:
     def _policy_adapter(settings):
         if isinstance(settings, MockPolicySettings):
             raise ConfigCompatibilityError("mock policy adapters are test-only and unavailable to production CLI")
-        from ovlab_openvla_oft import OpenVlaOftAdapter, OpenVlaOftSettings
-        if isinstance(settings, OpenVlaOftSettings):
-            return OpenVlaOftAdapter(settings)
-        from ovlab_openvla_quic import OpenVlaQuICSettings, create_policy_adapter
-        if isinstance(settings, OpenVlaQuICSettings):
-            return create_policy_adapter(settings)
-        from ovlab_openvla_common import OpenVlaMethodFamily
-        if settings.method_descriptor.family is OpenVlaMethodFamily.LORA:
-            from ovlab_openvla_lora_merged import OpenVlaMergedLoraAdapter
-            return OpenVlaMergedLoraAdapter(settings)
-        from ovlab_openvla_vanilla import OpenVlaVanillaAdapter
-        return OpenVlaVanillaAdapter(settings)
+        from .policy_plugins import registered_plugins, call_plugin
+        for plugin in registered_plugins():
+            if plugin.descriptor.get("entrypoint") and call_plugin(plugin, "accepts_settings", settings):
+                return call_plugin(plugin, "create_adapter", settings)
+        raise ConfigCompatibilityError("settings do not belong to a registered policy plugin")
 
     @staticmethod
     def _identity_provider(capabilities):
-        if capabilities.component_name == "ovlab-openvla-vanilla":
-            from ovlab_remote_policy.openvla_service import _identity_provider
-            identity = _identity_provider(capabilities)
-            return OvlabApplication._with_deployment_identity(identity)
-        if capabilities.component_name == "ovlab-openvla-lora-merged":
-            from ovlab_openvla_lora_merged.service import _identity_provider
-            identity = _identity_provider(capabilities)
-            return OvlabApplication._with_deployment_identity(identity)
-        if capabilities.component_name == "ovlab-openvla-oft":
-            from ovlab_openvla_oft.service import _identity
-            identity = _identity(capabilities)
-            return OvlabApplication._with_deployment_identity(identity)
-        if capabilities.component_name == "ovlab-openvla-quic-peft":
-            from ovlab_openvla_quic.service import _identity_provider
-            identity = _identity_provider(capabilities)
-            return OvlabApplication._with_deployment_identity(identity)
+        from .policy_plugins import registered_plugins, call_plugin
+        for plugin in registered_plugins():
+            if plugin.descriptor.get("entrypoint") and call_plugin(plugin, "accepts_capabilities", capabilities):
+                return OvlabApplication._with_deployment_identity(call_plugin(plugin, "identity", capabilities))
         if capabilities.component_name not in {"mock-policy", "handshake-only-policy", "qualification-test-policy"}:
             raise ConfigCompatibilityError(
                 f"no registered service identity provider for {capabilities.component_name!r}"
@@ -513,18 +466,26 @@ class OvlabApplication:
         result["runtime_versions"] = runtime
         return result
 
+    @with_registry
     def serve(self, config: str | Path, *, socket_path: str | Path | None = None, adapter_factory=None,
               host: str = "127.0.0.1", port: int | None = None, persistent: bool = False) -> dict[str, object]:
         path = self._config_path(config)
-        if load(path).get("kind") == "quic_policy_descriptor":
-            self._quic_descriptor(path, runtime=True)
-            raise AssertionError("runtime-ready QuIC descriptor did not produce an experiment")
+        from .policy_plugins import plugin_for_document
+        if plugin_for_document(load(path).get("kind"), self.repository_root):
+            self.resolve(path, mode="runtime")
+            raise ConfigCompatibilityError("descriptor must resolve to a runnable policy configuration")
         if load(path).get("kind") == "deployment":
             from .model_deployment import resolve_policy_service
             resolved = resolve_policy_service(self, path)
         else:
             resolved = self._resolved_experiment(path)
-        adapter = (adapter_factory or self._policy_adapter)(resolved.policy_settings)
+        from .policy_plugins import plugin_for_type, call_plugin
+        policy_type = getattr(resolved, "policy_type", None)
+        if policy_type is None and hasattr(resolved, "scientific_config"):
+            policy_type = resolved.scientific_config["components"]["policy"]["type"]
+        plugin = plugin_for_type(policy_type, self.repository_root) if policy_type and policy_type != "mock" else None
+        adapter = (adapter_factory(resolved.policy_settings) if adapter_factory else
+                   call_plugin(plugin, "create_adapter", resolved.policy_settings) if plugin else self._policy_adapter(resolved.policy_settings))
         socket = Path(socket_path) if socket_path is not None else self.default_socket(path)
         if port is None:
             socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -540,7 +501,7 @@ class OvlabApplication:
         PolicyService(
             socket,
             adapter,
-            identity_provider=self._identity_provider,
+            identity_provider=(lambda caps: self._with_deployment_identity(call_plugin(plugin, "identity", caps))) if plugin else self._identity_provider,
             startup_context=startup_context,
             listen_address=(host, port) if port is not None else None,
             persistent=persistent,

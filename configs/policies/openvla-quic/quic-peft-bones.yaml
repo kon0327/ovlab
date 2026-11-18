@@ -37,7 +37,7 @@ external_provider:
 
 source:
   availability: available
-  path: external/compound-peft
+  path: references/compound-peft
   source_origin: user_supplied_archive
   source_revision_kind: content_hash
   archive_sha256: b024ba61b852d83beec631b724489b3bc3055c4a883f2df0c05b6c9857103e9a

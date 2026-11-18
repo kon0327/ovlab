@@ -15,6 +15,8 @@ import pytest
 
 from ovlab_benchctl.deployment import ComposeDeployment, ComposeDeploymentError, _ComposeProgressOutput
 from ovlab_benchctl.config_bundle import ConfigBundleBuilder
+from ovlab_benchctl.plugin_identity import PLUGIN_BUILD_LABEL, plugin_build_identity
+from ovlab_benchctl.image_metadata import IMAGE_CONTRACT_LABEL
 
 
 REPOSITORY = Path(__file__).resolve().parents[4]
@@ -58,13 +60,13 @@ def test_quic_adapter_override_requires_both_files_and_resolves_from_environment
     env_file = tmp_path / "compose.env"
     env_file.write_text("OVLAB_QUIC_ADAPTER_HOST_PATH=adapter\n", encoding="utf-8")
     deployment = ComposeDeployment(REPOSITORY, environment={})
-    plan = SimpleNamespace(profile="quic", env_file=str(env_file))
+    plan = SimpleNamespace(profile="quic", env_file=str(env_file), experiment="experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml")
     with pytest.raises(ComposeDeploymentError, match="adapter.json, adapter.safetensors"):
-        deployment._quic_adapter_path(plan)
+        deployment._runtime_mounts(plan)
     (adapter / "adapter.json").write_text("{}", encoding="utf-8")
     (adapter / "adapter.safetensors").write_bytes(b"fixture")
-    assert deployment._quic_adapter_path(plan) == adapter.resolve()
-    assert deployment._quic_adapter_path(SimpleNamespace(profile="openvla")) is None
+    assert deployment._runtime_mounts(plan)[0]["source"] == str(adapter.resolve())
+    assert deployment._runtime_mounts(SimpleNamespace(profile="openvla", env_file=str(env_file), experiment=LORA)) == []
 
 
 @dataclass
@@ -263,7 +265,7 @@ def test_oft_glfw_plan_selects_oft_services_and_renderer_overlay():
     )
 
     assert plan.benchmark_service == "benchmark-oft"
-    assert plan.compose_files[-1].endswith("deploy/compose/compose.glfw.yaml")
+    assert deployment.service_spec(plan)["services"][plan.benchmark_service]["environment"]["MUJOCO_GL"] == "glfw"
     assert plan.up_command[-2:] == ("--exit-code-from", "benchmark-oft")
     assert plan.experiment == OFT
 
@@ -305,7 +307,7 @@ def test_quantization_override_is_validated_and_recorded_in_plan():
         project_name="ovlab-test-quantized",
     )
     assert (plan.quantization, plan.quantization_source) == ("4bit", "cli")
-    with pytest.raises(ValueError, match="QuIC supports dense hosts only"):
+    with pytest.raises(ValueError, match="does not support quantization"):
         deployment.plan(
             "experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml",
             quantization="4bit", env_file=ENV_FILE,
@@ -327,7 +329,7 @@ def test_cli_renderer_override_takes_precedence_over_experiment():
     assert plan.renderer == "glfw"
     assert plan.profile_source == "experiment"
     assert plan.renderer_source == "cli"
-    assert plan.compose_files[-1].endswith("deploy/compose/compose.glfw.yaml")
+    assert deployment.service_spec(plan)["services"][plan.benchmark_service]["environment"]["MUJOCO_GL"] == "glfw"
 
 
 def test_incompatible_profile_override_is_rejected_before_docker():
@@ -382,7 +384,7 @@ def test_stale_policy_and_benchmark_images_fail_before_checkpoint_or_compose(
 
     def inspect(command, **kwargs):
         observed.append((command, kwargs))
-        return _Result(0, stdout="old-contract\n")
+        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: "old-contract"}}))
 
     deployment = ComposeDeployment(
         REPOSITORY, environment=deployment_environment, runner=inspect
@@ -414,7 +416,7 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
             if image == "ovlab-reporting:local"
             else "resolved-checkpoint-v1"
         )
-        return _Result(0, stdout=f"{contract}\n")
+        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "policy-openvla")}}))
 
     deployment = ComposeDeployment(
         REPOSITORY, environment=deployment_environment, runner=inspect
@@ -436,7 +438,7 @@ def test_old_benchmark_worker_requires_only_the_benchmark_rebuild():
         contract = ("resolved-checkpoint-config-bundle-v2" if image == "ovlab-benchmark-libero:local"
                     else "canonical-readonly-reporting-v1" if image == "ovlab-reporting:local"
                     else "resolved-checkpoint-quantization-config-bundle-v2")
-        return _Result(0, stdout=contract)
+        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "policy-openvla")}}))
     deployment = ComposeDeployment(REPOSITORY, runner=inspect)
     plan = deployment.plan(LORA, env_file=ENV_FILE)
     with pytest.raises(ComposeDeploymentError) as failure:
@@ -458,14 +460,14 @@ def test_preflight_accepts_compatible_images_without_source_tree_lock():
             if image == "ovlab-reporting:local"
             else "native-run-config-bundle-v3"
         )
-        return _Result(0, stdout=f"{contract}\n")
+        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "policy-openvla")}}))
 
     deployment = ComposeDeployment(REPOSITORY, runner=inspect)
     plan = deployment.plan(
         LORA, env_file=ENV_FILE, project_name="ovlab-test-stale-source"
     )
 
-    assert _PREFLIGHT_IMAGES(deployment, plan) is None
+    assert _PREFLIGHT_IMAGES(deployment, plan)["policy-openvla"] == "sha256:" + "1"*64
     assert len(observed) == 3
     assert all("source-manifest" not in " ".join(command) for command in observed)
 

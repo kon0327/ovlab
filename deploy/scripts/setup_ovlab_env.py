@@ -15,19 +15,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CONDA_ENV_NAME = "ovlab-env"
-PACKAGES = (
-    "code/packages/ovlab-core",
-    "code/packages/ovlab-policy-sdk",
-    "code/packages/ovlab-benchmarks",
-    "code/packages/ovlab-metrics",
-    "code/packages/ovlab-openvla-common",
-    "code/packages/ovlab-remote-policy",
-    "code/apps/runner",
-    "code/policies/openvla-vanilla",
-    "code/policies/openvla-lora-merged",
-    "code/policies/openvla-oft",
-    "code/policies/openvla-quic",
-    "code/apps/benchctl",
+PACKAGES = tuple(
+    str(path.parent.relative_to(ROOT))
+    for group in ("packages", "policies", "apps")
+    for path in sorted((ROOT / "code" / group).glob("*/pyproject.toml"))
 )
 
 

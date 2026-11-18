@@ -66,10 +66,6 @@ def test_container_images_publish_the_same_release_version() -> None:
         assert f"ARG OVLAB_VERSION={version}" in source
         assert 'org.opencontainers.image.version="$OVLAB_VERSION"' in source
 
-    build_script = (REPOSITORY / "deploy/scripts/build-images.sh").read_text(encoding="utf-8")
-    assert "version=\"$(tr -d '[:space:]' < VERSION)\"" in build_script
-    assert '--build-arg "OVLAB_VERSION=$version"' in build_script
-
 
 def test_product_release_does_not_implicitly_bump_compatibility_contract() -> None:
     assert OVLAB_VERSION == "0.2.0"

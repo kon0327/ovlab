@@ -33,18 +33,11 @@ deploy/environments/
 deploy/compose/
 deploy/scripts/
 
-# External source stays available to the three role-specific Dockerfiles.
+# Registered source snapshots are staged below external/ before a build.
 !external/
-!external/libero/
-!external/libero/**
-!external/openvla/
-!external/openvla/**
-!external/openvla-oft/
-!external/openvla-oft/**
-!external/openvla-quic/
-!external/openvla-quic/**
-!external/quic-peft-vla/
-!external/quic-peft-vla/**
+!external/**
+external/.locks/
+external/**/.ovlab-source.json
 
 # Never send repository identity, test caches, assets, outputs, or secrets.
 .git

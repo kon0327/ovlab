@@ -169,18 +169,29 @@ class Doctor:
         if not docker_ready:
             self._add("images", "skipped", "Docker daemon is unavailable")
             return
-        for variable, default, role in deployment._PROFILE_IMAGES[plan.profile]:
+        for variable, default, role in deployment._profile_images(plan):
             image = deployment._environment_value(plan, variable) or default
-            expected = deployment._IMAGE_CONTRACTS[role]
+            expected = deployment._image_contract(role)
             checked, problem = self._probe([
                 "docker", "image", "inspect", "--format",
-                f'{{{{ index .Config.Labels "{deployment._IMAGE_CONTRACT_LABEL}" }}}}', image,
+                '{{ json .Config.Labels }}', image,
             ])
             if problem or checked.returncode != 0:
                 self._add(f"image:{role}", "error", f"image is unavailable: {image}",
                           f"Build it with: bash deploy/scripts/build-images.sh {role}")
-            elif (checked.stdout or "").strip() != expected:
-                self._add(f"image:{role}", "error", f"image {image} has a missing or incompatible deployment label",
-                          f"Rebuild it with: bash deploy/scripts/build-images.sh {role}")
             else:
-                self._add(f"image:{role}", "ok", f"compatible image: {image}")
+                try:
+                    import json
+                    labels = json.loads(checked.stdout or "null")
+                    if not isinstance(labels, dict) or labels.get(deployment._IMAGE_CONTRACT_LABEL) != expected:
+                        raise ValueError("missing or incompatible deployment label")
+                    if role == deployment._plugin(plan).descriptor["deployment"]["role"]:
+                        from .policy_plugins import registry_scope
+                        from .plugin_identity import verify_plugin_image
+                        with registry_scope(self.root, self.environment):
+                            verify_plugin_image(labels, self.root, role)
+                except ValueError as exc:
+                    self._add(f"image:{role}", "error", f"image {image}: {exc}",
+                              f"Rebuild it with: bash deploy/scripts/build-images.sh {role}")
+                else:
+                    self._add(f"image:{role}", "ok", f"compatible image: {image}")

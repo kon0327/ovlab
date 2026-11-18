@@ -27,10 +27,10 @@ from ovlab_openvla_quic import (
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
-SOURCE_ROOT = REPOSITORY_ROOT / "external/compound-peft"
+SOURCE_ROOT = REPOSITORY_ROOT / "references/compound-peft"
 EXTERNAL_PROVIDER_ROOT = REPOSITORY_ROOT / "external/openvla-quic"
-PROVENANCE_PATH = REPOSITORY_ROOT / "external/compound-peft.provenance.yaml"
-MANIFEST_PATH = REPOSITORY_ROOT / "external/compound-peft.manifest.sha256"
+PROVENANCE_PATH = REPOSITORY_ROOT / "references/compound-peft.provenance.yaml"
+MANIFEST_PATH = REPOSITORY_ROOT / "references/compound-peft.manifest.sha256"
 
 
 def _legacy(**overrides):

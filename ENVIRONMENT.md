@@ -11,6 +11,12 @@ the environment after changing package requirements; use `--update` to force
 a reinstall without requirement changes. Training and evaluation
 still use their dedicated Docker images for model and simulator dependencies.
 
+Model sources are selected through the [plugin registry](docs/POLICY_PLUGINS.md).
+After a fresh checkout, run `./ovlab plugin sync` to prepare the registered Git
+commits in ignored `external/`. Image builds also prepare their required sources.
+For local development, register a filesystem project rather than editing a
+managed remote checkout.
+
 ## Linux and macOS
 
 For the checkout's full launcher, including Docker reporting and dataset

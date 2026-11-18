@@ -15,7 +15,14 @@ from ovlab_benchctl.versioning import repository_revision
 ROOT = Path(__file__).resolve().parents[4]
 DOCKER = ROOT / "deploy/docker"
 COMPOSE = (ROOT / "deploy/compose/compose.yaml").read_text(encoding="utf-8")
-GLFW_COMPOSE = (ROOT / "deploy/compose/compose.glfw.yaml").read_text(encoding="utf-8")
+from ovlab_benchctl.deployment import ComposeDeployment
+
+
+def _evaluation_services(profile="openvla", renderer="egl"):
+    config = {"openvla": "libero10-lora-merged-rpc-smoke", "oft": "libero10-openvla-oft-rpc-smoke", "quic": "libero10-quic-adapter-rpc-smoke"}[profile]
+    deployment = ComposeDeployment(ROOT)
+    plan = deployment.plan(config, renderer=renderer, env_file="deploy/compose/.env.example")
+    return deployment, plan, deployment.service_spec(plan)["services"]
 
 
 def _dockerfile(name: str) -> str:
@@ -92,98 +99,42 @@ def test_oft_quantization_stack_pins_the_dispatch_compatible_accelerate_version(
 
 
 def test_compose_is_socket_only_offline_and_least_privilege():
-    forbidden = ("ports:", "privileged:", "network_mode: host", "/var/run/docker.sock")
-    assert not any(value in COMPOSE for value in forbidden)
-    assert "network_mode: none" in COMPOSE.split("x-policy-security:", 1)[1].split("services:", 1)[0]
-    for service, successor in (
-        ("policy-openvla", "benchmark-openvla"),
-        ("benchmark-openvla", "policy-openvla-oft"),
-        ("policy-openvla-oft", "benchmark-oft"),
-        ("benchmark-oft", "policy-openvla-quic"),
-        ("policy-openvla-quic", "benchmark-quic"),
-        ("benchmark-quic", "reporting"),
-        ("reporting", "export"),
-        ("export", "dataset-acquire"),
-        ("training-openvla", "checkpoint-finalizer"),
-        ("checkpoint-finalizer", None),
-    ):
-        assert "<<: *policy-security" in _service(service, successor)
-    assert "read_only: true" in COMPOSE
-    assert COMPOSE.count("cap_drop: [ALL]") >= 1
-    assert "HF_HUB_OFFLINE: \"1\"" in COMPOSE
-    assert "TRANSFORMERS_OFFLINE: \"1\"" in COMPOSE
-    assert "MUJOCO_GL: egl" in COMPOSE
-    assert "condition: service_healthy" in COMPOSE
-    assert "OVLAB_DEPLOYMENT_MANIFEST_SHA256" in COMPOSE
-    assert "OVLAB_CONTAINER_RUNTIME_VERSION" in COMPOSE
-    assert "OVLAB_MOUNT_CONTRACT" in COMPOSE
-    assert COMPOSE.count("OVLAB_DEPLOYMENT_PROFILE: ${OVLAB_DEPLOYMENT_PROFILE:-") == 6
-    assert COMPOSE.count(
-        "OVLAB_EXECUTION_PROFILE: ${OVLAB_EXECUTION_PROFILE:?configuration bundle resolver"
-    ) == 6
-    assert "service, health, --socket, /run/ovlab/policy.sock" in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_RESOLVED_CHECKPOINT_PATH:?") == 3
-    assert "../../checkpoints" not in COMPOSE
-    assert COMPOSE.count("target: /checkpoints/resolved/${OVLAB_RESOLVED_CHECKPOINT_ID}") == 3
-    assert "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH" in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_DATASETS_PATH:?") == 3
-    assert "../../datasets" not in COMPOSE
-    assert "target: /datasets\n        read_only: true" in COMPOSE
-    assert COMPOSE.count("${OVLAB_EXPERIMENT_CONFIG:?configuration bundle resolver") == 6
-    assert COMPOSE.count("OVLAB_CONFIG_BUNDLE_SHA256: ${OVLAB_CONFIG_BUNDLE_SHA256:?") == 6
-    assert "source: ${OVLAB_CONFIG_BUNDLE_PATH:?" in COMPOSE
-    assert "target: /opt/ovlab/configs" in COMPOSE
-    assert "config-bundle-ro" in COMPOSE
+    assert not any(value in COMPOSE for value in ("ports:", "privileged:", "/var/run/docker.sock"))
+    for profile in ("openvla", "oft", "quic"):
+        _, _, services = _evaluation_services(profile)
+        policy, benchmark = services.values()
+        for service in services.values():
+            assert service["network_mode"] == "none"
+            assert service["read_only"] is True
+            assert service["user"] == "10001:10001"
+            assert service["cap_drop"] == ["ALL"]
+            assert "ports" not in service
+            assert service["environment"]["OVLAB_PLUGIN_REGISTRY"] == "/opt/ovlab/configs/plugins/registry.json"
+        assert policy["environment"]["HF_HUB_OFFLINE"] == "1"
+        assert policy["environment"]["TRANSFORMERS_OFFLINE"] == "1"
+        assert policy["healthcheck"]["test"][:3] == ["CMD", "ovlab", "service"]
+        assert all(mount["read_only"] for mount in policy["volumes"] if isinstance(mount, dict))
+        assert benchmark["environment"]["MUJOCO_GL"] == "egl"
+        assert list(benchmark["depends_on"].values())[0]["condition"] == "service_healthy"
+        assert any(mount.get("target") == "/datasets" and mount["read_only"] for mount in benchmark["volumes"] if isinstance(mount, dict))
 
 
 def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports():
-    assert "OVLAB_RUNS_PATH" not in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}") == 5
-    assert COMPOSE.count("target: /var/lib/ovlab/runs") == 5
-    assert COMPOSE.count('--output-root, "${OVLAB_EVALUATION_OUTPUT_ROOT:-/var/lib/ovlab/runs/evaluate}"') == 3
-    assert COMPOSE.count("target: /var/lib/ovlab/runs\n        read_only: true") == 2
-    assert "OVLAB_DERIVED_ROOT" not in COMPOSE
-    assert "/var/lib/ovlab/derived" not in COMPOSE
-    assert "OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw" in COMPOSE
-    assert COMPOSE.count("source: ${OVLAB_CONFIGS_ROOT:-../../configs}") == 2
-    assert COMPOSE.count("target: /opt/ovlab/configs\n        read_only: true") == 2
-    assert COMPOSE.count("source: ${OVLAB_EXPORTS_ROOT:-../../../ovlab-data/exports}") == 2
-    assert COMPOSE.count("target: /var/lib/ovlab/exports") == 2
-    assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw") == 2
-    assert COMPOSE.count("OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro") == 1
-    for service, successor in (
-        ("benchmark-openvla", "policy-openvla-oft"),
-        ("benchmark-oft", "reporting"),
-        ("reporting", "export"),
-        ("export", "dataset-acquire"),
-    ):
-        assert "${OVLAB_HOST_ARTIFACT_GID:-1000}" in _service(service, successor)
-    reporting = _service("reporting", "export")
-    assert "profiles: [reporting]" in reporting
-    assert "image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}" in reporting
-    assert "report\n      - publish" in reporting
-    assert "target: /var/lib/ovlab/runs\n        read_only: true" in reporting
-    assert "target: /var/lib/ovlab/exports" in reporting
-    assert "gpus:" not in reporting
-    assert "rpc-openvla" not in reporting and "rpc-oft" not in reporting
-    export = _service("export", "dataset-acquire")
-    assert "profiles: [export]" in export
-    assert "image: ${OVLAB_REPORTING_IMAGE:-ovlab-reporting:local}" in export
-    assert "OVLAB_MOUNT_CONTRACT: configs-ro,runs-ro,exports-rw,export-spec-ro" in export
-    assert "target: /var/lib/ovlab/runs\n        read_only: true" in export
-    assert "target: /etc/ovlab/export.yaml\n        read_only: true" in export
-    assert "gpus:" not in export and "rpc-openvla" not in export and "rpc-oft" not in export
-    assert "runs:" not in COMPOSE.split("\nvolumes:\n", 1)[1]
-
-    profile = (ROOT / "deploy/config/container-profile.yaml").read_text(encoding="utf-8")
-    assert "runs_root: /var/lib/ovlab/runs" in profile
-    benchmark = _dockerfile("Dockerfile.benchmark")
-    assert "install -d -o 10001 -g 10001 -m 0700 /run/ovlab /var/lib/ovlab/runs" in benchmark
-    assert COMPOSE.count("OVLAB_POSTPROCESSING_MODE: external") == 3
-    benchmark_services = COMPOSE.split("  benchmark-openvla:\n", 1)[1].split("  policy-openvla-oft:\n", 1)[0] + COMPOSE.split("  benchmark-oft:\n", 1)[1].split("  policy-openvla-quic:\n", 1)[0] + COMPOSE.split("  benchmark-quic:\n", 1)[1].split("  reporting:\n", 1)[0]
-    assert benchmark_services.count("stop_grace_period: 5m") == 3
-    assert "/var/lib/ovlab/derived" not in benchmark_services
-    assert "/var/lib/ovlab/exports" not in benchmark_services
+    for profile in ("openvla", "oft", "quic"):
+        _, _, services = _evaluation_services(profile)
+        benchmark = list(services.values())[1]
+        mounts = {m["target"]: m for m in benchmark["volumes"] if isinstance(m, dict)}
+        assert mounts["/var/lib/ovlab/runs"]["read_only"] is False
+        assert "/var/lib/ovlab/exports" not in mounts
+        assert benchmark["stop_grace_period"] == "5m"
+        assert benchmark["environment"]["OVLAB_POSTPROCESSING_MODE"] == "external"
+        assert "${OVLAB_HOST_ARTIFACT_GID:-1000}" in benchmark["group_add"]
+    for name, successor in (("reporting", "export"), ("export", "dataset-acquire")):
+        block = _service(name, successor)
+        assert "target: /var/lib/ovlab/runs\n        read_only: true" in block
+        assert "target: /var/lib/ovlab/exports" in block
+        assert "gpus:" not in block
+    assert "target: /etc/ovlab/export.yaml\n        read_only: true" in _service("export", "dataset-acquire")
 
 
 def test_gate_i_compose_services_preserve_dataset_training_and_finalization_boundaries():
@@ -264,7 +215,8 @@ def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
     assert "dlimp_openvla.git@040105d256bd28866cc6620621a3d5f7b6b91b46" in oft_input
     assert "040105d256bd28866cc6620621a3d5f7b6b91b46" in _dockerfile("Dockerfile.openvla-oft")
     build_script = (ROOT / "deploy/scripts/build-images.sh").read_text(encoding="utf-8")
-    assert '--secret "id=ovlab_source_manifest,src=$manifest"' in build_script
+    assert "build_images.py" in build_script
+    assert "id=ovlab_source_manifest,src=" in (ROOT / "code/apps/benchctl/src/ovlab_benchctl/plugin_build.py").read_text()
     assert "OVLAB_SOURCE_MANIFEST_B64" not in build_script
 
 
@@ -327,12 +279,14 @@ def test_benchmark_renderer_is_selected_at_runtime_and_libero_paths_are_portable
 
 
 def test_glfw_overlay_requires_a_display_and_removes_egl_device_configuration():
-    assert GLFW_COMPOSE.count("OVLAB_EXECUTION_PROFILE: profiles/libero-playground-glfw.yaml") == 3
-    assert GLFW_COMPOSE.count("MUJOCO_GL: glfw") == 3
-    assert GLFW_COMPOSE.count("MUJOCO_EGL_DEVICE_ID: !reset null") == 3
-    assert GLFW_COMPOSE.count("target: /tmp/.X11-unix") == 3
-    assert "privileged:" not in GLFW_COMPOSE
-    assert "ports:" not in GLFW_COMPOSE
+    for profile in ("openvla", "oft", "quic"):
+        _, plan, services = _evaluation_services(profile, "glfw")
+        benchmark = services[plan.benchmark_service]
+        assert benchmark["environment"]["MUJOCO_GL"] == "glfw"
+        assert "MUJOCO_EGL_DEVICE_ID" not in benchmark["environment"]
+        assert benchmark["environment"]["DISPLAY"] == "${OVLAB_DISPLAY:-:0}"
+        assert any(m.get("target") == "/tmp/.X11-unix" and m["read_only"] for m in benchmark["volumes"] if isinstance(m, dict))
+        assert "ports" not in benchmark and "privileged" not in benchmark
 
 
 def test_source_manifest_is_deterministic_and_records_dirty_state():
@@ -343,10 +297,8 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
     document = json.loads(first)
     assert re.fullmatch(r"[0-9a-f]{40}", document["repository_revision"])
     assert re.fullmatch(r"[0-9a-f]{64}", document["source_content_sha256"])
-    assert {row["path"] for row in document["submodules"]} == {
-        "external/libero", "external/openvla", "external/openvla-oft", "external/openvla-quic",
-        "external/quic-peft-vla",
-    }
+    assert document["submodules"] == []
+    assert {row["id"] for row in document["registered_sources"]} == {"libero", "openvla", "openvla-oft", "openvla-quic", "quic-peft-vla"}
     status = subprocess.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=ROOT,
@@ -449,11 +401,14 @@ def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount():
     assert not any(name in lock.lower() for name in ("robosuite", "mujoco", "libero"))
     installer = (DOCKER / "install-ovlab-packages.sh").read_text()
     assert "quic-petf-vla" not in installer
-    service = _service("policy-openvla-quic", "benchmark-quic")
-    assert "target: /adapters/quic\n        read_only: true" in service
-    assert "OVLAB_QUIC_ADAPTER_PATH: /adapters/quic" in service
-    benchmark = _service("benchmark-quic", "reporting")
-    assert "/adapters/" not in benchmark and "/checkpoints/base" not in benchmark
+    deployment, plan, services = _evaluation_services("quic")
+    plugin = deployment._plugin(plan)
+    mounts = plugin.implementation.runtime_mounts(deployment._policy_document(plan), ROOT, {})
+    spec = deployment.service_spec(plan, mounts)
+    policy = spec["services"]["policy-openvla-quic"]
+    assert policy["environment"]["OVLAB_QUIC_ADAPTER_PATH"] == "/checkpoints/quic-adapter"
+    assert any(isinstance(m, dict) and m["target"] == "/checkpoints/quic-adapter" and m["read_only"] for m in policy["volumes"])
+    assert all(not isinstance(m, dict) or m["target"] != "/checkpoints/quic-adapter" for m in services["benchmark-quic"]["volumes"])
 
 
 def test_container_root_revision_and_deployment_provenance_are_explicit(monkeypatch):

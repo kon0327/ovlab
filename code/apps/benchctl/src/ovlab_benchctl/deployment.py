@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import sys
 
 from ovlab_core.progress import draw_progress_line, fit_progress_line
 from ovlab_core.experiment_scope import ExperimentScope
+
+from .policy_plugins import with_registry
 
 from .schema import validate
 from .strict_yaml import load
@@ -82,10 +85,12 @@ class ComposeDeploymentPlan:
     status_command: tuple[str, ...]
     down_command: tuple[str, ...]
     postprocess_command: tuple[str, ...]
+    plugin_type: str = ""
 
     def document(self, *, side_effects_performed: bool) -> dict[str, object]:
         return {
             "deployment": "docker-compose",
+            "plugin_type": self.plugin_type,
             "experiment": self.experiment,
             "profile": self.profile,
             "renderer": self.renderer,
@@ -113,52 +118,85 @@ class ComposeDeploymentPlan:
 class ComposeDeployment:
     """Start and reap one isolated benchmark/policy Compose project."""
 
-    _PROFILES = {
-        "openvla": "benchmark-openvla",
-        "oft": "benchmark-oft",
-        "quic": "benchmark-quic",
-    }
-    _POLICY_SERVICES = {
-        "openvla": "policy-openvla",
-        "oft": "policy-openvla-oft",
-        "quic": "policy-openvla-quic",
-    }
     _RENDERERS = {"egl", "glfw"}
-    _POLICY_PROFILES = {
-        "openvla_vanilla": "openvla",
-        "openvla_lora_merged": "openvla",
-        "openvla_oft": "oft",
-        "openvla_quic": "quic",
-    }
     _RENDERER_EXECUTION_PROFILES = {
         "egl": "profiles/libero-bench-egl.yaml",
         "glfw": "profiles/libero-playground-glfw.yaml",
     }
     _IMAGE_CONTRACT_LABEL = IMAGE_CONTRACT_LABEL
-    _IMAGE_CONTRACTS = {
-        "benchmark": "native-run-config-bundle-v3",
-        "reporting": "canonical-readonly-reporting-v1",
-        "policy-openvla": "resolved-checkpoint-quantization-config-bundle-v2",
-        "policy-openvla-oft": "resolved-checkpoint-quantization-config-bundle-v2",
-        "policy-openvla-quic": "resolved-checkpoint-quantization-config-bundle-v2",
-    }
-    _PROFILE_IMAGES = {
-        "openvla": (
-            ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
-            ("OVLAB_OPENVLA_IMAGE", "ovlab-policy-openvla:local", "policy-openvla"),
-            ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"),
-        ),
-        "oft": (
-            ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
-            ("OVLAB_OFT_IMAGE", "ovlab-policy-openvla-oft:local", "policy-openvla-oft"),
-            ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"),
-        ),
-        "quic": (
-            ("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
-            ("OVLAB_QUIC_IMAGE", "ovlab-policy-openvla-quic:local", "policy-openvla-quic"),
-            ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"),
-        ),
-    }
+    _POLICY_CONTRACT = "resolved-checkpoint-quantization-config-bundle-v2"
+
+    @with_registry
+    def _plugin(self, plan):
+        from .policy_plugins import plugin_for_type, plugin_for_profile
+        return plugin_for_type(plan.plugin_type, self.repository_root) if getattr(plan, "plugin_type", "") else plugin_for_profile(plan.profile, self.repository_root)
+
+    def _profile_images(self, plan):
+        deploy = self._plugin(plan).descriptor["deployment"]
+        return (("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
+                (deploy["image_env"], deploy["image"], deploy["role"]),
+                ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"))
+
+    def _image_contract(self, role):
+        return {"benchmark": "native-run-config-bundle-v3", "reporting": "canonical-readonly-reporting-v1"}.get(role, self._POLICY_CONTRACT)
+
+    def _policy_document(self, plan):
+        builder = ConfigBundleBuilder(self.repository_root)
+        experiment = builder.load_component(plan.experiment.removeprefix("configs/"), "experiment")
+        return builder.load_component(experiment["components"]["policy"], "policy")
+
+    def _runtime_mounts(self, plan, *, check_files=True):
+        from .policy_plugins import call_plugin
+        values = dict(self.environment)
+        # Environment-file paths follow Compose's path convention.
+        for line in Path(plan.env_file).read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() not in values:
+                value = value.strip().strip("\"'")
+                if key.strip().endswith("_HOST_PATH") and value and not Path(value).is_absolute():
+                    value = str((Path(plan.env_file).parent / value).resolve())
+                values[key.strip()] = value
+        mounts = call_plugin(self._plugin(plan), "runtime_mounts", self._policy_document(plan), self.repository_root, values)
+        from .plugin_mounts import validate_runtime_mounts
+        try:
+            return validate_runtime_mounts(mounts, check_files=check_files)
+        except ValueError as exc:
+            raise ComposeDeploymentError(str(exc)) from exc
+
+    @with_registry
+    def service_spec(self, plan, mounts=()):
+        deploy = self._plugin(plan).descriptor["deployment"]
+        from .plugin_mounts import validate_runtime_mounts
+        mounts = validate_runtime_mounts(mounts)
+        text = (Path(__file__).with_name("plugins") / "compose-template.json").read_text()
+        for token, value in {"@POLICY@": deploy["policy_service"], "@BENCHMARK@": deploy["benchmark_service"], "@PROFILE@": deploy["profile"], "@IMAGE@": deploy["image"]}.items():
+            text = text.replace(token, value)
+        document = json.loads(text)
+        policy = document["services"][deploy["policy_service"]]
+        for mount in mounts:
+            policy["volumes"].append({"type": "bind", "source": mount["source"].replace("$", "$$"), "target": mount["target"], "read_only": True})
+            if mount.get("environment"): policy["environment"][mount["environment"]] = mount["target"]
+        if not deploy.get("gpu", True):
+            policy.pop("gpus", None)
+            for key in ("NVIDIA_VISIBLE_DEVICES", "NVIDIA_DRIVER_CAPABILITIES"):
+                policy["environment"].pop(key, None)
+        benchmark = document["services"][deploy["benchmark_service"]]
+        if plan.renderer == "glfw":
+            benchmark["environment"].update(MUJOCO_GL="glfw", DISPLAY="${OVLAB_DISPLAY:-:0}")
+            benchmark["environment"].pop("MUJOCO_EGL_DEVICE_ID", None)
+            benchmark["volumes"].append({"type": "bind", "source": "${OVLAB_X11_SOCKET:-/tmp/.X11-unix}", "target": "/tmp/.X11-unix", "read_only": True})
+        return document
+
+    @contextmanager
+    def _compose_spec(self, plan, mounts):
+        path = Path(plan.compose_files[-1])
+        try:
+            with path.open("x") as stream:
+                json.dump(self.service_spec(plan, mounts), stream, indent=2)
+            yield
+        finally:
+            # Only files created by this context may be removed.
+            if 'stream' in locals(): path.unlink(missing_ok=True)
 
     def __init__(
         self,
@@ -188,6 +226,7 @@ class ComposeDeployment:
         slug = re.sub(r"[^a-z0-9]+", "-", f"{stem}-{profile}".lower()).strip("-")
         return f"ovlab-{slug[:40]}-{process_id}"
 
+    @with_registry
     def plan(
         self,
         experiment: str | Path,
@@ -227,8 +266,6 @@ class ComposeDeployment:
         reporting = experiment_doc.get("reporting", {})
         reporting_enabled = reporting.get("enabled", True)
         reporting_profile = reporting.get("profile", "libero-task-default")
-        if selected_profile not in self._PROFILES:
-            raise ValueError(f"deployment profile must be one of: {', '.join(sorted(self._PROFILES))}")
         if selected_renderer not in self._RENDERERS:
             raise ValueError(f"renderer must be one of: {', '.join(sorted(self._RENDERERS))}")
 
@@ -238,7 +275,9 @@ class ComposeDeployment:
             raise ValueError(f"experiment policy must resolve below configs/policies/: {policy_reference}")
         policy_doc = resolver.load_component(policy_reference, "policy")
         policy_type = policy_doc.get("type")
-        required_profile = self._POLICY_PROFILES.get(policy_type)
+        from .policy_plugins import plugin_for_type
+        deploy = plugin_for_type(policy_type, self.repository_root).descriptor.get("deployment", {})
+        required_profile = deploy.get("profile")
         if required_profile is None:
             raise ValueError(f"policy type {policy_type!r} has no Docker deployment profile")
         if selected_profile != required_profile:
@@ -250,8 +289,8 @@ class ComposeDeployment:
         if quantization is not None and quantization not in {"none", "8bit", "4bit"}:
             raise ConfigSchemaError("quantization must be one of: none, 8bit, 4bit")
         selected_quantization = quantization or policy_doc["settings"]["runtime"]["quantization"]
-        if policy_type == "openvla_quic" and selected_quantization != "none":
-            raise ConfigSchemaError("QuIC supports dense hosts only; quantization must be none")
+        if selected_quantization not in deploy.get("quantization", ["none"]):
+            raise ConfigSchemaError(f"plugin {policy_type} does not support quantization {selected_quantization}")
         quantization_source = "cli" if quantization is not None else "policy"
 
         profile_source = "cli" if profile is not None else "experiment"
@@ -276,22 +315,22 @@ class ComposeDeployment:
             local_profile_path = str(candidate.resolve())
         base = self.repository_root / "deploy/compose/compose.yaml"
         files = [base]
-        if renderer == "glfw":
-            files.append(self.repository_root / "deploy/compose/compose.glfw.yaml")
 
         project = project_name or self._project_slug(experiment_reference, profile, os.getpid())
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
             raise ValueError("Compose project name must contain only lowercase letters, digits, '_' or '-'")
 
+        files.append(base.parent / f".ovlab-{project}.json")
         common: list[str] = [
             "docker", "compose", "--env-file", str(env_path), "--project-name", project,
         ]
         for compose_file in files:
             common.extend(("--file", str(compose_file)))
         common.extend(("--profile", profile))
-        benchmark = self._PROFILES[profile]
+        benchmark = deploy["benchmark_service"]
         return ComposeDeploymentPlan(
             experiment=experiment_reference,
+            plugin_type=policy_type,
             profile=profile,
             renderer=renderer,
             profile_source=profile_source,
@@ -374,7 +413,7 @@ class ComposeDeployment:
         except (TypeError, json.JSONDecodeError) as exc:
             raise ComposeDeploymentError("Docker Compose returned malformed service status") from exc
         services = {row.get("Service"): row for row in rows if isinstance(row, dict)}
-        expected = (self._POLICY_SERVICES[plan.profile], plan.benchmark_service)
+        expected = (self._plugin(plan).descriptor["deployment"]["policy_service"], plan.benchmark_service)
         missing = [service for service in expected if service not in services]
         if missing:
             raise ComposeDeploymentError(
@@ -483,15 +522,17 @@ class ComposeDeployment:
             if not output.is_dir():
                 raise ComposeDeploymentError(f"report output path is not a directory: {output}")
 
-    def _preflight_images(self, plan: ComposeDeploymentPlan) -> None:
+    @with_registry
+    def _preflight_images(self, plan: ComposeDeploymentPlan) -> dict[str, str]:
         rebuild_roles = []
-        for variable, default, role in self._PROFILE_IMAGES[plan.profile]:
+        image_ids = {}
+        for variable, default, role in self._profile_images(plan):
             image = self._environment_value(plan, variable) or default
-            expected_contract = self._IMAGE_CONTRACTS[role]
+            expected_contract = self._image_contract(role)
             completed = self.runner(
                 [
                     "docker", "image", "inspect", "--format",
-                    f'{{{{ index .Config.Labels "{self._IMAGE_CONTRACT_LABEL}" }}}}',
+                    '{"id":{{json .Id}},"labels":{{json .Config.Labels}}}',
                     image,
                 ],
                 cwd=self.repository_root,
@@ -506,9 +547,26 @@ class ComposeDeployment:
                     f"required image is unavailable: {image}; build it with "
                     f"bash deploy/scripts/build-images.sh {role}"
                 )
-            contract = (completed.stdout or "").strip()
+            try:
+                metadata = json.loads(completed.stdout or "null")
+                if not isinstance(metadata, dict): raise ValueError("image metadata must be a mapping")
+                labels = metadata.get("labels") or {}
+                if not isinstance(labels, dict): raise ValueError("image labels must be a mapping")
+                image_id = metadata.get("id")
+                if not isinstance(image_id, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
+                    raise ValueError("image identity must be an immutable Docker image ID")
+                image_ids[role] = image_id
+            except (ValueError, TypeError) as exc:
+                raise ComposeDeploymentError(f"image {image} returned invalid OCI labels") from exc
+            contract = labels.get(self._IMAGE_CONTRACT_LABEL)
             if contract != expected_contract:
                 rebuild_roles.append((image, role, expected_contract, contract or "missing"))
+            elif role == self._plugin(plan).descriptor["deployment"]["role"]:
+                from .plugin_identity import verify_plugin_image
+                try:
+                    verify_plugin_image(labels, self.repository_root, role)
+                except ValueError as exc:
+                    rebuild_roles.append((image, role, "registered plugin identity", str(exc)))
         if rebuild_roles:
             details = []
             for image, _role, expected_contract, contract in rebuild_roles:
@@ -523,6 +581,8 @@ class ComposeDeployment:
                 + "\nRebuild them with:\n"
                 + f"  bash deploy/scripts/build-images.sh {roles}"
             )
+
+        return image_ids
 
     def _dataset_root(self, plan: ComposeDeploymentPlan) -> Path:
         explicit = self._environment_value(plan, "OVLAB_DATASETS_PATH")
@@ -599,32 +659,6 @@ class ComposeDeployment:
             )
         return resolver.resolve(spec, local_path=local_path, offline=plan.offline)
 
-    def _quic_adapter_path(self, plan: ComposeDeploymentPlan) -> Path | None:
-        if plan.profile != "quic":
-            return None
-        override = self._environment_value(plan, "OVLAB_QUIC_ADAPTER_HOST_PATH")
-        if override:
-            adapter = Path(override).expanduser()
-            if not adapter.is_absolute():
-                adapter = Path(plan.env_file).parent / adapter
-        else:
-            resolver = ConfigBundleBuilder(self.repository_root)
-            experiment = resolver.load_component(
-                plan.experiment.removeprefix("configs/"), "experiment"
-            )
-            policy = resolver.load_component(experiment["components"]["policy"], "policy")
-            adapter = Path(policy["settings"]["quic"]["adapter_path"]).expanduser()
-            if not adapter.is_absolute():
-                adapter = self.repository_root / adapter
-        adapter = adapter.resolve()
-        missing = [name for name in ("adapter.json", "adapter.safetensors") if not (adapter / name).is_file()]
-        if missing:
-            raise ComposeDeploymentError(
-                f"QuIC adapter directory {adapter} is missing {', '.join(missing)}; "
-                "set OVLAB_QUIC_ADAPTER_HOST_PATH to the finalized adapter directory"
-            )
-        return adapter
-
     @staticmethod
     def _run_directories(root: Path | None, scope: ExperimentScope | None = None) -> set[Path]:
         if root is None or not root.is_dir():
@@ -636,6 +670,7 @@ class ComposeDeployment:
         paths.update(path.resolve() for path in root.iterdir() if path.is_dir() and path.name not in {"train", "evaluate"})
         return paths
 
+    @with_registry
     def run(self, plan: ComposeDeploymentPlan, *, dry_run: bool = False) -> dict[str, object]:
         bundle_builder = ConfigBundleBuilder(self.repository_root)
         bundle = bundle_builder.build(
@@ -647,13 +682,14 @@ class ComposeDeployment:
             return {
                 **plan.document(side_effects_performed=False),
                 "config_bundle": bundle.summary(),
+                "plugin_services": self.service_spec(plan, self._runtime_mounts(plan, check_files=False)),
             }
         self._preflight_bind_sources(plan)
         datasets_root = self._dataset_root(plan)
-        self._preflight_images(plan)
-        adapter_path = self._quic_adapter_path(plan)
+        image_ids = self._preflight_images(plan) or {}
+        mounts = self._runtime_mounts(plan)
         checkpoint = self._resolve_checkpoint(plan)
-        with bundle_builder.materialize(bundle) as bundle_root:
+        with bundle_builder.materialize(bundle) as bundle_root, self._compose_spec(plan, mounts):
             environment = {
                 **self.environment,
                 "OVLAB_EXPERIMENT_CONFIG": (
@@ -677,8 +713,12 @@ class ComposeDeployment:
                 "OVLAB_CHECKPOINT_REVISION": checkpoint.spec.revision,
                 "OVLAB_CHECKPOINT_SHA256": checkpoint.spec.expected_sha256,
             }
-            if adapter_path is not None:
-                environment["OVLAB_QUIC_ADAPTER_HOST_PATH"] = str(adapter_path)
+            deploy = self._plugin(plan).descriptor["deployment"]
+            environment["OVLAB_POLICY_IMAGE"] = image_ids.get(deploy["role"]) or self._environment_value(plan, deploy["image_env"]) or deploy["image"]
+            for variable, _default, role in self._profile_images(plan):
+                if role in image_ids:
+                    if role != deploy["role"]: environment[variable] = image_ids[role]
+                    environment["OVLAB_POLICY_IMAGE_DIGEST" if role == deploy["role"] else variable + "_DIGEST"] = image_ids[role]
             runs_root = self._bind_source(plan, "OVLAB_RUNS_ROOT")
             scope = ExperimentScope.from_environment(self.environment)
             if scope is not None:

@@ -25,12 +25,20 @@ export. See its [usage guide](code/apps/workflow-builder/README.md).
 
 The experiment runner and benchmark adapter execute together in a runner process or container. Each VLA implementation runs independently as a policy service, communicating through a dependency-light policy protocol. This separation allows Vanilla, LoRA, OFT, and QuIC implementations to keep distinct dependency environments.
 
+Model implementations connect through the versioned [policy plugin API](docs/POLICY_PLUGINS.md).
+The registry binds each plugin to Git commits or local projects and a Docker build
+recipe. Use `./ovlab plugin list`, `./ovlab plugin sync` and
+`./ovlab plugin build PLUGIN`; a new policy family needs no core dispatch or
+Compose changes. A [standalone example plugin](examples/policy-plugin/) demonstrates
+the complete adapter connection.
+
 ## Repository layout
 
 - `code/`: core packages, the policy SDK, benchmark adapters, metrics, policy integrations, applications, and tests.
 - `configs/`: benchmark, policy, metric, protocol, and experiment configuration.
 - `deploy/`: reserved for Docker, Compose, and deployment scripts.
-- `external/`: destinations for pinned external repositories and the dedicated OpenVLA-QuIC fork.
+- `external/`: ignored source workspace populated from registered Git commits or local projects.
+- `references/`: tracked historical source artifacts and their provenance.
 - `runs/<experiment-id>/train|evaluate/`: canonical evidence for experiment
   nodes; contents are not versioned. Legacy direct commands retain their old
   `runs/train|evaluate/` locations.

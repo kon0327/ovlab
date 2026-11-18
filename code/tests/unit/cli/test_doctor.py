@@ -8,6 +8,8 @@ import subprocess
 
 from ovlab_benchctl import cli
 from ovlab_benchctl.doctor import Doctor
+from ovlab_benchctl.plugin_identity import PLUGIN_BUILD_LABEL, plugin_build_identity
+from ovlab_benchctl.image_metadata import IMAGE_CONTRACT_LABEL
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -26,8 +28,8 @@ def _docker(command, **kwargs):
         "ovlab-reporting:local": "canonical-readonly-reporting-v1",
     }
     assert command[1:3] == ["image", "inspect"]
-    assert 'io.github.ovlab.deployment.contract' in command[4]
-    return subprocess.CompletedProcess(command, 0, contracts[command[-1]] + "\n", "")
+    assert command[4] == '{{ json .Config.Labels }}'
+    return subprocess.CompletedProcess(command, 0, json.dumps({IMAGE_CONTRACT_LABEL: contracts[command[-1]], "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(ROOT, "policy-openvla")}), "")
 
 
 def test_host_diagnosis_is_read_only_and_reports_docker_failure(tmp_path):

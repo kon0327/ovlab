@@ -130,6 +130,17 @@ def _parser() -> argparse.ArgumentParser:
     describe.add_argument("config")
     _output_options(describe)
 
+    plugin = commands.add_parser("plugin", help="inspect, sync and build registered model plugins")
+    plugin_commands = plugin.add_subparsers(dest="plugin_command", required=True)
+    for name, help_text in (("list", "list plugin registrations without model imports"), ("inspect", "inspect one plugin and source identities"), ("sync", "materialize registered sources into external/"), ("build", "build plugin images from registered recipes")):
+        command = plugin_commands.add_parser(name, help=help_text)
+        if name != "list": command.add_argument("plugin", nargs="?" if name in {"sync", "build"} else None, help="plugin ID or policy type; omit to select all")
+        command.add_argument("--registry", help="registry JSON path (also OVLAB_PLUGIN_REGISTRY)")
+        if name in {"sync", "build"}:
+            command.add_argument("--offline", action="store_true")
+            command.add_argument("--dry-run", action="store_true")
+        _output_options(command)
+
     service = commands.add_parser("service", help="run an isolated policy service")
     service_commands = service.add_subparsers(dest="service_command", required=True)
     serve = service_commands.add_parser("serve", help="serve one policy over an AF_UNIX socket or TCP port")
@@ -455,7 +466,7 @@ def _application():
 def _command_name(args) -> str:
     parts = [args.command]
     for name in (
-        "config_command", "policy_command", "service_command", "experiment_command", "eval_command", "deploy_command",
+        "config_command", "policy_command", "plugin_command", "service_command", "experiment_command", "eval_command", "deploy_command",
         "metrics_command", "report_command", "export_command",
         "data_command", "dataset_command", "train_command", "ablate_command", "checkpoint_command",
     ):
@@ -891,11 +902,11 @@ def _compact(command: str, result) -> str:
             if check["remedy"]:
                 lines.append(f"  Fix: {check['remedy']}")
         return "\n".join(lines)
-    if command == "policy list":
+    if command in {"policy list", "plugin list"}:
         return _table(result, (
             ("ID", ("id",)), ("FAMILY", ("family",)),
             ("CONFIG TYPE", ("config_type",)), ("RUNTIME", ("runtime_status",)),
-            ("PROFILES", ("supported_quic_profiles",)), ("SOURCES", ("source_repositories",)),
+            ("PROFILES", ("supported_profiles",)), ("SOURCES", ("source_repositories",)),
         ), empty="No policy variants found.")
     if command == "data list":
         rows = result.get("items", ()) if isinstance(result, dict) else ()
@@ -1080,6 +1091,30 @@ def _dispatch(args):
             return json.dumps(document, sort_keys=True, separators=(",", ":")), False, "raw"
         from .strict_yaml import dumps
         return dumps(document), False, "raw"
+    if args.command == "plugin":
+        from .policy_plugins import registered_plugins
+        from .plugin_sources import inspect_sources, sync_sources
+        from .plugin_build import build_images
+        from .policy_plugins import registry_scope
+        root = _repository_root()
+        values = dict(os.environ)
+        if args.registry:
+            path = Path(args.registry).expanduser()
+            values["OVLAB_PLUGIN_REGISTRY"] = str(path if path.is_absolute() else root / path)
+        with registry_scope(root, values):
+            plugins = registered_plugins(root)
+            selection = getattr(args, "plugin", None)
+            selected = [p for p in plugins if selection in (p.descriptor["id"], p.descriptor["config_type"])] if selection else plugins
+            if selection and not selected: raise CliUsageError(f"unknown plugin {selection!r}")
+            sources = list(dict.fromkeys(name for p in selected for name in p.descriptor.get("sources", [])))
+            if args.plugin_command == "list": result = [p.descriptor for p in selected]
+            elif args.plugin_command == "inspect": result = {"plugin": selected[0].descriptor, "sources": inspect_sources(root, sources)}
+            elif args.plugin_command == "sync": result = sync_sources(root, sources if selection else None, offline=args.offline, dry_run=args.dry_run)
+            else:
+                roles = list(dict.fromkeys(p.descriptor["deployment"]["role"] for p in selected if "deployment" in p.descriptor))
+                if selection and not roles: raise CliUsageError(f"plugin {selection!r} has no runnable image recipe")
+                result = build_images(root, roles, offline=args.offline, dry_run=args.dry_run)
+            return result, args.json, None
     if args.command == "policy":
         if args.policy_command == "list":
             from .catalog import registered_policies

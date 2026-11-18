@@ -32,8 +32,8 @@ Select quantization in the policy YAML at `settings.runtime.quantization`, or
 inherited workflow `config.evaluate.component_patches.policy`. The configuration
 bundle records the selected representation and its identity.
 
-QuIC remains descriptor-only. There is no QuIC image, Compose profile, provider
-selection, or claim of runtime readiness in Gate H.
+QuIC policy and training image recipes are registered separately; see
+[docker/QUIC.md](docker/QUIC.md) for the current adapter-only runtime.
 
 ## Reproducibility and provenance
 
@@ -44,11 +44,11 @@ dependency resolution disabled. The OFT Transformers fork is the single VCS
 artifact; both requested revision and resolved commit are
 `bc339d9ad707454c0c115970db43c260067c61ab`.
 
-`scripts/source_manifest.py` records HEAD, clean/dirty state, submodule gitlinks,
+`scripts/source_manifest.py` records HEAD, clean/dirty state, registered source revisions,
 untracked build-relevant files, and content hashes deterministically. The build
 script embeds that manifest and adds OCI labels for repository revision, source
 hash, dirty state, lock hash, Dockerfile hash and image role. Dirty builds are
-allowed but never presented as clean. Portable files below `configs/` are not
+allowed but never presented as clean. The source/build plugin registry is an image input. Other portable files below `configs/` are not
 image inputs: their identity belongs to the per-run configuration bundle, so
 adding or changing an experiment does not require rebuilding an image.
 
@@ -240,14 +240,11 @@ dependencies, Dockerfiles, or external source, rebuild the selected topology:
 bash deploy/scripts/build-images.sh benchmark reporting policy-openvla-oft
 ```
 
-The commands below describe the underlying topology and remain useful for
-diagnostics.
-
-The accepted OpenVLA topology is:
+Policy and benchmark services are generated from the selected plugin registration
+and one shared Compose template. Review the complete service definitions with:
 
 ```bash
-docker compose --file deploy/compose/compose.yaml --profile openvla up \
-  --abort-on-container-exit --exit-code-from benchmark-openvla
+./ovlab eval run libero10-lora-merged-rpc-smoke --dry-run --detail
 ```
 
 The separate OFT topology is selected with `--profile oft`. The benchmark waits
@@ -260,18 +257,14 @@ device in reproducible deployments. The benchmark forces EGL. GLFW remains an
 interactive, dependency-light-tested playground path and is not required by
 headless deployment.
 
-For an interactive WSLg/X11 playground, layer the GLFW overlay on the primary
-project:
+For an interactive WSLg/X11 playground, select the renderer when planning/running
+the experiment:
 
 ```bash
-docker compose \
-  --file deploy/compose/compose.yaml \
-  --file deploy/compose/compose.glfw.yaml \
-  --profile openvla up --abort-on-container-exit \
-  --exit-code-from benchmark-openvla
+./ovlab eval run libero10-lora-merged-rpc-smoke --renderer glfw
 ```
 
-The overlay selects `profiles/libero-playground-glfw.yaml`, explicitly forces
+The generated benchmark service selects `profiles/libero-playground-glfw.yaml`, explicitly forces
 `MUJOCO_GL=glfw`, removes `MUJOCO_EGL_DEVICE_ID`, and mounts only the X11 Unix
 socket read-only. Set `OVLAB_DISPLAY` and `OVLAB_X11_SOCKET` when their host
 values differ. GLFW still requires a live X11/Wayland display server; hiding a

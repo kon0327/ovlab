@@ -39,6 +39,6 @@ dependency at 0.16.6 so both share the Protobuf range supported by TensorFlow
 resolvable/importable closure and is not reproduced in the image.
 
 Docker builds consume only artifacts and hashes selected by these locks. The
-local OVLAB and external submodule packages are installed separately with
+local OVLAB and registered external source packages are installed separately with
 dependency resolution disabled, so an external project cannot broaden the
 image closure implicitly.

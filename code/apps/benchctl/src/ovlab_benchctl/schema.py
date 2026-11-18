@@ -1,6 +1,8 @@
 """Exact kind-specific schemas for OVLAB configuration version 0.1.0."""
 
 from pathlib import Path
+import hashlib
+import re
 from typing import Any
 
 from .errors import ConfigSchemaError
@@ -84,7 +86,7 @@ def validate_experiment(doc, path):
             required=("profile", "renderer"),
             optional=("offline",),
         )
-        enum(deployment["profile"], ("openvla", "oft", "quic"), f"{path}.deployment.profile")
+        non_empty_string(deployment["profile"], f"{path}.deployment.profile")
         enum(deployment["renderer"], ("egl", "glfw"), f"{path}.deployment.renderer")
         if "offline" in deployment:
             exact_type(deployment["offline"], bool, f"{path}.deployment.offline")
@@ -180,61 +182,8 @@ def validate_policy(doc, path):
         raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
         exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
         return
-    if doc["type"] not in ("openvla_vanilla", "openvla_lora_merged", "openvla_oft", "openvla_quic"):
-        raise ConfigSchemaError(
-            f"{path}.type supports openvla_vanilla, openvla_lora_merged, openvla_oft, openvla_quic or mock"
-        )
-    settings = mapping(doc["settings"], f"{path}.settings", required=(
-        "checkpoint_id", "processor_id", "unnorm_key", "input", "runtime", "action", "raw_output"),
-        optional=("quic",) if doc["type"] == "openvla_quic" else ())
-    for key in ("checkpoint_id", "processor_id", "unnorm_key"):
-        exact_type(settings[key], str, f"{path}.settings.{key}")
-    if doc["type"] == "openvla_oft":
-        input_ = mapping(settings["input"], f"{path}.settings.input", required=("cameras", "proprioception"))
-        cameras = mapping(input_["cameras"], f"{path}.settings.input.cameras", required=("primary", "wrist"))
-        for key, value in cameras.items(): non_empty_string(value, f"{path}.settings.input.cameras.{key}")
-        non_empty_string(input_["proprioception"], f"{path}.settings.input.proprioception")
-    else:
-        input_ = mapping(settings["input"], f"{path}.settings.input", required=("camera",))
-        exact_type(input_["camera"], str, f"{path}.settings.input.camera")
-    runtime_keys = (
-        "device_resource", "dtype", "attention_implementation", "local_files_only",
-        "trust_remote_code", "deterministic", "synchronize_inference",
-    )
-    runtime_keys += ("quantization",)
-    runtime = mapping(
-        settings["runtime"], f"{path}.settings.runtime", required=runtime_keys
-    )
-    exact_type(runtime["device_resource"], str, f"{path}.settings.runtime.device_resource")
-    enum(runtime["dtype"], ("bfloat16", "float16", "float32"), f"{path}.settings.runtime.dtype")
-    enum(runtime["quantization"], ("none", "8bit", "4bit"), f"{path}.settings.runtime.quantization")
-    if runtime["attention_implementation"] is not None: exact_type(runtime["attention_implementation"], str, f"{path}.settings.runtime.attention_implementation")
-    for key in ("local_files_only", "trust_remote_code", "deterministic", "synchronize_inference"):
-        exact_type(runtime[key], bool, f"{path}.settings.runtime.{key}")
-    action = mapping(settings["action"], f"{path}.settings.action", required=("codec", "action_interface"))
-    codecs = ("openvla-to-libero-v1", "openvla-decoded-v1") if doc["type"] == "openvla_quic" else ("openvla-to-libero-v1",)
-    enum(action["codec"], codecs, f"{path}.settings.action.codec")
-    non_empty_string(action["action_interface"], f"{path}.settings.action.action_interface")
-    raw = mapping(settings["raw_output"], f"{path}.settings.raw_output", required=("enabled",))
-    exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
-    if doc["type"] == "openvla_quic":
-        if "quic" not in settings:
-            raise ConfigSchemaError(f"{path}.settings.quic is required")
-        quic = mapping(settings["quic"], f"{path}.settings.quic", required=(
-            "adapter_path", "adapter_manifest_sha256", "adapter_tensor_sha256",
-            "prompt_style", "center_crop", "adaptation_state"))
-        non_empty_string(quic["adapter_path"], f"{path}.settings.quic.adapter_path")
-        for name in ("adapter_manifest_sha256", "adapter_tensor_sha256"):
-            digest = quic[name]
-            if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-                raise ConfigSchemaError(f"{path}.settings.quic.{name} must be SHA256")
-        enum(quic["prompt_style"], ("modern", "v01"), f"{path}.settings.quic.prompt_style")
-        exact_type(quic["center_crop"], bool, f"{path}.settings.quic.center_crop")
-        enum(quic["adaptation_state"], ("none", "merged"), f"{path}.settings.quic.adaptation_state")
-        if runtime["quantization"] != "none":
-            raise ConfigSchemaError("QuIC supports dense hosts only; quantization must be none")
-        if raw["enabled"]:
-            raise ConfigSchemaError("QuIC provider does not expose raw policy output")
+    from .policy_plugins import plugin_for_type, call_plugin
+    call_plugin(plugin_for_type(doc["type"]), "validate_policy", doc, path)
 
 
 def validate_action_interface(doc, path):
@@ -320,10 +269,12 @@ def validate_registry(doc, path):
     mapping(doc, path, required=("schema_version", "kind", "checkpoints", "repositories"))
     if not isinstance(doc["checkpoints"], dict) or not doc["checkpoints"]:
         raise ConfigSchemaError(f"{path}.checkpoints must be a non-empty mapping")
-    if not isinstance(doc["repositories"], dict) or not doc["repositories"]:
-        raise ConfigSchemaError(f"{path}.repositories must be a non-empty mapping")
+    if not isinstance(doc["repositories"], dict):
+        raise ConfigSchemaError(f"{path}.repositories must be a mapping")
     for resource_id, entry in doc["checkpoints"].items():
         entry_path = f"{path}.checkpoints.{resource_id}"
+        if not isinstance(resource_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", resource_id) is None:
+            raise ConfigSchemaError(f"{entry_path} requires a path-safe checkpoint ID")
         mapping(
             entry,
             entry_path,
@@ -346,33 +297,29 @@ def validate_registry(doc, path):
             raise ConfigSchemaError(f"{entry_path}.expected_sha256 is required for a pinned revision")
         if ("artifact" in entry) != ("method" in entry):
             raise ConfigSchemaError(f"{entry_path}.artifact and method must be declared together")
-        if "files" in entry:
-            for key in ("revision", "expected_sha256"):
-                non_empty_string(entry[key], f"{entry_path}.{key}")
-            revision = entry["revision"]
-            if len(revision) != 40 or any(
-                character not in "0123456789abcdef" for character in revision
-            ):
-                raise ConfigSchemaError(f"{entry_path}.revision must be a full commit digest")
-            aggregate = entry["expected_sha256"]
-            if len(aggregate) != 64 or any(
-                character not in "0123456789abcdef" for character in aggregate
-            ):
-                raise ConfigSchemaError(f"{entry_path}.expected_sha256 must be a SHA-256 digest")
-            files = entry["files"]
-            exact_type(files, dict, f"{entry_path}.files")
-            if not files:
-                raise ConfigSchemaError(f"{entry_path}.files must not be empty")
-            for name, item in files.items():
-                file_path = f"{entry_path}.files.{name}"
-                non_empty_string(name, f"{file_path}.name")
-                mapping(item, file_path, required=("size", "sha256"))
-                exact_type(item["size"], int, f"{file_path}.size")
-                digest = item["sha256"]
-                if item["size"] <= 0 or not isinstance(digest, str) or len(digest) != 64 or any(
-                    character not in "0123456789abcdef" for character in digest
-                ):
-                    raise ConfigSchemaError(f"{file_path} has invalid identity")
+        aggregate = entry["expected_sha256"]
+        if len(aggregate) != 64 or any(character not in "0123456789abcdef" for character in aggregate):
+            raise ConfigSchemaError(f"{entry_path}.expected_sha256 must be a SHA-256 digest")
+        if "artifact" in entry:
+            exact_type(entry["artifact"], dict, f"{entry_path}.artifact")
+            exact_type(entry["method"], dict, f"{entry_path}.method")
+        files = entry.get("files", entry.get("artifact", {}).get("files"))
+        if not isinstance(files, dict) or not files:
+            raise ConfigSchemaError(f"{entry_path} requires a non-empty file manifest for a pinned checkpoint")
+        manifest = []
+        for name, item in files.items():
+            file_path = f"{entry_path}.files.{name}"
+            non_empty_string(name, f"{file_path}.name")
+            if Path(name).is_absolute() or ".." in Path(name).parts:
+                raise ConfigSchemaError(f"{file_path} must be a relative checkpoint file path")
+            mapping(item, file_path, required=("size", "sha256"))
+            exact_type(item["size"], int, f"{file_path}.size")
+            digest = item["sha256"]
+            if item["size"] < 0 or not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise ConfigSchemaError(f"{file_path} has invalid identity")
+            manifest.append(f"{name} {item['size']} {digest}\n")
+        if hashlib.sha256("".join(manifest).encode()).hexdigest() != aggregate:
+            raise ConfigSchemaError(f"{entry_path} aggregate SHA-256 differs from its file manifest")
         if "artifact" not in entry:
             continue
         for key in ("revision", "expected_sha256"):
@@ -381,134 +328,14 @@ def validate_registry(doc, path):
             character not in "0123456789abcdef" for character in entry["expected_sha256"]
         ):
             raise ConfigSchemaError(f"{entry_path}.expected_sha256 must be a SHA-256 digest")
-        if entry["method"].get("family") == "openvla_oft":
-            artifact = mapping(
-                entry["artifact"], f"{entry_path}.artifact",
-                required=(
-                    "form", "merge_status", "active_peft_adapter", "runtime_peft_modules",
-                    "published_unmerged_adapter", "files", "parameter_counts", "byte_counts",
-                ),
-            )
-            enum(artifact["form"], ("merged_backbone_with_auxiliary_components",), f"{entry_path}.artifact.form")
-            enum(artifact["merge_status"], ("merged",), f"{entry_path}.artifact.merge_status")
-            for key in ("active_peft_adapter", "runtime_peft_modules"):
-                if artifact[key] is not False:
-                    raise ConfigSchemaError(f"{entry_path}.artifact.{key} must be false")
-            if artifact["published_unmerged_adapter"] is not True:
-                raise ConfigSchemaError(f"{entry_path}.artifact.published_unmerged_adapter must be true")
-            files = artifact["files"]
-            exact_type(files, dict, f"{entry_path}.artifact.files")
-            if not files:
-                raise ConfigSchemaError(f"{entry_path}.artifact.files must not be empty")
-            for name, item in files.items():
-                non_empty_string(name, f"{entry_path}.artifact.files.name")
-                mapping(item, f"{entry_path}.artifact.files.{name}", required=("size", "sha256"))
-                exact_type(item["size"], int, f"{entry_path}.artifact.files.{name}.size")
-                digest = item["sha256"]
-                if item["size"] <= 0 or not isinstance(digest, str) or len(digest) != 64 or any(
-                    character not in "0123456789abcdef" for character in digest
-                ):
-                    raise ConfigSchemaError(f"{entry_path}.artifact.files.{name} has invalid identity")
-            counts = mapping(artifact["parameter_counts"], f"{entry_path}.artifact.parameter_counts", required=(
-                "merged_backbone", "lora_trainable", "lora_file_tensors", "action_head",
-                "proprio_projector", "auxiliary", "complete_adaptation", "total_runtime",
-            ))
-            byte_counts = mapping(artifact["byte_counts"], f"{entry_path}.artifact.byte_counts", required=(
-                "merged_backbone_weights", "lora_file", "auxiliary", "complete_adaptation",
-            ))
-            if any(type(value) is not int or value <= 0 for value in (*counts.values(), *byte_counts.values())):
-                raise ConfigSchemaError(f"{entry_path}.artifact parameter and byte counts must be positive integers")
-            method = mapping(entry["method"], f"{entry_path}.method", required=(
-                "id", "version", "family", "acronym_expansion", "backbone_adaptation",
-                "declared_base_model", "declared_base_revision", "artifact_form", "backbone_merge_status",
-                "runtime_active_adapter", "parallel_decoding", "action_representation", "objective",
-                "action_chunk_size", "action_dimension", "normalization", "image_inputs",
-                "proprioception_dimension", "film", "diffusion", "quantization",
-                "adaptation_suite", "dataset_identity", "training_step", "lora", "training_provenance",
-            ))
-            enum(method["acronym_expansion"], ("optimized_fine_tuning",), f"{entry_path}.method.acronym_expansion")
-            enum(method["quantization"], ("none",), f"{entry_path}.method.quantization")
-            if method["film"] is not False or method["diffusion"] is not False:
-                raise ConfigSchemaError(f"{entry_path}.method must not enable FiLM or diffusion")
-            exact_type(method["lora"], dict, f"{entry_path}.method.lora")
-            exact_type(method["training_provenance"], dict, f"{entry_path}.method.training_provenance")
-            continue
-        artifact = mapping(
-            entry["artifact"],
-            f"{entry_path}.artifact",
-            required=(
-                "form", "merge_status", "active_peft_adapter", "runtime_peft_modules",
-                "adapter_config", "adapter_recoverability", "files",
-            ),
-        )
-        enum(artifact["form"], ("merged_full_weights",), f"{entry_path}.artifact.form")
-        enum(artifact["merge_status"], ("merged",), f"{entry_path}.artifact.merge_status")
-        for key in ("active_peft_adapter", "runtime_peft_modules"):
-            exact_type(artifact[key], bool, f"{entry_path}.artifact.{key}")
-            if artifact[key]:
-                raise ConfigSchemaError(f"{entry_path}.artifact.{key} must be false for merged weights")
-        enum(
-            artifact["adapter_config"],
-            ("not_present_in_published_artifact",),
-            f"{entry_path}.artifact.adapter_config",
-        )
-        enum(
-            artifact["adapter_recoverability"],
-            ("not_recoverable_from_published_artifact",),
-            f"{entry_path}.artifact.adapter_recoverability",
-        )
-        exact_type(artifact["files"], dict, f"{entry_path}.artifact.files")
-        if not artifact["files"]:
-            raise ConfigSchemaError(f"{entry_path}.artifact.files must not be empty")
-        for name, item in artifact["files"].items():
-            file_path = f"{entry_path}.artifact.files.{name}"
-            non_empty_string(name, f"{file_path}.name")
-            mapping(item, file_path, required=("size", "sha256"))
-            exact_type(item["size"], int, f"{file_path}.size")
-            if item["size"] <= 0:
-                raise ConfigSchemaError(f"{file_path}.size must be positive")
-            non_empty_string(item["sha256"], f"{file_path}.sha256")
-            if len(item["sha256"]) != 64 or any(
-                character not in "0123456789abcdef" for character in item["sha256"]
-            ):
-                raise ConfigSchemaError(f"{file_path}.sha256 must be a SHA-256 digest")
-        method = mapping(
-            entry["method"],
-            f"{entry_path}.method",
-            required=(
-                "id", "version", "family", "declared_base_model", "declared_base_revision",
-                "adaptation_suite", "quantization", "lora", "training_provenance",
-            ),
-        )
-        for key in ("id", "version", "declared_base_model"):
-            non_empty_string(method[key], f"{entry_path}.method.{key}")
-        if method["declared_base_revision"] is not None:
-            non_empty_string(method["declared_base_revision"], f"{entry_path}.method.declared_base_revision")
-        enum(method["family"], ("lora",), f"{entry_path}.method.family")
-        enum(method["adaptation_suite"], ("LIBERO-10",), f"{entry_path}.method.adaptation_suite")
-        enum(method["quantization"], ("none",), f"{entry_path}.method.quantization")
-        lora = mapping(
-            method["lora"],
-            f"{entry_path}.method.lora",
-            required=(
-                "rank", "alpha", "scaling", "dropout", "bias", "target_policy",
-                "modules_to_save", "merge_procedure",
-            ),
-        )
-        for key in ("rank", "alpha"):
-            exact_type(lora[key], int, f"{entry_path}.method.lora.{key}")
-        for key in ("scaling", "dropout"):
-            number(lora[key], f"{entry_path}.method.lora.{key}")
-        enum(lora["bias"], ("none",), f"{entry_path}.method.lora.bias")
-        enum(lora["target_policy"], ("all-linear",), f"{entry_path}.method.lora.target_policy")
-        if lora["modules_to_save"] is not None:
-            raise ConfigSchemaError(f"{entry_path}.method.lora.modules_to_save must be null")
-        enum(
-            lora["merge_procedure"],
-            ("merge_and_unload()+save_pretrained()",),
-            f"{entry_path}.method.lora.merge_procedure",
-        )
-        exact_type(method["training_provenance"], dict, f"{entry_path}.method.training_provenance")
+        from .policy_plugins import registered_plugins, call_plugin
+        exact_type(entry["method"], dict, f"{entry_path}.method")
+        exact_type(entry["artifact"], dict, f"{entry_path}.artifact")
+        family = entry["method"].get("family")
+        for plugin in registered_plugins():
+            if (entry["artifact"].get("form") in plugin.descriptor.get("artifact_forms", []) or plugin.descriptor["family"] == family) and plugin.descriptor.get("entrypoint"):
+                call_plugin(plugin, "validate_checkpoint", entry, entry_path)
+                break
     for resource_id, entry in doc["repositories"].items():
         mapping(entry, f"{path}.repositories.{resource_id}", required=("path",))
         exact_type(entry["path"], str, f"{path}.repositories.{resource_id}.path")
@@ -580,134 +407,6 @@ def validate_artifacts(doc, path):
     exact_type(settings["root_resource"], str, f"{path}.settings.root_resource")
 
 
-def validate_quic_policy_descriptor(doc, path):
-    header(doc, path, "quic_policy_descriptor", identified=True)
-    common = (
-        "schema_version", "kind", "id", "variant", "mode", "family", "descriptor_mode",
-        "implementation_status", "source_import_status", "generic_compound_backend_status",
-        "openvla_integration_status", "runtime_validated", "training_validated",
-        "libero_validated", "compression_verified",
-        "published_method_relation", "weight_compression", "profile", "placement_manifest",
-        "external_provider", "source", "base_model", "artifact", "provenance", "deployment_state",
-        "capabilities", "normalization", "parameterization", "accounting",
-        "unavailable_fields", "semantics",
-    )
-    mapping(doc, path, required=common)
-    enum(doc["variant"], ("quic-peft", "quic-wc"), f"{path}.variant")
-    expected_mode = "peft" if doc["variant"] == "quic-peft" else "wc"
-    expected_relation = "direct" if expected_mode == "peft" else "proposed_extension"
-    if doc["id"] != doc["variant"]:
-        raise ConfigSchemaError(f"{path}.id must equal its unambiguous variant ID")
-    enum(doc["mode"], (expected_mode,), f"{path}.mode")
-    enum(doc["family"], ("openvla_quic",), f"{path}.family")
-    if doc["descriptor_mode"] is not True:
-        raise ConfigSchemaError(f"{path}.descriptor_mode must be true in Gate F")
-    enum(doc["implementation_status"], ("skeleton",), f"{path}.implementation_status")
-    expected_source = "present" if expected_mode == "peft" else "absent"
-    expected_backend = "legacy_reference_available" if expected_mode == "peft" else "not_applicable"
-    enum(doc["source_import_status"], (expected_source,), f"{path}.source_import_status")
-    enum(doc["generic_compound_backend_status"], (expected_backend,), f"{path}.generic_compound_backend_status")
-    enum(doc["openvla_integration_status"], ("skeleton",), f"{path}.openvla_integration_status")
-    for name in ("runtime_validated", "training_validated", "libero_validated", "compression_verified"):
-        if doc[name] is not False:
-            raise ConfigSchemaError(f"{path} skeleton cannot claim {name}")
-    enum(doc["published_method_relation"], (expected_relation,), f"{path}.published_method_relation")
-    expected_compression = expected_mode == "wc"
-    if doc["weight_compression"] is not expected_compression:
-        raise ConfigSchemaError(f"{path}.weight_compression misclassifies the variant")
-    profile = mapping(doc["profile"], f"{path}.profile", required=(
-        "id", "definition_availability", "definition_version", "definition_hash",
-    ))
-    enum(profile["id"], ("QP0", "QP1", "QP2", "QP3", "QP4"), f"{path}.profile.id")
-    expected_profile_availability = "not_applicable" if profile["id"] == "QP0" else "unresolved"
-    enum(profile["definition_availability"], (expected_profile_availability,), f"{path}.profile.definition_availability")
-    if profile["definition_version"] is not None or profile["definition_hash"] is not None:
-        raise ConfigSchemaError(f"{path}.profile must not invent a Gate F definition")
-    placement = mapping(doc["placement_manifest"], f"{path}.placement_manifest", required=(
-        "availability", "version", "hash", "entries",
-    ))
-    enum(placement["availability"], ("unresolved",), f"{path}.placement_manifest.availability")
-    if placement["version"] is not None or placement["hash"] is not None or placement["entries"] != []:
-        raise ConfigSchemaError(f"{path}.placement_manifest must remain unresolved and empty")
-    provider = mapping(doc["external_provider"], f"{path}.external_provider", required=(
-        "package", "api_name", "api_version", "source_repository", "source_commit",
-    ))
-    expected_provider = {
-        "package": "ovlab_openvla_quic.runtime", "api_name": "ovlab-quic-provider",
-        "api_version": "1.0.0", "source_repository": "external/openvla-quic",
-        "source_commit": "deab81fbe4035c3de2c2da3d63db966fe3361f82",
-    }
-    if provider != expected_provider:
-        raise ConfigSchemaError(f"{path}.external_provider must identify the pinned public API boundary")
-    if expected_mode == "peft":
-        source = mapping(doc["source"], f"{path}.source", required=(
-            "availability", "path", "source_origin", "source_revision_kind", "archive_sha256",
-            "archive_verification", "extracted_manifest_sha256", "file_count",
-            "upstream_git_revision", "official_implementation_status", "relation_to_paper",
-            "scientific_oracle_status", "package_version", "license",
-        ))
-        expected_source_identity = {
-            "availability": "available", "path": "external/compound-peft",
-            "source_origin": "user_supplied_archive", "source_revision_kind": "content_hash",
-            "archive_sha256": "b024ba61b852d83beec631b724489b3bc3055c4a883f2df0c05b6c9857103e9a",
-            "archive_verification": "user_supplied_archive_not_locally_available",
-            "extracted_manifest_sha256": "8084213849149a47f9bf84dd0c9220b319faf7df8dba39cdef3894e85e00f845",
-            "file_count": 130, "upstream_git_revision": "unavailable",
-            "official_implementation_status": "unverified",
-            "relation_to_paper": "claimed_by_readme_unverified",
-            "scientific_oracle_status": False, "package_version": "0.12.1.dev0",
-            "license": "Apache-2.0",
-        }
-        if source != expected_source_identity:
-            raise ConfigSchemaError(f"{path}.source differs from the immutable source intake")
-    else:
-        source = mapping(doc["source"], f"{path}.source", required=("availability", "reason"))
-        if source["availability"] != "unavailable":
-            raise ConfigSchemaError(f"{path}.source must remain unavailable for QuIC-WC")
-        non_empty_string(source["reason"], f"{path}.source.reason")
-    for name in (
-        "base_model", "artifact", "provenance", "deployment_state", "capabilities",
-        "normalization", "parameterization", "accounting",
-    ):
-        item = mapping(doc[name], f"{path}.{name}", required=("availability", "reason"))
-        enum(item["availability"], ("unavailable",), f"{path}.{name}.availability")
-        non_empty_string(item["reason"], f"{path}.{name}.reason")
-    exact_type(doc["unavailable_fields"], list, f"{path}.unavailable_fields")
-    if not doc["unavailable_fields"] or len(doc["unavailable_fields"]) != len(set(doc["unavailable_fields"])):
-        raise ConfigSchemaError(f"{path}.unavailable_fields must list unique unavailable evidence")
-    if any(not isinstance(item, str) or not item for item in doc["unavailable_fields"]):
-        raise ConfigSchemaError(f"{path}.unavailable_fields must contain non-empty strings")
-    if expected_mode == "peft":
-        semantics = mapping(doc["semantics"], f"{path}.semantics", required=(
-            "requires_base_model", "deployment_replaces_base_weights", "adaptation_type",
-            "published_adapter_efficiency_only", "standalone_weight_compression",
-            "dense_adapter_materialization", "complete_base_model_required",
-        ))
-        if semantics != {
-            "requires_base_model": True,
-            "deployment_replaces_base_weights": False,
-            "adaptation_type": "multiplicative_adapter",
-            "published_adapter_efficiency_only": True,
-            "standalone_weight_compression": False,
-            "dense_adapter_materialization": True,
-            "complete_base_model_required": True,
-        }:
-            raise ConfigSchemaError(f"{path}.semantics misclassifies QuIC-PEFT")
-    else:
-        semantics = mapping(doc["semantics"], f"{path}.semantics", required=(
-            "requires_dense_source_for_conversion", "requires_replaced_dense_weights_at_deployment",
-            "deployment_replaces_selected_weights", "dense_runtime_reconstruction_allowed",
-            "dense_adapter_materialization_allowed", "factorization_family",
-        ))
-        if semantics != {
-            "requires_dense_source_for_conversion": "configurable",
-            "requires_replaced_dense_weights_at_deployment": False,
-            "deployment_replaces_selected_weights": True,
-            "dense_runtime_reconstruction_allowed": False,
-            "dense_adapter_materialization_allowed": False,
-            "factorization_family": "unselected",
-        }:
-            raise ConfigSchemaError(f"{path}.semantics misclassifies QuIC-WC")
 
 
 def validate_deployment(doc, path):
@@ -731,7 +430,7 @@ def validate_deployment(doc, path):
     runtime = mapping(doc.get("runtime", {}), f"{path}.runtime", optional=("quantization", "gpu"))
     if "quantization" in runtime:
         enum(runtime["quantization"], ("none", "8bit", "4bit"), f"{path}.runtime.quantization")
-    if "gpu" in runtime:
+    if "gpu" in runtime and runtime["gpu"] is not None:
         non_empty_string(runtime["gpu"], f"{path}.runtime.gpu")
     service = mapping(doc.get("service", {}), f"{path}.service",
                       optional=("host", "port", "container_port", "restart", "readiness_timeout_s"))
@@ -764,14 +463,19 @@ VALIDATORS = {
     "action_interface": validate_action_interface, "metric_set": validate_metric_set, "protocol": validate_protocol,
     "resource_registry": validate_registry, "local_profile": validate_local_profile,
     "execution_profile": validate_execution_profile, "artifact_store": validate_artifacts,
-    "quic_policy_descriptor": validate_quic_policy_descriptor,
 }
 
 
-def validate(doc: dict[str, Any], path: str, expected_kind: str | None = None) -> None:
+def validate(doc: dict[str, Any], path: str, expected_kind: str | None = None, *, repository_root=None) -> None:
     kind = doc.get("kind")
     if expected_kind is not None and kind != expected_kind:
         raise ConfigSchemaError(f"{path}.kind must equal {expected_kind!r}, got {kind!r}")
-    try: validator = VALIDATORS[kind]
-    except (KeyError, TypeError) as exc: raise ConfigSchemaError(f"{path}.kind is unknown: {kind!r}") from exc
-    validator(doc, path)
+    from .policy_plugins import registry_scope, plugin_for_document, call_plugin
+    with registry_scope(repository_root):
+        validator = VALIDATORS.get(kind) if isinstance(kind, str) else None
+        if validator is not None:
+            validator(doc, path)
+            return
+        plugin = plugin_for_document(kind, repository_root)
+        if plugin is None: raise ConfigSchemaError(f"{path}.kind is unknown: {kind!r}")
+        call_plugin(plugin, "validate_document", doc, path)

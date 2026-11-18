@@ -1,0 +1,12 @@
+schema_version: "0.1.0"
+kind: resource_registry
+checkpoints:
+  example-constant:
+    repo_id: ovlab-example/constant-policy
+    revision: "0000000000000000000000000000000000000000"
+    expected_sha256: "baebe2aa700c07ce20f82d3a7d59729d4ba1c5b51ca4d89f713c511c1b83e1ce"
+    files:
+      metadata.json:
+        size: 34
+        sha256: "1cb6d171027119fc8f0fbc1a36d47c951d8364a24048c8597f11c603c90b4edc"
+repositories: {}

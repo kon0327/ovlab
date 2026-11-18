@@ -9,8 +9,6 @@ import uuid
 
 from ovlab_benchmarks.libero import LiberoAdapterSettings
 from ovlab_core.contracts import ActionSpec, Metadata, normalize_metadata
-from ovlab_openvla_vanilla import OpenVlaVanillaSettings
-from ovlab_openvla_oft import OpenVlaOftSettings
 from ovlab_runner import (
     ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
     ExperimentPlan, MetricAvailabilityPolicy, RunConfigurationSnapshot, TraceRecordingPolicy,
@@ -140,7 +138,7 @@ class ReportingSettings:
 class ResolvedExperimentConfig:
     experiment_id: str
     benchmark_settings: LiberoAdapterSettings | MockBenchmarkSettings
-    policy_settings: OpenVlaVanillaSettings | OpenVlaOftSettings | MockPolicySettings
+    policy_settings: object
     action_spec: ActionSpec
     metric_settings: MetricSetSettings
     protocol_settings: ProtocolSettings

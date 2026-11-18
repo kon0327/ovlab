@@ -294,7 +294,7 @@ class ExplodingTestLoader:
             QuICVariant.PEFT, OpenVLAQuICPEFTAdapter, "I",
             QuICPEFTIntegrationIncompleteError,
             "legacy_reference_available_openvla_integration_skeleton",
-            "external/openvla-quic -> external/compound-peft",
+            "external/openvla-quic -> references/compound-peft",
         ),
         (
             QuICVariant.WC, OpenVLAQuICWCAdapter, "J",

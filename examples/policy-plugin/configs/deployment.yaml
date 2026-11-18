@@ -1,0 +1,14 @@
+schema_version: ovlab.deployment/v1
+kind: deployment
+id: example-plugin
+components:
+  policy: policies/example-plugin.yaml
+resources:
+  registry: resources/example-plugin.yaml
+build: false
+runtime:
+  gpu: null
+service:
+  host: 127.0.0.1
+  port: 8123
+  readiness_timeout_s: 60

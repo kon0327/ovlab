@@ -11,12 +11,9 @@ authors = [{ name = "Jiří Konečný" }]
 requires-python = ">=3.10"
 dependencies = [
   "ovlab-core>=0.2.0",
+  "ovlab-policy-sdk>=0.2.0",
   "ovlab-benchmarks>=0.2.0",
   "ovlab-metrics>=0.2.0",
-  "ovlab-openvla-common>=0.2.0",
-  "ovlab-openvla-vanilla>=0.2.0",
-  "ovlab-openvla-oft>=0.2.0",
-  "ovlab-openvla-quic>=0.2.0",
   "ovlab-remote-policy>=0.2.0",
   "ovlab-runner>=0.2.0",
   "numpy>=1.24",
@@ -28,3 +25,6 @@ ovlab = "ovlab_benchctl.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+ovlab_benchctl = ["plugins/*.json"]

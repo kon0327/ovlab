@@ -17,3 +17,15 @@ concrete policy integrations, not this dependency-light package.
 
 Both adapter packages depend independently on `ovlab-core`; neither adapter
 package depends on the other.
+
+## Model plugins
+
+The versioned `ovlab_policy_sdk.plugin.PolicyPlugin` API connects external model
+projects to configuration, Docker builds, serving and evaluation. See the
+[developer guide](../../../docs/POLICY_PLUGINS.md) and
+[standalone example](../../../examples/policy-plugin/).
+
+Start with the example README for the complete CPU service workflow. Plugin control
+hooks are stateless and run on the host; model and episode state belong to the
+adapter. The settings returned by `resolve_settings` must expose the structural
+`PolicySettings.record_raw_output: bool` contract.

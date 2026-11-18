@@ -17,7 +17,7 @@ OVLAB benchmark adapter -> simulator and rollout evaluation
 
 `quic-peft-vla` has its own repository and depends on Torch and Safetensors. It is
 an independent MIT-licensed Git repository pinned as the
-`external/quic-peft-vla` submodule. Its published Python distribution and import
+registered `external/quic-peft-vla` source. Its published Python distribution and import
 names remain compatible. Tests, CI, source provenance and installation
 instructions are in its README.
 OpenVLA declares the versioned dependency; QuIC images install the local package

@@ -37,3 +37,7 @@ dist/
 !.env.example
 configs/local/*.yaml
 !configs/local/profile.example.yaml
+
+# Materialized plugin sources and generated Compose plans
+/external/
+/deploy/compose/.ovlab-*.json
