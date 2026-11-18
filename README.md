@@ -18,6 +18,11 @@ hierarchical report. See the [experiment workflow guide](docs/EXPERIMENT_WORKFLO
 and example [YAML](experiments/workflows/libero-model-tree.yaml) or
 [JSON](experiments/workflows/libero-model-tree.json).
 
+For visual authoring, run `ovlab editor` to open the static
+[Workflow Studio](code/apps/workflow-builder/index.html) in a browser. It offers
+the repository's real profiles, hierarchical nodes, checkpoint handoff and YAML
+export. See its [usage guide](code/apps/workflow-builder/README.md).
+
 The experiment runner and benchmark adapter execute together in a runner process or container. Each VLA implementation runs independently as a policy service, communicating through a dependency-light policy protocol. This separation allows Vanilla, LoRA, OFT, and QuIC implementations to keep distinct dependency environments.
 
 ## Repository layout

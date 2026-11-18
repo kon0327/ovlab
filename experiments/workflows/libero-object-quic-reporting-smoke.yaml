@@ -1,0 +1,59 @@
+# Train one QuIC adapter, then evaluate that exact checkpoint on the same two
+# LIBERO-Object tasks. Short training and rollouts exercise the reports and
+# checkpoint handoff; their scores are not a model-quality measurement.
+schema_version: ovlab.experiment/v1
+kind: workflow
+id: libero-object-quic-reporting-smoke
+name: LIBERO-Object QuIC training and evaluation reporting smoke
+
+execution:
+  max_workers: 1
+
+config:
+  train:
+    profile: quic/lora-coverage/libero-object-smoke.yaml
+    patch:
+      dataset:
+        partition:
+          # These dataset groups are benchmark task indices 0 and 1.
+          groups:
+            - pick_up_the_alphabet_soup_and_place_it_in_the_basket
+            - pick_up_the_cream_cheese_and_place_it_in_the_basket
+          max_episodes_per_group: 4
+          validation_fraction: 0.25
+          frame_stride: 8
+          max_frames_per_episode: 8
+      training:
+        # Keep the inherited QuIC profile practical for a single 24-GiB GPU.
+        per_device_batch_size: 1
+        max_steps: 3
+  evaluate:
+    # Empty path selects the root node's finalized training checkpoint.
+    checkpoint_from: ""
+    profile: libero10-quic-adapter-rpc-smoke.yaml
+    patch:
+      experiment:
+        id: reporting-libero-object-trained-quic
+        name: Newly trained QuIC on two LIBERO-Object tasks
+        tags: [libero-object, quic, workflow-trained, reporting-smoke]
+      components:
+        benchmark: benchmarks/libero/object.yaml
+        protocol: protocols/libero-official-episode-v1.yaml
+    component_patches:
+      benchmark:
+        settings:
+          task_indices: [0, 1]
+      protocol:
+        execution:
+          maximum_episode_steps: 30
+      policy:
+        settings:
+          # The training profile fits action normalization for this suite.
+          unnorm_key: libero_object
+
+execute: [train]
+
+children:
+  - id: evaluate-checkpoint
+    name: Evaluate the newly trained QuIC checkpoint
+    execute: [evaluate]

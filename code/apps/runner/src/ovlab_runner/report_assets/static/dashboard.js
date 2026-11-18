@@ -188,7 +188,7 @@
         selectedEpisode=loaded;recordSlider.max=Math.max(0,loaded.records.length-1);recordSlider.value=0;load.disabled=false;
         $("batch").replaceChildren(node("p",`Rollout ${loaded.rollout_index} · seed ${loaded.seed} · ${loaded.terminal_status} · ${loaded.counts.predictions} calls · ${loaded.counts.executed_actions} applied actions. Every recorded policy call is selectable.`));
         contextHost.replaceChildren();const {records,...context}=loaded;contextHost.append(detail(`Episode context and metrics · ${loaded.episode_id}`,context));
-        if(loaded.video_href){const link=node("a","Open canonical episode video");link.href=(data.report_prefix||"")+loaded.video_href;link.setAttribute("aria-label",`Open canonical video for ${loaded.episode_id}`);contextHost.append(link);}
+        if(loaded.video_href){const link=node("a","Open canonical episode video");link.href=(data.report_prefix||"")+loaded.video_href;link.setAttribute("aria-label",`Open canonical episode video for ${loaded.episode_id}`);contextHost.append(link);}
         renderRecord();renderSelectedActions(loaded);
       }catch(error){if(version!==requestVersion)return;load.disabled=false;$("batch").replaceChildren(node("p",error.message));}
     }

@@ -57,6 +57,11 @@ def test_scoped_grouped_compares_only_shared_tasks(tmp_path, monkeypatch):
     assert published["integrity"] == "verified"
     metadata = json.loads((target / "metadata.json").read_text())
     assert metadata["comparison"]["status"] == "comparable"
+    assert (target / "index.html").is_file()
+    quick = json.loads((target / "quick-comparison.json").read_text())
+    assert quick["task_ids"] == ["mock-task-1"]
+    assert {row["episodes"] for row in quick["rows"]} == {1}
+    assert {row["values"]["task.success_rate"] for row in quick["rows"]} == {0}  # fixture episodes reach their step limit.
     assert metadata["comparison"]["compared_task_ids"] == ["mock-task-1"]
     assert len(_rows(target / "tables/task-coverage.csv")) == 4
     compared = _rows(target / "tables/comparison-summary.csv")
@@ -80,6 +85,8 @@ def test_scoped_grouped_marks_no_common_tasks_without_comparison_figures(tmp_pat
     assert metadata["comparison"]["status"] == "no_shared_tasks"
     assert not (target / "tables/comparison-summary.csv").exists()
     assert not (target / "figures/success-comparison.png").exists()
+    assert json.loads((target / "quick-comparison.json").read_text())["metrics"] == []
+    assert "no shared tasks" in (target / "index.html").read_text()
     assert _rows(target / "tables/task-coverage.csv")
 
 
@@ -148,3 +155,8 @@ def test_report_automatically_exports_completed_experiment_as_group(tmp_path):
     assert all(item["integrity"] == "verified" for item in exports)
     assert (Path(groups["family"]["output"]) / "tables/run-summary.csv").is_file()
     assert (Path(groups[""]["output"]) / "tables/run-summary.csv").is_file()
+    overview = (tmp_path / "exports/study-auto/index.html").read_text()
+    assert 'Open grouped report' in overview
+    assert 'Not scheduled' not in overview
+    assert 'href="v/' in overview
+    assert '<script src=' not in overview  # no individual dashboards or episode payloads on the overview.

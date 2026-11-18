@@ -462,6 +462,33 @@ a distinct build. Verify a customized build with the same configuration.
 
 ## Isolated and grouped exports
 
+Experiment overviews distinguish grouping nodes from executable phases. A group
+shows the number of completed child runs instead of an ambiguous “Not scheduled”
+status. Each grouped export has an offline HTML page and a compact
+`quick-comparison.json`, also embedded in the experiment overview. The overview
+does not load individual run dashboards or episode payloads.
+
+Quick comparisons use shared task IDs with equal task weights. Success and
+failure rates use percentage-point changes; other quantities use relative
+percent changes against a selectable reference. Deltas require matching metric
+definitions, recorded trial settings and compute estimators. Missing values
+and zero reference denominators do not produce percentage claims. Inference and
+estimated compute are amortized over applied actions to account for action
+chunks. VRAM reports observed allocated memory; it is not device utilization.
+
+The experiment's `v/` directory contains disposable browser views with short
+paths for Windows/WSL file access. Interactive views preserve on-demand episode
+loading; static export views shorten asset filenames. Original report bundles,
+their checksums and canonical runs remain the authoritative artifacts.
+
+Comparison tables keep variant names visible while scrolling and support
+keyboard reference selection. Missing values, incompatible definitions and
+zero denominators have distinct explanations; small evaluation samples are
+flagged above the values. Without JavaScript, the initial reference and all
+recorded values remain readable. Figure previews support keyboard activation,
+Escape to close and focus restoration. Short browser views include an explicit
+return to the experiment and local copies of referenced canonical videos.
+
 Exports contain ordinary CSV tables, PNG/PDF figures, and a readable
 `metadata.json`. Isolated exports also have an offline `index.html` for
 browsing figures, tables and metadata directly in a browser. They never scrape

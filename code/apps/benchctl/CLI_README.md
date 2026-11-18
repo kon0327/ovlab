@@ -39,6 +39,19 @@ The source-tree launcher does not install or update packages. `deploy` commands
 need only system Python 3, Docker Engine and Docker Compose; they do not require
 an activated Conda environment.
 
+Open the static workflow editor in the host's default browser with:
+
+```bash
+ovlab editor
+```
+
+This works from any directory. On WSL, it converts the editor path with
+`wslpath` and opens it using the default Windows file association. On Linux it
+uses `xdg-open`.
+The command does not start a web server or Docker container. See the
+[Workflow Studio guide](../workflow-builder/README.md) for editing and catalog
+refresh instructions.
+
 ## Output modes
 
 Structured commands use one consistent output contract:

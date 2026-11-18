@@ -11,7 +11,6 @@ from copy import deepcopy
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import hashlib
-import html
 import json
 import os
 from pathlib import Path
@@ -22,7 +21,6 @@ import subprocess
 import sys
 import threading
 import uuid
-from urllib.parse import quote
 
 from .config_bundle import ConfigBundleBuilder
 from .errors import ConfigError, StrictYamlError
@@ -290,163 +288,14 @@ def _write_json(path, document):
     os.replace(temporary, path)
 
 
-def _export_link(export_root: Path, candidate: str | Path | None):
-    """Use only existing files within this experiment's export directory."""
-    if not candidate:
-        return None
-    target = Path(candidate).expanduser().resolve()
-    root = export_root.resolve()
-    if not target.is_relative_to(root):
-        return None
-    if target.is_dir():
-        target = next((target / name for name in (
-            "index.html", "summary.json", "comparison.json", "metadata.json",
-        ) if (target / name).is_file()), target)
-    if not target.is_file():
-        return None
-    return "/".join(quote(part, safe="") for part in target.relative_to(root).parts)
-
-
-def _latest_report(export_root: Path, node_root: Path, run_id: str, profile: str):
-    profile_root = node_root / "interactive" / run_id / profile
-    latest = profile_root / "latest.json"
-    if not latest.is_file():
-        return None
-    try:
-        build = json.loads(latest.read_text(encoding="utf-8")).get("build_id")
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(build, str) or _SAFE.fullmatch(build) is None:
-        return None
-    target = profile_root / build / "index.html"
-    return target if _export_link(export_root, target) else None
-
-
-def _comparison_status(grouped, phase: str, export_root: Path):
-    output = grouped.get("result", {}).get("output")
-    if not isinstance(output, str):
-        return "Unavailable"
-    path = Path(output).expanduser().resolve()
-    if not path.is_relative_to(export_root.resolve()):
-        return "Unavailable"
-    source = path / ("comparison.json" if phase == "train" else "metadata.json")
-    try:
-        document = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return "Recorded; comparison details unavailable"
-    comparison = document if phase == "train" else document.get("comparison", {})
-    status = comparison.get("status") if isinstance(comparison, dict) else None
-    return str(status).replace("_", " ") if status else "Recorded; comparison status unavailable"
-
-
 def build_experiment_index(plan, result, export_root: Path):
-    """Render a static, fully visible experiment tree with safe local links."""
-    root = Path(export_root).resolve()
-    nodes = {node["path"]: node for node in plan["nodes"]}
-    selected = set(plan["selected_nodes"])
-    phase_results = result.get("nodes", {})
-    grouped = result.get("grouped", {})
-
-    def esc(value):
-        return html.escape(str(value), quote=True)
-
-    def link(candidate, label):
-        href = _export_link(root, candidate)
-        return (f'<a href="{esc(href)}">{esc(label)}</a>' if href
-                else f'<span class="unavailable">{esc(label)} unavailable</span>')
-
-    def render_node(path):
-        node = nodes[path]
-        node_results = phase_results.get(path, {})
-        node_export = root
-        segments = path.split("/") if path else []
-        anchor = "node-" + hashlib.sha256(path.encode("utf-8")).hexdigest()[:12]
-        rows = []
-        for phase in _PHASES:
-            phase_result = node_results.get(phase)
-            if phase_result:
-                run_id = phase_result["run_id"]
-                node_root = node_export / phase / Path(*segments)
-                configured = node.get("configuration", {}).get(phase, {})
-                profile = ("system-performance" if phase == "train" else
-                           configured.get("document", {}).get("reporting", {}).get("profile", "libero-task-default"))
-                report_result = (phase_result.get("result", {}).get("performance_report") if phase == "train" else
-                                 phase_result.get("postprocessing", {}).get("report")) or {}
-                report_path = report_result.get("interactive_output") if isinstance(report_result, dict) else None
-                if not _export_link(root, report_path):
-                    report_path = _latest_report(root, node_root, run_id, profile)
-                isolated_result = (phase_result.get("isolated_export") if phase == "train" else
-                                   phase_result.get("postprocessing", {}).get("isolated_export")) or {}
-                isolated_path = isolated_result.get("output") if isinstance(isolated_result, dict) else None
-                if not _export_link(root, isolated_path):
-                    isolated_path = node_root / "isolated" / run_id
-                rows.append(
-                    f'<article class="phase"><h3>{esc(phase.title())}</h3>'
-                    f'<p><strong>Completed</strong> · Run <code>{esc(run_id)}</code></p>'
-                    f'<p>{link(report_path, "Interactive report")} · {link(isolated_path, "Isolated export")}</p></article>'
-                )
-            else:
-                status = ("Pending" if result["status"] == "running" else "Unavailable") if (
-                    phase in node["execute"] and path in selected
-                ) else ("Not selected" if phase in node["execute"] else "Not scheduled")
-                rows.append(f'<article class="phase"><h3>{esc(phase.title())}</h3><p>{esc(status)}</p></article>')
-        comparison_rows = []
-        for phase in _PHASES:
-            item = grouped.get(phase, {}).get(path)
-            if item:
-                output = item.get("result", {}).get("output")
-                comparison_rows.append(
-                    f'<p>{esc(phase.title())} comparison: {esc(_comparison_status(item, phase, root))} · '
-                    f'{link(output, "Grouped export")}</p>'
-                )
-            elif node["children"]:
-                comparison_rows.append(f'<p>{esc(phase.title())} comparison: Not generated</p>')
-        children = "".join(f'<li>{render_node(f"{path}/{child}".strip("/"))}</li>' for child in node["children"])
-        child_list = f'<ol class="children">{children}</ol>' if children else ""
-        label = path or "Root"
-        return (
-            f'<section class="node" id="{anchor}"><h2>{esc(node["name"])} '
-            f'<span class="path">{esc(label)}</span></h2>'
-            f'<div class="phases">{"".join(rows)}</div>'
-            f'<div class="comparisons">{"".join(comparison_rows)}</div>{child_list}</section>'
-        )
-
-    status = result.get("status", "unknown")
-    failure = result.get("failure")
-    failure_html = (f'<p class="failure">{esc(failure.get("type", "Failure"))}: '
-                    f'{esc(failure.get("message", ""))}</p>') if isinstance(failure, dict) else ""
-    navigation = " ".join(
-        f'<a href="#node-{hashlib.sha256(node["path"].encode("utf-8")).hexdigest()[:12]}">{esc(node["path"] or "Root")}</a>'
-        for node in plan["nodes"]
-    )
-    return (
-        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f'<title>{esc(plan["name"])} · OVLAB experiment</title>'
-        '<style>body{font:16px/1.5 system-ui,sans-serif;color:#172438;background:#f4f7fb;margin:0}'
-        'main{max-width:1200px;margin:auto;padding:2rem 1rem 5rem}a{color:#1255a2}a:focus-visible{outline:3px solid #f59d2a}'
-        'h1{font-size:clamp(1.8rem,4vw,2.7rem);margin:.2rem 0}.summary{background:#e7f0fb;padding:1rem;border-radius:12px}'
-        '.tree-nav{display:flex;flex-wrap:wrap;gap:.6rem;margin:1.5rem 0}.tree-nav a{background:white;padding:.3rem .7rem;border-radius:8px}'
-        '.node{background:white;border:1px solid #c8d7e8;border-radius:12px;padding:1rem;margin:1rem 0}'
-        '.node h2{font-size:1.25rem;margin:0 0 .7rem}.path{font:normal .85rem ui-monospace,monospace;color:#52667e;margin-left:.5rem}'
-        '.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:.7rem}'
-        '.phase{background:#f5f8fc;border:1px solid #dde6f0;border-radius:8px;padding:.65rem}.phase h3{margin:0;font-size:1rem}'
-        '.phase p,.comparisons p{margin:.3rem 0}.unavailable{color:#63758b}.comparisons{margin-top:.6rem}'
-        '.children{border-left:2px solid #ccd9e8;margin:1rem 0 0;padding-left:1.6rem}.children li{padding-left:.2rem}'
-        '.failure{background:#fff0ed;border-left:4px solid #b3321b;padding:.7rem}code{overflow-wrap:anywhere}'
-        '</style></head><body><main>'
-        f'<header><p>OVLAB experiment</p><h1>{esc(plan["name"])}</h1>'
-        f'<p><code>{esc(result["experiment_id"])}</code></p></header>'
-        f'<div class="summary"><strong>Status: {esc(status)}</strong> · '
-        f'{len(plan["nodes"])} nodes · {len(plan["steps"])} planned phases · '
-        '<a href="experiment.json">Complete result JSON</a></div>'
-        f'{failure_html}<nav class="tree-nav" aria-label="Experiment nodes">{navigation}</nav>'
-        f'<div class="tree">{render_node("")}</div>'
-        '</main></body></html>\n'
-    )
+    from .experiment_overview import build_experiment_index as render
+    return render(plan, result, export_root)
 
 
 def _publish_experiment_index(plan, result, export_root: Path):
+    from .experiment_overview import prepare_experiment_views
+    prepare_experiment_views(plan, result, export_root)
     _write_json(export_root / "experiment.json", result)
     index = export_root / "index.html"
     temporary = index.with_name(f".index.{uuid.uuid4().hex}.tmp")

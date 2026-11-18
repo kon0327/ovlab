@@ -31,6 +31,7 @@ from .derived import (
 from .errors import ArtifactError
 from .inspection import verify_run
 from .isolated_index import render_isolated_index
+from .comparison_index import build_evaluation_comparison
 from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
@@ -1236,8 +1237,14 @@ class ExportEngine:
                 "template": {"id": template, "engine_version": EXPORT_ENGINE_VERSION},
                 "datetime": {"exported_at_utc": _utc_now()},
                 "omitted_figures": omitted,
-                "files": _file_inventory(stage),
             }
+            summary = build_evaluation_comparison(stage, metadata,
+                models={record["run_id"]: record["model"] for record in records},
+                labels={record["run_id"]: _model_columns(record)["model_label"] for record in records})
+            _atomic_json(stage / "quick-comparison.json", summary)
+            (stage / "index.html").write_text(render_isolated_index(stage, category="evaluate",
+                metadata=metadata, comparison_summary=summary), encoding="utf-8")
+            metadata["files"] = _file_inventory(stage)
             _atomic_json(stage / "metadata.json", metadata)
             _publish(stage, target)
         except Exception:

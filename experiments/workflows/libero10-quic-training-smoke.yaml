@@ -33,6 +33,6 @@ config:
 execute: [train]
 
 children:
-  - id: evaluate
+  - id: eval-checkpoint
     name: Evaluate the newly trained QuIC checkpoint
     execute: [evaluate]

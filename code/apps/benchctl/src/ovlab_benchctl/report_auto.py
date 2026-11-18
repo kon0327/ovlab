@@ -193,5 +193,19 @@ def generate_report(reference: str, *, repository_root: Path, environment=None, 
             raise ReportSelectionError(f"{category} {kind} export did not return an output path")
         exports.append({"category": category, "type": kind, "node": job["node"], "runs": ids, "output": result["output"],
                         "integrity": result.get("integrity"), "reused": result.get("reused")})
+    if experiment_id is not None:
+        from .experiment_workflow import _publish_experiment_index
+        export_root = Path(env.get("OVLAB_EXPORTS_ROOT", data / "exports")).expanduser().resolve() / experiment_id
+        plan = json.loads((runs / experiment_id / ".experiment/plan.json").read_text(encoding="utf-8"))
+        result_path = export_root / "experiment.json"
+        overview = json.loads((result_path if result_path.is_file() else runs / experiment_id / ".experiment/result.json").read_text(encoding="utf-8"))
+        for item in exports:
+            if item["type"] == "grouped":
+                groups = overview.setdefault("grouped", {}).setdefault(item["category"], {})
+                previous = groups.get(item["node"], {})
+                groups[item["node"]] = {**previous, "status": "completed", "run_ids": item["runs"],
+                    "result": {**previous.get("result", {}), "output": item["output"],
+                               "integrity": item["integrity"], "reused": item["reused"]}}
+        _publish_experiment_index(plan, overview, export_root)
     return {"schema_version": "ovlab.report-export/v1", "status": "completed", "source_type": source_type,
             "source": source, "exports": exports}

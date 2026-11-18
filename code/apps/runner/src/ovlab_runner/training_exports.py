@@ -15,6 +15,7 @@ from ovlab_core.experiment_scope import ExperimentScope
 
 from .errors import ArtifactError
 from .isolated_index import render_isolated_index
+from .comparison_index import build_training_comparison
 from .permissions import finalize_managed_directory, finalize_managed_tree
 from .training_derived import build_training_performance_model, _read_json, _read_metrics, _sha256
 
@@ -116,7 +117,7 @@ class TrainingExportEngine:
             verified = self.verify(kind, name)
             if verified["source_integrity"] != source:
                 raise ArtifactError(f"existing {kind} export has different canonical sources: {target}")
-            if kind == "isolated" and not (target / "index.html").is_file():
+            if not (target / "index.html").is_file():
                 # Preserve all previously verified bytes while adding the new,
                 # checksum-covered browser page to an older isolated export.
                 if any(path.is_symlink() for path in target.rglob("*")):
@@ -127,8 +128,11 @@ class TrainingExportEngine:
                     shutil.copytree(target, stage)
                     metadata = _read_json(stage / "metadata.json")
                     (stage / "metadata.json").unlink()
+                    summary = build_training_comparison(_read_json(stage / "comparison.json")) if kind == "grouped" else None
+                    if summary:
+                        (stage / "quick-comparison.json").write_bytes(_canonical(summary))
                     (stage / "index.html").write_text(
-                        render_isolated_index(stage, category="train", metadata=metadata), encoding="utf-8",
+                        render_isolated_index(stage, category="train", metadata=metadata, comparison_summary=summary), encoding="utf-8",
                     )
                     metadata["files"] = _files(stage)
                     (stage / "metadata.json").write_bytes(_canonical(metadata))
@@ -163,10 +167,12 @@ class TrainingExportEngine:
                 path.write_bytes(payload)
             metadata = {"schema_version": SCHEMA, "export_type": kind, "name": name,
                         "source_integrity": source}
-            if kind == "isolated":
-                (stage / "index.html").write_text(
-                    render_isolated_index(stage, category="train", metadata=metadata), encoding="utf-8",
-                )
+            summary = build_training_comparison(_read_json(stage / "comparison.json")) if kind == "grouped" else None
+            if summary:
+                (stage / "quick-comparison.json").write_bytes(_canonical(summary))
+            (stage / "index.html").write_text(
+                render_isolated_index(stage, category="train", metadata=metadata, comparison_summary=summary), encoding="utf-8",
+            )
             metadata["files"] = _files(stage)
             (stage / "metadata.json").write_bytes(_canonical(metadata))
             stage.rename(target)

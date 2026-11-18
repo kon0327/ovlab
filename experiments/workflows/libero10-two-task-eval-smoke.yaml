@@ -19,7 +19,6 @@ config:
 children:
   - id: lora
     name: LoRA evaluation
-    execute: [evaluate]
     config:
       evaluate:
         profile: libero10-lora-full-three-per-task.yaml

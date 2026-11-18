@@ -32,10 +32,30 @@ experiments/
   `ovlab run --plan FILE` or `ovlab run FILE`; see the
   [workflow guide](../docs/EXPERIMENT_WORKFLOW.md).
 
+  - [`libero10-quic-training-smoke.yaml`](workflows/libero10-quic-training-smoke.yaml)
+    trains QuIC for three steps on one task and evaluates its own checkpoint for
+    one task with a two-step episode limit.
+  - [`libero10-two-task-evaluation-only.yaml`](workflows/libero10-two-task-evaluation-only.yaml)
+    evaluates LoRA, QuIC and OFT on two tasks without training. It selects the
+    verified local QuIC adapter by path and hashes; update those values to use a
+    different saved adapter.
+  - [`libero10-reporting-eval-smoke.yaml`](workflows/libero10-reporting-eval-smoke.yaml)
+    compares pretrained LoRA, OFT and Vanilla, each unquantized and 4-bit, on
+    two tasks. Its hierarchy produces model and quantization comparison reports.
+  - [`libero-object-quic-reporting-smoke.yaml`](workflows/libero-object-quic-reporting-smoke.yaml)
+    trains QuIC on two LIBERO-Object tasks and evaluates its own checkpoint on
+    those tasks. Both reporting smokes use one rollout per task capped at 30
+    steps and run sequentially on one GPU; they do not measure model quality.
+
 All three directories use `ovlab run EXPERIMENT`; their names organize reusable
 source files and do not select different CLI commands. A unique YAML name can be
 used directly; ambiguous names require a path. Add `--plan` to resolve the full
 tree, or `--verify` to validate a source or check a stored experiment ID/hash.
+
+Use the local [Workflow Studio](../code/apps/workflow-builder/index.html) to
+assemble nodes visually from these profiles and export a workflow YAML. Run
+`ovlab editor` to open it; see the [builder guide](../code/apps/workflow-builder/README.md)
+for catalog refresh, inheritance and validation details.
 
 Standalone training and evaluation sources become one-node experiments. Workflows
 define their hierarchy explicitly with `children`; their configuration inherits

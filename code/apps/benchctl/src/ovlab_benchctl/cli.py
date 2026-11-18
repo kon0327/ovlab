@@ -98,6 +98,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug", action="store_true", help="include a traceback for unexpected failures")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    editor = commands.add_parser(
+        "editor", help="open the visual workflow editor in a browser",
+        description="Open the local Workflow Studio in the default browser. No server or Docker image is needed.",
+    )
+    _output_options(editor)
+
     doctor = commands.add_parser("doctor", help="diagnose host deployment readiness without changing files")
     doctor_experiment = doctor.add_mutually_exclusive_group()
     doctor_experiment.add_argument("_pos_experiment", nargs="?", metavar="EXPERIMENT", help="also check one deployable experiment and its images")
@@ -613,6 +619,7 @@ def _training_check_rows(document: dict) -> list[tuple[str, str]]:
 
 
 _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "editor": (("status", ("status",)), ("editor", ("editor",)), ("opener", ("opener",))),
     "config validate": (
         ("valid", ("valid",)), ("kind", ("kind",)), ("mode", ("mode",)),
         ("experiment", ("experiment_id",)),
@@ -956,6 +963,8 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.INTERRUPTED, "interrupted"
     if name == "CliUsageError":
         return ExitCode.USAGE, "usage_error"
+    if name == "WorkflowEditorError":
+        return ExitCode.RUNTIME, "editor_unavailable"
     if name in {"MetricRecomputationError"}:
         return ExitCode.METRICS, "metric_recomputation_error"
     if name == "ReportingSourceUnavailableError":
@@ -1056,6 +1065,9 @@ def _dispatch(args):
             setattr(args, {"run": "run_id", "report": "report_id", "export": "export_id"}[kind], value)
         elif not any(selected):
             raise CliUsageError("data operation requires a typed TARGET, a selector flag or --all")
+    if args.command == "editor":
+        from .workflow_editor import open_workflow_editor
+        return open_workflow_editor(_repository_root()), args.json, None
     if args.command == "doctor":
         from .doctor import Doctor
         return Doctor(_repository_root()).run(experiment=args.experiment, env_file=args.env_file), args.json, None

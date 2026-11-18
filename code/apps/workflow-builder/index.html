@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>OVLAB · Workflow Studio</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="catalog.js"></script>
+  <script defer src="core.js"></script>
+  <script defer src="dom.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 7v10m0-5h7a5 5 0 0 0 5-5M13 12a5 5 0 0 1 5 5"/><circle cx="6" cy="4" r="2"/><circle cx="6" cy="20" r="2"/><circle cx="18" cy="4" r="2"/><circle cx="18" cy="20" r="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 20"/></symbol>
+    <symbol id="i-plan" viewBox="0 0 24 24"><path d="M9 5h12M9 12h12M9 19h12"/><circle cx="3" cy="5" r="1"/><circle cx="3" cy="12" r="1"/><circle cx="3" cy="19" r="1"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m-5 5 5-5 5 5M4 16v5h16v-5"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="m8 3-5 5 5 5M3 8h10a7 7 0 0 1 0 14"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  </defs></svg>
+  <header class="topbar">
+    <a class="brand" href="index.html" aria-label="OVLAB Workflow Studio"><span class="brand-mark"><svg><use href="#i-branch"/></svg></span><strong>OVLAB</strong><span class="brand-divider"></span><span>Workflow Studio</span><span class="version">LOCAL</span></a>
+    <div class="top-actions">
+      <span id="save-state" class="save-state" role="status">Saved in this browser</span>
+      <button id="undo" class="button icon-button" title="Undo (Ctrl/⌘ Z)" aria-label="Undo"><svg><use href="#i-undo"/></svg></button>
+      <button id="redo" class="button icon-button redo" title="Redo (Ctrl/⌘ Shift Z)" aria-label="Redo"><svg><use href="#i-undo"/></svg></button>
+      <button id="import" class="button"><svg><use href="#i-upload"/></svg><span>Import</span></button>
+      <button id="export" class="button primary"><svg><use href="#i-download"/></svg><span>Export YAML</span></button>
+      <input id="import-file" type="file" accept=".yaml,.yml,.json" hidden>
+    </div>
+  </header>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="Workflow outline">
+      <div class="sidebar-heading"><span class="eyebrow">WORKSPACE</span><button id="new-workflow" class="text-button">New</button></div>
+      <label class="preset-label" for="preset">Start from a repository workflow</label>
+      <select id="preset" aria-label="Repository workflow"><option value="">Select a workflow…</option></select>
+      <div class="outline-title"><h2>Hierarchy</h2><span id="node-count" class="counter">0</span></div>
+      <div id="outline" class="outline" role="tree" aria-label="Experiment nodes"></div>
+      <button id="add-node" class="button add-outline"><svg><use href="#i-plus"/></svg>Add child node</button>
+      <div class="sidebar-bottom">
+        <div class="catalog-label"><span class="status-dot"></span><strong>Real repository catalog</strong></div>
+        <p id="catalog-summary"></p>
+        <p class="muted">Local files. No account, backend or network connection.</p>
+        <button id="catalog-info" class="text-button">Catalog &amp; supported features <span aria-hidden="true">↗</span></button>
+      </div>
+    </aside>
+    <main class="main">
+      <section class="workflow-heading">
+        <div><div class="breadcrumb">Experiments <span>/</span> Workflow builder</div><h1 id="workflow-title">Untitled experiment</h1><p id="workflow-subtitle"></p></div>
+        <div id="workflow-counts" class="workflow-counts"></div>
+      </section>
+      <div class="workspace-tabs" role="tablist" aria-label="Workspace view">
+        <button id="tab-builder" role="tab" aria-selected="true" aria-controls="view-builder" data-view="builder"><svg><use href="#i-branch"/></svg>Builder</button>
+        <button id="tab-plan" role="tab" aria-selected="false" aria-controls="view-plan" data-view="plan"><svg><use href="#i-plan"/></svg>Execution plan<span id="plan-count" class="tab-count">0</span></button>
+        <button id="tab-yaml" role="tab" aria-selected="false" aria-controls="view-yaml" data-view="yaml"><svg><use href="#i-code"/></svg>YAML</button>
+        <button id="validation-status" class="validation-status" title="Show browser validation results"></button>
+      </div>
+      <section id="draft-notice" class="draft-notice" role="status" hidden></section>
+      <section id="view-builder" class="builder-view" role="tabpanel" aria-labelledby="tab-builder">
+        <div id="canvas-scroll" class="canvas-scroll" role="region" aria-label="Workflow canvas" aria-describedby="canvas-help" tabindex="0"><div id="canvas" class="canvas"></div></div>
+        <div class="canvas-toolbar"><span>Parent → child configuration <span class="legend-line"></span></span><div><button id="edit-selected" class="button small mobile-edit">Edit node ↓</button><button id="zoom-out" class="button icon-button" aria-label="Zoom out">−</button><span id="zoom-label">100%</span><button id="zoom-in" class="button icon-button" aria-label="Zoom in">+</button><button id="zoom-fit" class="button small">Fit</button></div></div>
+        <div class="canvas-note" id="canvas-help"><span class="info-icon">i</span><span>Drag the background to pan. Group nodes pass settings down; only enabled <strong>Train</strong> or <strong>Evaluate</strong> phases create runs.</span></div>
+      </section>
+      <section id="view-plan" class="content-view" role="tabpanel" aria-labelledby="tab-plan" hidden></section>
+      <section id="view-yaml" class="content-view yaml-view" role="tabpanel" aria-labelledby="tab-yaml" hidden>
+        <div class="section-bar"><div><h2>Workflow source</h2><p id="source-status">Applied workflow. Edit and apply to update the builder.</p></div><div class="button-row"><button id="copy-yaml" class="button small"><svg><use href="#i-copy"/></svg>Copy</button><button id="discard-yaml" class="button small" hidden>Discard edits</button><button id="apply-yaml" class="button primary small" disabled>Apply source</button></div></div>
+        <textarea id="yaml-source" class="code-editor" spellcheck="false" aria-label="Workflow YAML source"></textarea>
+        <div id="source-error" class="inline-error" role="alert" hidden></div>
+      </section>
+      <section id="issues" class="issues" aria-label="Configuration checks"></section>
+      <footer class="main-footer"><span id="footer-note">Browser checks complement the OVLAB resolver.</span><button id="copy-command" class="command-button" title="Copy CLI planning command"></button></footer>
+    </main>
+    <aside class="inspector" aria-label="Node configuration"><div id="inspector"></div></aside>
+  </div>
+  <dialog id="add-dialog" class="modal">
+    <form method="dialog"><div class="modal-title"><div><span class="eyebrow">BUILD YOUR WORKFLOW</span><h2>Add a node</h2></div><button value="cancel" class="close-button" aria-label="Close">×</button></div></form>
+    <p id="add-parent" class="muted"></p>
+    <div class="node-templates">
+      <button data-template="group"><span class="template-icon group-icon">▦</span><strong>Group</strong><span>Organize branches and share configuration.</span></button>
+      <button data-template="train"><span class="template-icon train-icon">T</span><strong>Training</strong><span>Select a real LoRA or QuIC training profile.</span></button>
+      <button data-template="evaluate"><span class="template-icon eval-icon">E</span><strong>Evaluation</strong><span>Configure tasks, episodes and inference.</span></button>
+      <button data-template="handoff"><span class="template-icon handoff-icon">↳</span><strong>Train → evaluate</strong><span>LoRA or QuIC training with an automatically bound evaluation.</span></button>
+    </div>
+  </dialog>
+  <dialog id="info-dialog" class="modal"><form method="dialog"><div class="modal-title"><h2>Repository catalog</h2><button class="close-button" aria-label="Close">×</button></div></form><div id="catalog-detail"></div></dialog>
+  <dialog id="confirm-dialog" class="modal confirm-modal"><form method="dialog"><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="modal-actions"><button value="cancel" class="button">Cancel</button><button value="confirm" id="confirm-action" class="button primary">Continue</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <noscript><p class="fatal-error">Enable JavaScript to use the local workflow builder.</p></noscript>
+</body>
+</html>
