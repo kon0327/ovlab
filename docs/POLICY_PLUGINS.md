@@ -102,7 +102,9 @@ is a development source, not a portable substitute for a published Git commit.
 checkouts and refuses to replace an unmanaged directory or an edited local
 snapshot. A changed commit can be fetched and checked out when the checkout is
 clean. Git-ignored files that would be copied into a build also make a checkout
-dirty; dependency caches and Python bytecode are excluded. Offline sync uses only
+dirty; Python bytecode, generated `*.egg-info`/`*.dist-info` metadata and MP4
+recordings in `rollouts/` are excluded from both source identity and Docker
+contexts. Tracked edits remain protected even for excluded paths. Offline sync uses only
 existing commits and local projects. `--offline` controls source acquisition and
 checkpoint resolution; dependency installation inside a Docker recipe may still
 need network access. Initial

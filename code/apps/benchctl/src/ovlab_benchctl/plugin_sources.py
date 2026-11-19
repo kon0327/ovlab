@@ -15,6 +15,17 @@ from .errors import ConfigReferenceError, ConfigCompatibilityError
 from .policy_plugins import registry_document
 
 _EXCLUDED = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".ovlab-source.json"}
+_GENERATED_METADATA_SUFFIXES = (".egg-info", ".dist-info")
+
+
+def _excluded_source_path(relative):
+    """Match generated source artifacts excluded from the Docker context."""
+    path = Path(relative)
+    if any(part in _EXCLUDED or part.endswith(_GENERATED_METADATA_SUFFIXES) for part in path.parts):
+        return True
+    if path.suffix in {".pyc", ".pyo"}:
+        return True
+    return "rollouts" in path.parts[:-1] and path.suffix == ".mp4"
 
 
 def _git(path, *args, check=True):
@@ -35,11 +46,12 @@ def tree_identity(path):
         raise ConfigReferenceError(f"cannot inspect source directory: {error.filename}") from error
 
     for directory, dirs, files in os.walk(root, followlinks=False, onerror=unreadable):
-        dirs[:] = sorted(d for d in dirs if d not in _EXCLUDED)
+        parent = Path(directory).relative_to(root)
+        dirs[:] = sorted(d for d in dirs if not _excluded_source_path(parent / d))
         names = sorted(files + [d for d in dirs if (Path(directory) / d).is_symlink()])
         for name in names:
             file = Path(directory) / name
-            if name in _EXCLUDED or file.suffix in {".pyc", ".pyo"}: continue
+            if _excluded_source_path(file.relative_to(root)): continue
             relative = file.relative_to(root).as_posix()
             digest.update(relative.encode() + b"\0")
             if file.is_symlink():
@@ -89,7 +101,7 @@ def inspect_sources(repository_root, source_ids=None, *, registry=None, staged=F
             row.update(tree_identity(content_path))
             if source["kind"] == "git":
                 row.update(revision=_git(path, "rev-parse", "HEAD", check=False),
-                           dirty=_uncommitted_files(path))
+                           dirty=bool(_uncommitted_files(path)))
                 row["matches_commit"] = row["revision"] == source["commit"]
         rows.append(row)
     return rows
@@ -114,9 +126,11 @@ def _uncommitted_files(path):
     changed = _git(path, "diff", "--name-only", "-z", "HEAD").split("\0")
     untracked = _git(path, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
     ignored = _git(path, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").split("\0")
-    return any(name and not any(part in _EXCLUDED for part in Path(name).parts)
-               and Path(name).suffix not in {".pyc", ".pyo"}
-               for name in (*changed, *untracked, *ignored))
+    # Never discard tracked edits, including edits to files excluded from the
+    # build: a checkout of another revision must not overwrite local work.
+    return sorted({name for name in changed if name} | {
+        name for name in (*untracked, *ignored) if name and not _excluded_source_path(name)
+    })
 
 
 
@@ -128,8 +142,14 @@ def _sync_git(root, name, source, offline):
         origin = _git(path, "remote", "get-url", "origin")
         if origin.removesuffix(".git").rstrip("/") != source["url"].removesuffix(".git").rstrip("/"):
             raise ConfigCompatibilityError(f"source {name} origin differs from registry; preserve or move {path} before syncing")
-        if _uncommitted_files(path):
-            raise ConfigCompatibilityError(f"source {name} has local changes; register it as a local source or preserve changes before syncing")
+        changes = _uncommitted_files(path)
+        if changes:
+            examples = ", ".join(repr(item) for item in changes[:5])
+            suffix = f" (and {len(changes) - 5} more)" if len(changes) > 5 else ""
+            raise ConfigCompatibilityError(
+                f"source {name} has local changes: {examples}{suffix}; "
+                "register it as a local source or preserve changes before syncing"
+            )
         if _git(path, "rev-parse", "HEAD") == source["commit"]: return
         exists = _git(path, "cat-file", "-t", source["commit"], check=False) == "commit"
         if not exists:
@@ -180,8 +200,12 @@ def _sync_local(root, name, source):
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=destination.parent))
     try:
+        def ignore_generated(directory, names):
+            relative = Path(directory).relative_to(original)
+            return {item for item in names if _excluded_source_path(relative / item)}
+
         shutil.copytree(original, temporary, dirs_exist_ok=True, symlinks=True,
-                        ignore=shutil.ignore_patterns(*_EXCLUDED, "*.pyc", "*.pyo"))
+                        ignore=ignore_generated)
         if tree_identity(temporary) != identity:
             raise ConfigCompatibilityError("local source changed while creating its build snapshot")
         (temporary / ".ovlab-source.json").write_text(json.dumps({"source": str(original), "identity": identity}, sort_keys=True))

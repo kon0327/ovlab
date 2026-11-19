@@ -436,11 +436,67 @@ def test_remote_sources_reject_ignored_code_but_allow_excluded_python_caches(tmp
     snapshot = root/'external/toy'
     (snapshot/'__pycache__').mkdir()
     (snapshot/'__pycache__/runtime.pyc').write_bytes(b'cache')
+    baseline = tree_identity(snapshot)
+    (snapshot/'toy.egg-info').mkdir()
+    (snapshot/'toy.egg-info/PKG-INFO').write_text('generated')
+    (snapshot/'toy.dist-info').mkdir()
+    (snapshot/'toy.dist-info/METADATA').write_text('generated')
+    (snapshot/'experiments/rollouts/one').mkdir(parents=True)
+    (snapshot/'experiments/rollouts/one/episode.mp4').write_bytes(b'video')
     assert sync_sources(root, offline=True)[0]['dirty'] is False
+    assert tree_identity(snapshot) == baseline
+    (snapshot/'experiments/rollouts/one/analysis.py').write_text('source code')
+    with pytest.raises(ConfigCompatibilityError, match='analysis.py'):
+        sync_sources(root, offline=True)
+    (snapshot/'experiments/rollouts/one/analysis.py').unlink()
     (snapshot/'ignored.py').write_text('UNPINNED = True')
     with pytest.raises(ConfigCompatibilityError, match='local changes'):
         sync_sources(root, offline=True)
     assert inspect_sources(root)[0]['dirty'] is True
+
+
+def test_local_snapshot_excludes_generated_metadata_and_rollout_video(tmp_path):
+    root, original = tmp_path/'ovlab', tmp_path/'project'
+    original.mkdir()
+    (original/'runtime.py').write_text('source')
+    write_registry(root, {'schema_version': 'ovlab.plugins/v1',
+                          'sources': {'toy': {'kind': 'local', 'path': str(original)}},
+                          'plugins': {}, 'builds': {}})
+    before = tree_identity(original)
+    (original/'toy.egg-info').mkdir()
+    (original/'toy.egg-info/PKG-INFO').write_text('generated')
+    (original/'rollouts/day').mkdir(parents=True)
+    (original/'rollouts/day/result.mp4').write_bytes(b'video')
+    (original/'rollouts/day/analysis.py').write_text('important source')
+    assert tree_identity(original) != before
+    sync_sources(root)
+    snapshot = root/'external/toy'
+    assert not (snapshot/'toy.egg-info').exists()
+    assert not (snapshot/'rollouts/day/result.mp4').exists()
+    assert (snapshot/'rollouts/day/analysis.py').read_text() == 'important source'
+
+
+def test_tracked_generated_files_are_never_overwritten(tmp_path):
+    project = tmp_path/'upstream'
+    project.mkdir()
+    git(project, 'init', '-q')
+    git(project, 'config', 'user.name', 'Fixture')
+    git(project, 'config', 'user.email', 'fixture@example.invalid')
+    (project/'rollouts').mkdir()
+    (project/'rollouts/tracked.mp4').write_bytes(b'original')
+    git(project, 'add', '.')
+    git(project, 'commit', '-qm', 'fixture')
+    root = tmp_path/'ovlab'
+    write_registry(root, {'schema_version': 'ovlab.plugins/v1',
+                          'sources': {'toy': {'kind': 'git', 'url': str(project),
+                                              'commit': git(project, 'rev-parse', 'HEAD')}},
+                          'plugins': {}, 'builds': {}})
+    sync_sources(root)
+    video = root/'external/toy/rollouts/tracked.mp4'
+    video.write_bytes(b'local modification')
+    with pytest.raises(ConfigCompatibilityError, match='tracked.mp4'):
+        sync_sources(root, offline=True)
+    assert video.read_bytes() == b'local modification'
 
 
 def test_import_cache_cannot_silently_reuse_a_different_local_checkout(external_plugin):

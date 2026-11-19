@@ -43,7 +43,14 @@ external/**/.ovlab-source.json
 .git
 **/.git
 **/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
 **/*.py[cod]
+**/*.egg-info
+**/*.dist-info
+external/**/rollouts/*.mp4
+external/**/rollouts/**/*.mp4
 code/tests/
 runs/
 lab/reports/
