@@ -288,12 +288,13 @@ class ConfigResolver:
             "resource_registry": registry,
         }
         if components["policy"]["type"] != "mock":
-            from .plugin_sources import inspect_sources
-            source_identities = {}
-            for row in inspect_sources(self.repository_root, plugin.descriptor.get("sources", [])):
-                source_identities[row["id"]] = ({"kind": "git", "url": row["selection"]["url"], "commit": row["selection"]["commit"]} if row["kind"] == "git" else
-                                               plugin.registry.get("source_identities", {}).get(row["id"], {key: row[key] for key in ("kind", "content_sha256", "file_count") if key in row}))
-            scientific["policy_plugin"] = {"api_version": "1", "descriptor": plugin.descriptor, "sources": source_identities}
+            from .plugin_identity import scientific_source_identities
+            scientific["policy_plugin"] = {
+                "api_version": "1", "descriptor": plugin.descriptor,
+                "sources": scientific_source_identities(
+                    self.repository_root, plugin.descriptor.get("sources", []), registry=plugin.registry,
+                ),
+            }
         moving_selected = sorted(
             resource_id for resource_id in selected_checkpoint_ids
             if registry["checkpoints"][resource_id].get("revision", "local/main") in {"local/main", "remote/main"}

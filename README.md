@@ -28,7 +28,9 @@ The experiment runner and benchmark adapter execute together in a runner process
 Model implementations connect through the versioned [policy plugin API](docs/POLICY_PLUGINS.md).
 The registry binds each plugin to Git commits or local projects and a Docker build
 recipe. Use `./ovlab plugin list`, `./ovlab plugin sync` and
-`./ovlab plugin build PLUGIN`; a new policy family needs no core dispatch or
+`./ovlab plugin build PLUGIN`. Builds use a temporary context prepared from
+registered Git commits or local projects; `external/` is a development workspace
+and optional offline Git cache. A new policy family needs no core dispatch or
 Compose changes. A [standalone example plugin](examples/policy-plugin/) demonstrates
 the complete adapter connection.
 

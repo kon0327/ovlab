@@ -205,13 +205,13 @@ class ConfigBundleBuilder:
 
         from .policy_plugins import registry_document
         registry_snapshot = registry_document(self.repository_root)
-        from .plugin_sources import inspect_sources
         policy_ref = experiment_document["components"]["policy"]
         policy_doc = self.load_component(policy_ref, "policy")
         plugin = registry_snapshot["plugins"].get(policy_doc["type"], {})
-        identities = inspect_sources(self.repository_root, plugin.get("sources", []))
-        from .plugin_identity import source_identities
-        registry_snapshot["source_identities"] = source_identities(registry_snapshot, identities)
+        from .plugin_identity import registered_source_identities
+        registry_snapshot["source_identities"] = registered_source_identities(
+            self.repository_root, plugin.get("sources", []), registry=registry_snapshot,
+        )
         gpu = experiment_document.get("runtime", {}).get("gpu", "all" if plugin.get("deployment", {}).get("gpu", True) else None)
         runtime_profile = "plugins/runtime-profile.yaml"
         selected.add(runtime_profile)

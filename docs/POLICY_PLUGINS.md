@@ -82,7 +82,7 @@ to `false` for a CPU-only policy image. Persistent deployment can also specify
 The SHA above illustrates the required format; replace it with a real full
 40-character commit. Branch names and tags are not immutable registrations and
 are rejected. URLs identify an upstream project, while commits identify its
-version. The source is checked out at `external/<source-id>`; optional Git
+version. Recipes receive the source at `external/<source-id>`; optional Git
 `path` must equal that location. The whole `external/` directory is ignored by
 Git. Git metadata is excluded from Docker build contexts.
 
@@ -97,6 +97,20 @@ content hashes and executable modes, so changes are visible in build identity.
 Host control hooks can import the original local source; containers use the
 installed package. Keep runtime imports in adapter initialization. A local path
 is a development source, not a portable substitute for a published Git commit.
+
+The model source and the OVLAB adapter do not have to share a repository. For
+example, register `model-code` as a pinned Git source and `ovlab-adapter` as a
+local directory or another pinned Git source. The plugin's `entrypoint` points
+to the adapter package; list both IDs in the plugin's `sources` and its build
+recipe's `sources`. Put the Dockerfile in either project, for example
+`external/ovlab-adapter/Dockerfile`. OVLAB acquires each source independently;
+the adapter imports the model library inside its runtime initialization. The
+adapter's lightweight control hooks must be importable on the host, through an
+installed adapter package, its registered local directory, or a development
+checkout prepared with `plugin sync`. Building an image alone does not install
+the adapter into the host environment. The upstream model library can remain
+entirely inside the image. Neither the core nor the upstream model needs an
+OVLAB-specific dispatch branch.
 
 `sync` verifies existing Git origin, revision and cleanliness. It preserves dirty
 checkouts and refuses to replace an unmanaged directory or an edited local
@@ -128,8 +142,37 @@ sources. `plugin build` without an ID builds registered policy images. The
 existing helper `bash deploy/scripts/build-images.sh ROLE ...` builds any
 registered role, including dataset, benchmark, reporting and training images;
 without roles it builds all recipes. Build input selection is data in the
-registry, not a shell case statement. Build automatically syncs the selected
+registry, not a shell case statement. Build automatically acquires the selected
 recipe's sources first.
+
+Builds are isolated by default, directly from the registrations and independently
+of the development workspace. The explicit flag is also available:
+
+```bash
+./ovlab plugin build my-model --isolated-sources
+bash deploy/scripts/build-images.sh policy-my-model --isolated-sources
+```
+
+This creates a temporary Docker context from the Git-visible OVLAB files,
+fetches each remote source at its exact commit, and snapshots each local source
+from its registered directory. Recipes still see `external/<source-id>` inside
+that context, so their `COPY` paths do not change. An existing `external/` in
+your checkout is neither read nor modified; missing, dirty or unrelated
+development checkouts do not affect this build. A preceding `plugin sync` is
+unnecessary. Contexts and fetched sources are removed on success and failure.
+Docker's build cache remains available.
+
+With `--offline`, an isolated build can read a previously synced Git checkout
+as an object cache. It fetches the pinned commit's objects into the temporary
+context without copying or changing dirty working files. A missing cached
+commit fails before Docker runs. Local-directory sources work offline directly.
+Online isolated builds fetch from the registered URL and do not use `external/`.
+
+Use `--workspace-sources` to build from the persistent development workspace;
+that mode syncs and verifies its checkouts, and protects local edits by refusing
+dirty Git sources. Image identity uses the same registrations, source pins/content
+hashes and recipe in both modes. At runtime, workers use the frozen registry and
+installed packages; they do not clone sources.
 
 ## Developing the plugin
 
@@ -276,6 +319,10 @@ read-only snapshot. Bundle identity includes local source content; remote
 selection is pinned by commit. Scientific configuration records the plugin
 entrypoint, API and source identity. Runtime initialization should report the
 same artifact/method identity through RPC.
+Workers read remote commit pins and frozen local content identities from this
+bundle. Resolving an experiment in a worker does not require Git, checkout
+metadata, or access to the original local project. Source synchronization and
+checkout verification run on the host before building images.
 
 Dry runs do not clone, build images, create containers or write generated Compose
 files. Real runs remove temporary configuration directories, generated Compose

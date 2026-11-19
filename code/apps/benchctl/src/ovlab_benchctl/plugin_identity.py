@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .errors import ConfigCompatibilityError, ConfigReferenceError
 from .policy_plugins import registry_document
-from .plugin_sources import inspect_sources
+from .plugin_sources import inspect_sources, tree_identity
 
 PLUGIN_BUILD_LABEL = "io.github.ovlab.plugin-build.sha256"
 
@@ -29,14 +29,46 @@ def source_identities(registry, rows):
     return identities
 
 
+def registered_source_identities(repository_root, names, *, registry):
+    """Resolve portable provenance without inspecting Git checkouts at runtime.
+
+    Bundles freeze local content identities on the host. Only an unbundled local
+    project needs filesystem inspection; remote identities come from the pins.
+    """
+    saved = registry.get("source_identities", {})
+    local_names = [name for name in names
+                   if registry["sources"][name]["kind"] == "local" and name not in saved]
+    local_rows = {}
+    for name in local_names:
+        path = Path(registry["sources"][name]["path"]).expanduser()
+        if not path.is_absolute():
+            path = Path(repository_root) / path
+        if path.is_dir():
+            local_rows[name] = {"id": name, **tree_identity(path)}
+        else:
+            local_rows[name] = inspect_sources(repository_root, [name], registry=registry)[0]
+    rows = [local_rows.get(name, {"id": name}) for name in names]
+    return source_identities(registry, rows)
+
+
+def scientific_source_identities(repository_root, names, *, registry):
+    identities = registered_source_identities(repository_root, names, registry=registry)
+    for identity in identities.values():
+        if identity["kind"] == "git":
+            # Preserve the scientific configuration format used before bundles.
+            identity["commit"] = identity.pop("revision")
+    return identities
+
+
 def plugin_build_identity(repository_root, role, *, registry=None, rows=None):
     root = Path(repository_root).resolve()
     registry = registry if registry is not None else registry_document(root)
     build = registry["builds"][role]
     names = build.get("sources", [])
     if rows is None:
-        rows = inspect_sources(root, names, registry=registry)
-    rows = [row for row in rows if row["id"] in names]
+        identities = registered_source_identities(root, names, registry=registry)
+    else:
+        identities = source_identities(registry, [row for row in rows if row["id"] in names])
     recipes = {}
     for relative in ("deploy/docker/base-images.lock", build["dockerfile"], *build.get("locks", [])):
         # Files inside registered sources are already bound by commit/content.
@@ -50,7 +82,7 @@ def plugin_build_identity(repository_root, role, *, registry=None, rows=None):
         "schema_version": "ovlab.plugin-build/v1", "role": role, "build": build,
         "plugins": {key: value for key, value in registry["plugins"].items()
                     if value.get("deployment", {}).get("role") == role},
-        "sources": source_identities(registry, rows), "recipes": recipes,
+        "sources": identities, "recipes": recipes,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 

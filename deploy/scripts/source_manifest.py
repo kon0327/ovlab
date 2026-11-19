@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "code/apps/benchctl
 
 EXCLUDED_PREFIXES = (
     ".git/", "configs/", "experiments/", "runs/", "checkpoints/", "datasets/",
-    "docs/", "notebooks/", "code/tests/", "references/", "examples/",
+    "docs/", "notebooks/", "code/tests/", "references/", "examples/", "external/",
 )
 
 
@@ -41,7 +41,7 @@ def _included(relative: str) -> bool:
     # must not invalidate images that contain exactly the same runtime source.
     if "/" not in relative and relative.endswith(".md"):
         return False
-    return relative == "configs/plugins/registry.json" or (not relative.startswith(EXCLUDED_PREFIXES) and relative != ".git")
+    return relative == "configs/plugins/registry.json" or (not relative.startswith(EXCLUDED_PREFIXES) and relative not in {".git", "external"})
 
 
 def _included_status(line: str) -> bool:

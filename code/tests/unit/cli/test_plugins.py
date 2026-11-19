@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -194,13 +195,249 @@ def test_registry_build_dispatch_handles_new_role_and_cleans_secret_files(extern
                 assert path.is_file()
                 secrets.append(path)
         return SimpleNamespace(returncode=0)
-    plans = build_images(root, ['policy-example'], runner=runner)
+    plans = build_images(root, ['policy-example'], isolated_sources=False, runner=runner)
     assert len(calls) == 1
     assert plans[0]['image'] == 'ovlab-policy-example:local'
     assert str(root / 'external/example-policy/Dockerfile') in calls[0]
     assert any('plugin-registry.sha256=' in value for value in calls[0])
     assert f"OVLAB_VERSION={(root / 'VERSION').read_text().strip()}" in calls[0]
     assert all(not path.exists() for path in secrets)
+
+
+@pytest.mark.parametrize('kind', ['git', 'local'])
+@pytest.mark.parametrize('workspace_state', ['absent', 'dirty', 'symlink'])
+def test_isolated_build_combines_model_source_and_separate_adapter_without_external(
+    external_plugin, tmp_path, kind, workspace_state,
+):
+    root = external_plugin
+    model = tmp_path / 'upstream-model'
+    model.mkdir()
+    (model / 'model.py').write_text('VERSION = 1\n')
+    git(model, 'init', '-q')
+    git(model, 'config', 'user.name', 'Fixture')
+    git(model, 'config', 'user.email', 'fixture@example.invalid')
+    git(model, 'add', '.')
+    git(model, 'commit', '-qm', 'pinned model')
+    pinned = git(model, 'rev-parse', 'HEAD')
+    if kind == 'git':
+        (model / 'model.py').write_text('VERSION = 2\n')
+        git(model, 'commit', '-qam', 'moving upstream')
+    registry = registry_document(root)
+    registry['sources']['model-code'] = (
+        {'kind': 'git', 'url': model.as_uri(), 'commit': pinned}
+        if kind == 'git' else {'kind': 'local', 'path': str(model)}
+    )
+    registry['plugins']['example_policy']['sources'].append('model-code')
+    registry['builds']['policy-example']['sources'].append('model-code')
+    write_registry(root, registry)
+    git(root, 'init', '-q')
+    git(root, 'config', 'user.name', 'Fixture')
+    git(root, 'config', 'user.email', 'fixture@example.invalid')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'OVLAB with adapter registration')
+    external = root / 'external'
+    if workspace_state != 'absent':
+        destination = tmp_path / 'unrelated-workspace' if workspace_state == 'symlink' else external
+        (destination / 'model-code').mkdir(parents=True)
+        (destination / 'model-code/model.py').write_text('local work must survive')
+        if workspace_state == 'symlink':
+            external.symlink_to(destination, target_is_directory=True)
+    contexts, secrets = [], []
+
+    def docker(command, **kwargs):
+        context = Path(command[-1])
+        contexts.append(context)
+        assert context != root
+        assert kwargs['cwd'] == context
+        assert (context / 'external/model-code/model.py').read_text() == 'VERSION = 1\n'
+        assert (context / 'external/example-policy/src/example_policy/plugin.py').is_file()
+        assert Path(command[command.index('--file') + 1]).is_relative_to(context)
+        for index, value in enumerate(command):
+            if value == '--secret':
+                secret = Path(command[index + 1].split('src=', 1)[1])
+                assert secret.is_file()
+                secrets.append(secret)
+        return SimpleNamespace(returncode=0)
+
+    preview = build_images(root, ['policy-example'], dry_run=True)
+    assert preview[0]['isolated_sources'] is True
+    assert not contexts
+    result = build_images(root, ['policy-example'], runner=docker)
+    assert result[0]['isolated_sources'] is True
+    # Preflight and bundling also use registered identities, independently of
+    # the absent/dirty/unrelated development workspace.
+    from ovlab_benchctl.plugin_identity import plugin_build_identity
+    assert plugin_build_identity(root, 'policy-example') == result[0]['plugin_build_sha256']
+    ConfigBundleBuilder(root).build('configs/deploy/example.yaml', None, kind='deployment')
+    assert len(contexts) == 1
+    assert all(not path.exists() for path in [*contexts, *secrets])
+    if workspace_state == 'absent':
+        assert not external.exists()
+    else:
+        assert (external / 'model-code/model.py').read_text() == 'local work must survive'
+        assert not (external / 'example-policy').exists()
+        assert external.is_symlink() == (workspace_state == 'symlink')
+
+
+def test_isolated_build_cleans_context_after_docker_failure(external_plugin):
+    root = external_plugin
+    git(root, 'init', '-q')
+    git(root, 'config', 'user.name', 'Fixture')
+    git(root, 'config', 'user.email', 'fixture@example.invalid')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'fixture')
+    contexts = []
+
+    def fail(command, **kwargs):
+        contexts.append(Path(command[-1]))
+        return SimpleNamespace(returncode=1)
+
+    with pytest.raises(RuntimeError, match='Docker build failed'):
+        build_images(root, ['policy-example'], isolated_sources=True, offline=True, runner=fail)
+    assert contexts and all(not path.exists() for path in contexts)
+    assert not (root / 'external').exists()
+
+
+def test_isolated_build_rejects_core_inputs_changed_during_preparation(external_plugin, monkeypatch):
+    from ovlab_benchctl import plugin_build
+    root = external_plugin
+    git(root, 'init', '-q')
+    git(root, 'config', 'user.name', 'Fixture')
+    git(root, 'config', 'user.email', 'fixture@example.invalid')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'fixture')
+    copy_context = plugin_build._copy_core_context
+    contexts = []
+
+    def changing_context(repository, context):
+        contexts.append(context)
+        copied = copy_context(repository, context)
+        (root / 'deploy/docker/base-images.lock').write_text('changed after snapshot')
+        return copied
+
+    monkeypatch.setattr(plugin_build, '_copy_core_context', changing_context)
+    with pytest.raises(ConfigCompatibilityError, match='input changed while preparing'):
+        build_images(root, ['policy-example'], runner=lambda *args, **kwargs: pytest.fail('Docker must not run'))
+    assert contexts and all(not path.exists() for path in contexts)
+
+
+def test_development_external_files_do_not_change_core_build_provenance(external_plugin):
+    root = external_plugin
+    git(root, 'init', '-q')
+    git(root, 'config', 'user.name', 'Fixture')
+    git(root, 'config', 'user.email', 'fixture@example.invalid')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'fixture')
+    module = runpy.run_path(str(ROOT / 'deploy/scripts/source_manifest.py'))
+    registry = registry_document(root)
+    before = module['build_manifest'](root, registry=registry, source_rows=[])
+    (root / 'external/unrelated').mkdir(parents=True)
+    (root / 'external/unrelated/local.py').write_text('unrelated development work')
+    after = module['build_manifest'](root, registry=registry, source_rows=[])
+    assert after['source_content_sha256'] == before['source_content_sha256']
+    assert after['dirty'] == before['dirty']
+
+
+def test_isolated_offline_build_reads_pinned_git_objects_without_dirty_checkout_files(external_plugin, tmp_path):
+    root = external_plugin
+    upstream = tmp_path / 'remote'
+    upstream.mkdir()
+    (upstream / 'model.py').write_text('PINNED = True\n')
+    git(upstream, 'init', '-q')
+    git(upstream, 'config', 'user.name', 'Fixture')
+    git(upstream, 'config', 'user.email', 'fixture@example.invalid')
+    git(upstream, 'add', '.')
+    git(upstream, 'commit', '-qm', 'model')
+    pinned = git(upstream, 'rev-parse', 'HEAD')
+    registry = registry_document(root)
+    registry['sources']['model-code'] = {'kind': 'git', 'url': upstream.as_uri(), 'commit': pinned}
+    registry['builds']['policy-example']['sources'].append('model-code')
+    write_registry(root, registry)
+    sync_sources(root, ['model-code'])
+    cached = root / 'external/model-code'
+    (cached / 'model.py').write_text('dirty development changes')
+    (cached / 'untracked.py').write_text('must not enter image')
+    shutil.rmtree(upstream)
+    git(root, 'init', '-q')
+    git(root, 'config', 'user.name', 'Fixture')
+    git(root, 'config', 'user.email', 'fixture@example.invalid')
+    git(root, 'add', 'VERSION')
+    git(root, 'commit', '-qm', 'fixture')
+    status = git(cached, 'status', '--porcelain')
+
+    def docker(command, **kwargs):
+        source = Path(command[-1]) / 'external/model-code'
+        assert (source / 'model.py').read_text() == 'PINNED = True\n'
+        assert not (source / 'untracked.py').exists()
+        assert git(source, 'rev-parse', 'HEAD') == pinned
+        return SimpleNamespace(returncode=0)
+
+    result = build_images(root, ['policy-example'], offline=True, runner=docker)
+    assert result[0]['isolated_sources'] is True
+    assert git(cached, 'status', '--porcelain') == status
+    assert (cached / 'model.py').read_text() == 'dirty development changes'
+    assert not (root / 'external/example-policy').exists()
+
+
+def test_bundled_experiment_resolves_and_serves_without_git_or_source_inspection(external_plugin, monkeypatch):
+    from ovlab_benchctl.application import OvlabApplication
+    from ovlab_benchctl import plugin_identity, plugin_sources
+    import ovlab_remote_policy.service
+
+    root = external_plugin
+    registry = registry_document(root)
+    remote = {'kind': 'git', 'url': 'https://example.invalid/model.git', 'commit': 'a' * 40}
+    registry['sources']['remote-model'] = remote
+    registry['plugins']['example_policy']['sources'].append('remote-model')
+    registry['builds']['policy-example']['sources'].append('remote-model')
+    write_registry(root, registry)
+    experiment = 'experiments/evaluation/example-plugin.yaml'
+    resolver = ConfigResolver(root / 'configs', repository_root=root)
+    host = resolver.resolve(experiment, local_profile='configs/local/example.yaml', environment={})
+    builder = ConfigBundleBuilder(root)
+    bundle = builder.build(experiment, None)
+    # Image source trees have no checkout metadata. A local project can also
+    # differ from the frozen bundle after it was built on the host.
+    copied = root / 'external/remote-model'
+    copied.mkdir(parents=True)
+    (copied / 'model.py').write_text('# copied into the image without .git\n')
+    (root / 'examples/policy-plugin/README.md').write_text('changed after bundling')
+
+    def no_inspection(*args, **kwargs):
+        pytest.fail('a bundled worker must not inspect source trees or invoke Git')
+
+    monkeypatch.setattr(plugin_sources, '_git', no_inspection)
+    monkeypatch.setattr(plugin_identity, 'inspect_sources', no_inspection)
+    captured = {}
+
+    class Service:
+        def __init__(self, socket, adapter, *, identity_provider, startup_context, **kwargs):
+            self.adapter, self.identity_provider, self.startup_context = adapter, identity_provider, startup_context
+
+        def serve(self):
+            capabilities = self.adapter.initialize(self.startup_context)
+            captured.update(self.identity_provider(capabilities))
+            self.adapter.close()
+
+    monkeypatch.setattr(ovlab_remote_policy.service, 'PolicyService', Service)
+    with builder.materialize(bundle) as config:
+        environment = {
+            'OVLAB_PLUGIN_REGISTRY': str(config / 'plugins/registry.json'),
+            'OVLAB_LOCAL_PROFILE': str(config / 'plugins/runtime-profile.yaml'),
+        }
+        worker = ConfigResolver(config, repository_root=root, environment=environment).resolve(
+            config / experiment, local_profile=environment['OVLAB_LOCAL_PROFILE'],
+        )
+        assert worker.scientific_config == host.scientific_config
+        assert worker.scientific_config_hash == host.scientific_config_hash
+        assert worker.scientific_config['policy_plugin']['sources']['remote-model'] == remote
+        # Exercise the evaluation service path too; standalone deploy uses a
+        # different resolver and did not expose this regression.
+        app = OvlabApplication(root, environment=environment)
+        app.config_root = config
+        result = app.serve(config / experiment, host='127.0.0.1', port=8123)
+        assert result['closed'] is True
+        assert captured['method_identity']['id'] == 'example-constant'
 
 
 def test_service_startup_selects_external_plugin_without_builtin_settings_dispatch(external_plugin, monkeypatch):
@@ -360,7 +597,7 @@ def test_build_detects_mutated_staged_source_and_cleans_secrets(external_plugin)
         return SimpleNamespace(returncode=0)
 
     with pytest.raises(ConfigCompatibilityError, match='changed during build'):
-        build_images(root, ['policy-example'], runner=docker)
+        build_images(root, ['policy-example'], isolated_sources=False, runner=docker)
     assert all(not path.exists() for path in secrets)
 
 

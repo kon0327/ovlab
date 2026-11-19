@@ -12,10 +12,13 @@ a reinstall without requirement changes. Training and evaluation
 still use their dedicated Docker images for model and simulator dependencies.
 
 Model sources are selected through the [plugin registry](docs/POLICY_PLUGINS.md).
-After a fresh checkout, run `./ovlab plugin sync` to prepare the registered Git
-commits in ignored `external/`. Image builds also prepare their required sources.
+Image builds fetch registered Git commits or snapshot local directories into a
+temporary context; no prepared `external/` is required. Use `./ovlab plugin sync`
+to populate ignored `external/` for source inspection or an offline Git cache.
+`--workspace-sources` explicitly builds from that development workspace instead.
 For local development, register a filesystem project rather than editing a
-managed remote checkout.
+managed remote checkout. The OVLAB adapter's lightweight control hooks must be
+available to the host; upstream model dependencies stay in their Docker image.
 
 ## Linux and macOS
 

@@ -139,6 +139,12 @@ def _parser() -> argparse.ArgumentParser:
         if name in {"sync", "build"}:
             command.add_argument("--offline", action="store_true")
             command.add_argument("--dry-run", action="store_true")
+        if name == "build":
+            sources = command.add_mutually_exclusive_group()
+            sources.add_argument("--isolated-sources", dest="isolated_sources", action="store_true", default=True,
+                                 help="fetch/copy registered sources into a temporary context (default)")
+            sources.add_argument("--workspace-sources", dest="isolated_sources", action="store_false",
+                                 help="sync and build from the development external/ workspace")
         _output_options(command)
 
     service = commands.add_parser("service", help="run an isolated policy service")
@@ -1113,7 +1119,8 @@ def _dispatch(args):
             else:
                 roles = list(dict.fromkeys(p.descriptor["deployment"]["role"] for p in selected if "deployment" in p.descriptor))
                 if selection and not roles: raise CliUsageError(f"plugin {selection!r} has no runnable image recipe")
-                result = build_images(root, roles, offline=args.offline, dry_run=args.dry_run)
+                result = build_images(root, roles, offline=args.offline, dry_run=args.dry_run,
+                                      isolated_sources=args.isolated_sources)
             return result, args.json, None
     if args.command == "policy":
         if args.policy_command == "list":

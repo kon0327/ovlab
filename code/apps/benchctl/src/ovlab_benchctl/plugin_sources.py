@@ -134,7 +134,7 @@ def _uncommitted_files(path):
 
 
 
-def _sync_git(root, name, source, offline):
+def _sync_git(root, name, source, offline, git_cache_root=None):
     path = _destination(root, name)
     if path.exists():
         if not path.is_dir() or not (path / ".git").exists():
@@ -157,13 +157,21 @@ def _sync_git(root, name, source, offline):
             _git(path, "fetch", "--no-tags", "origin", source["commit"])
         _git(path, "checkout", "--detach", source["commit"])
         return
-    if offline: raise ConfigReferenceError(f"source {name} is unavailable offline; sync it first")
+    fetch_from = "origin"
+    if offline:
+        cached = _destination(git_cache_root, name) if git_cache_root is not None else None
+        if (cached is None or not (cached / ".git").exists()
+                or _git(cached, "cat-file", "-t", source["commit"], check=False) != "commit"):
+            raise ConfigReferenceError(f"source {name}@{source['commit']} is unavailable offline; sync it first")
+        # Consume immutable objects only. Dirty files in the development checkout
+        # are neither copied nor modified by an isolated offline build.
+        fetch_from = str(cached)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=path.parent))
     try:
         _git(temporary, "init", "--quiet")
         _git(temporary, "remote", "add", "origin", source["url"])
-        _git(temporary, "fetch", "--depth=1", "--no-tags", "origin", source["commit"])
+        _git(temporary, "fetch", "--depth=1", "--no-tags", "--no-recurse-submodules", fetch_from, source["commit"])
         _git(temporary, "checkout", "--detach", source["commit"])
         if _git(temporary, "rev-parse", "HEAD") != source["commit"]:
             raise ConfigCompatibilityError(f"source {name} resolved to an unexpected commit")
@@ -227,7 +235,7 @@ def _sync_local(root, name, source):
 
 
 @contextmanager
-def prepared_sources(repository_root, source_ids=None, *, offline=False, registry=None):
+def prepared_sources(repository_root, source_ids=None, *, offline=False, registry=None, git_cache_root=None):
     """Keep the selected build workspace locked until its consumer finishes."""
     root = Path(repository_root).resolve()
     registry = registry if registry is not None else registry_document(root)
@@ -236,7 +244,7 @@ def prepared_sources(repository_root, source_ids=None, *, offline=False, registr
         for name, _ in sorted(selections):
             stack.enter_context(_source_lock(root, name))
         for name, source in selections:
-            if source["kind"] == "git": _sync_git(root, name, source, offline)
+            if source["kind"] == "git": _sync_git(root, name, source, offline, git_cache_root)
             else: _sync_local(root, name, source)
         yield inspect_sources(root, [name for name, _ in selections], registry=registry, staged=True)
 

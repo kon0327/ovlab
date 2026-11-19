@@ -58,6 +58,12 @@ export OVLAB_PLUGIN_REGISTRY="$PWD/examples/policy-plugin/registry.json"
 ./ovlab plugin build example-policy
 ```
 
+`sync` prepares a reusable development snapshot and is optional before a build.
+Builds use a temporary context by default, without reading or changing the
+checkout's `external/`. The same build command works after replacing the local
+source with a Git URL and commit; that form fetches the pinned revision. Use
+`--workspace-sources` explicitly to build from a synced development workspace.
+
 Start and verify the service. `build: false` in the deployment configuration uses
 the image you just built; OVLAB checks its role and registered source identity.
 `--offline` uses the bundled artifact through the generated profile. Runtime
@@ -102,6 +108,9 @@ registry, and clear `OVLAB_MODEL_DATA_ROOT` to restore your normal data root.
 5. For distribution, change `sources.example-policy` from `kind: local` plus
    `path` to `kind: git` plus `url` and a full immutable `commit`. Source IDs
    determine `external/<id>`; update the Dockerfile's `COPY` paths too.
+   Your adapter and upstream model may also be two separate registered projects:
+   list both source IDs in the plugin and build recipe, and keep `entrypoint`
+   pointing to your adapter. Either project can use a Git pin or a local path.
 
 After changing local implementation files, rebuild the plugin image before
 redeploying. After importing a plugin in a long-lived Python process, restart
