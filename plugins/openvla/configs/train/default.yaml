@@ -1,0 +1,46 @@
+# Composable LoRA training defaults. The caller must select dataset.ref and a unique id.
+# Full fine-tuning is also supported by selecting mode: full and output_kind: full in a complete profile.
+schema_version: "ovlab.training-profile/v1"
+kind: "training"
+id: "openvla-default"
+trainer:
+  id: "openvla"
+  implementation: "openvla-reference"
+model:
+  base_checkpoint: "openvla-7b"
+  revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
+  processor: "inherited"
+  adaptation_state: "none"
+dataset:
+  preparation: "openvla-rlds"
+  split: "train"
+  partition:
+    seed: 42
+    validation_fraction: 0.1
+    action_normalization: "train-q99"
+training:
+  mode: "peft"
+  peft:
+    method: "lora"
+    target_modules:
+      - "all-linear"
+    rank: 32
+    alpha: 16
+    dropout: 0.0
+  seed: 42
+  max_steps: 10000
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.0005
+  precision: "bf16"
+  gradient_checkpointing: true
+  quantization: "none"
+checkpointing:
+  save_strategy: "final"
+  save_optimizer_state: false
+  output_kind: "adapter"
+resources:
+  accelerator: "cuda"
+  gpu_count: 1
+  max_vram_gib: 40
+  network: "disabled"

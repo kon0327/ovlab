@@ -1,0 +1,11 @@
+# Composable model-side evaluation defaults, not a complete experiment.
+# The caller supplies experiment identity, benchmark, metrics, protocol and artifact store.
+schema_version: "0.1.0"
+kind: "experiment"
+deployment:
+  profile: "oft"
+  renderer: "egl"
+components:
+  policy: "plugin://openvla-oft/policy/default.yaml"
+resources:
+  registry: "plugin://openvla-oft/registry/default.yaml"

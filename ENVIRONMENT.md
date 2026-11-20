@@ -26,7 +26,7 @@ available to the host; the selected project loader exposes its source or install
 distribution without making the core depend on that package. Upstream model
 dependencies stay in their Docker image. For direct Python development, install
 the selected project explicitly, for example
-`python -m pip install --no-deps -e plugins/openvla`. Its declared lightweight
+`python -m pip install --no-deps -e plugins/_shared/openvla-support -e plugins/openvla -e plugins/openvla-oft -e plugins/openvla-quic`. Its declared lightweight
 dependencies must already be available in the environment. Installed plugins can
 expose their manifest directory through the `ovlab.plugin_projects` entrypoint;
 the OpenVLA wheel includes its project assets under `share/ovlab/plugins/openvla`.
@@ -121,5 +121,5 @@ training or evaluation container:
 
 ```bash
 ovlab policy list --json
-ovlab run experiments/evaluation/libero10-openvla-vanilla-4bit-rpc-smoke.yaml --plan --json
+ovlab run examples/experiments/openvla-eval.yaml --plan --json
 ```

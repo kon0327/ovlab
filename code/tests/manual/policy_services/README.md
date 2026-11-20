@@ -20,4 +20,4 @@ conda run -n openvla python code/tests/manual/policy_services/openvla/smoke_infe
 
 `--quantization` accepts `none`, `4bit`, or `8bit`. Use `--attn_implementation flash_attention_2` to exercise FlashAttention, `--unnorm_key` for a fine-tuned checkpoint's dataset statistics, and `--image_path` to replace the default synthetic black RGB image with a real observation. If the checkpoint exposes exactly one normalization key, the smoke test selects it automatically; otherwise it reports the valid choices and requires `--unnorm_key`.
 
-See [`openvla/SMOKE_INSTRUCTION.md`](openvla/SMOKE_INSTRUCTION.md) for complete commands, checkpoint examples, and troubleshooting guidance.
+See [`openvla/INSTRUCTION.md`](openvla/INSTRUCTION.md) for complete commands, checkpoint examples, and troubleshooting guidance.

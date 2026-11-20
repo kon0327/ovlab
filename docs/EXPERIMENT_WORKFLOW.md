@@ -3,15 +3,17 @@
 Every supported experiment starts with the same command:
 
 ```bash
-ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --plan
-ovlab run experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --verify
-ovlab run experiments/workflows/libero-model-tree.yaml
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml --plan
+ovlab run examples/experiments/openvla-eval.yaml --verify
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml
 ovlab run EXPERIMENT_ID_OR_HASH --verify
 ovlab report EXPERIMENT_ID_OR_HASH
 ```
 
-The resolver accepts an explicit YAML/JSON path or a unique name below
-`experiments/`. Ambiguous names require a path. The document determines execution:
+The resolver accepts an explicit YAML/JSON path, a registered `plugin://` reference,
+or a unique name below `experiments/` and `examples/experiments/`. Ambiguous names
+require an explicit path. Tracked examples are verification scenarios; user
+experiments live in the ignored `experiments/` directory. The document determines execution:
 
 | Source | Interpretation |
 | --- | --- |
@@ -66,7 +68,7 @@ node path in `config.evaluate.checkpoint_from`:
 ```yaml
 config:
   evaluate:
-    profile: libero10-lora-full-three-per-task.yaml
+    profile: plugin://openvla/evaluate/default.yaml
     checkpoint_from: lora
 ```
 
@@ -95,19 +97,13 @@ verification checks this evidence against the canonical training result and
 checkpoint. On failure, no new phases start; active subprocesses are interrupted
 and completed evidence is retained.
 
-The [YAML example](../experiments/workflows/libero-model-tree.yaml) and its
-[JSON equivalent](../experiments/workflows/libero-model-tree.json) compare model,
-task and quantization branches. Two evaluation-only examples run the same merged
-4-bit LoRA checkpoint:
-
-```bash
-ovlab run experiments/workflows/libero10-lora-4bit-smoke.yaml
-ovlab run experiments/workflows/libero10-lora-4bit-eval.yaml
-```
-
-The smoke test limits task 0 to one episode and two steps; it checks execution
-and reporting rather than task performance. The full example uses all ten tasks,
-three episodes each and a 520-step limit. Neither trains a new model.
+The [pipeline example](../examples/experiments/plugin-pipeline-smoke.yaml) combines
+QuIC training with checkpoint handoff, one two-step LIBERO rollout and reporting.
+The [OpenVLA example](../examples/experiments/openvla-eval.yaml) and
+[OFT example](../examples/experiments/openvla-oft-eval.yaml) verify pretrained
+inference. The [mock configuration example](../examples/experiments/mock-smoke.yaml)
+validates without model weights; it is a planning fixture, not a production runner. Copy an example into `experiments/` and explicitly change its
+profiles and patches to define your experiment.
 
 Running creates a new instance named with the configured ID, UTC timestamp and
 ten-character suffix. `runs/<instance>/.experiment/` contains `spec.json`,
@@ -124,8 +120,8 @@ if a later phase or reporting operation fails.
 | `kind` | Required at the root; `workflow`. |
 | `execution.max_workers` | Optional root scheduler limit, 1–32; default 2. |
 | `id`, `name` | Portable ID and readable title. `id` is required at every node; `name` at the root. |
-| `config.train.profile` | Existing YAML under `experiments/training/`. |
-| `config.evaluate.profile` | Existing YAML under `experiments/evaluation/`. |
+| `config.train.profile` | Training document path or `plugin://MODEL/train/default.yaml`. |
+| `config.evaluate.profile` | Evaluation document path or `plugin://MODEL/evaluate/default.yaml`. |
 | `config.evaluate.checkpoint_from` | Root-relative training node whose finalized output this evaluation uses; inherited by descendants. `""` selects the root. |
 | `config.train.patch` | Changes fields in the resolved training profile, such as `dataset`, `model`, `training` or `resources`. |
 | `config.evaluate.patch` | Changes fields in the resolved evaluation YAML, including `components` references and `deployment`. |
@@ -137,10 +133,17 @@ if a later phase or reporting operation fails.
 Configuration objects inherit through the tree. Mappings merge recursively;
 arrays and scalar values replace their parents. A child can select a new
 `profile` and still receives inherited patches, so the resulting profile is
-validated in full. Profile references select regular files; explicit paths may point outside the
-repository. Components continue to resolve from `configs/`. Relative `extends`
-paths stay inside their configuration root. Unknown fields, invalid component
-combinations, missing dependencies and cycles fail at planning.
+validated in full after composition. Plugin train/evaluate defaults can be partial:
+the experiment must supply a dataset for training and benchmark, metric, protocol
+and artifact choices for evaluation. A default is a model-owned building block,
+not a complete experiment.
+
+Configuration has three origins: `ovlab://` selects tracked `config/` defaults,
+`plugin://` selects registered plugin defaults, and plain component references
+select ignored user `configs/`. Relative `extends` stays inside its origin;
+explicit URIs cross origins. No user override is discovered or applied implicitly.
+Unknown fields, missing components, incompatible interfaces and dependency cycles
+fail planning. See [configuration ownership](../config/README.md).
 
 Files ending in `.yaml` or `.yml` use the same strict YAML subset as other
 OVLAB configurations: two-space indentation, mappings, sequences, inline

@@ -35,8 +35,12 @@ dist/
 .env
 .env.*
 !.env.example
-configs/local/*.yaml
-!configs/local/profile.example.yaml
+# User configuration and experiment recipes are local workspace content.
+# Public defaults live in config/ and plugin projects; examples live in examples/.
+/configs/**
+!/configs/README.md
+/experiments/**
+!/experiments/README.md
 
 # Materialized plugin sources and generated Compose plans
 /external/

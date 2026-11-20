@@ -15,6 +15,14 @@ from .training_errors import CheckpointBundleError, TrainingProfileError, Traini
 def _extensions(repository_root=None):
     seen = set()
     for owner in registered_plugins(repository_root):
+        project = owner.descriptor.get("project")
+        identities = owner.registry.get("source_identities")
+        if project and identities is not None:
+            source_id = owner.registry["projects"][project]["source_id"]
+            if source_id not in identities:
+                # An image/bundle registry can describe other installed model
+                # choices, but only its frozen sources provide runtime hooks.
+                continue
         declaration = owner.descriptor.get("training")
         if not isinstance(declaration, dict):
             continue

@@ -104,9 +104,9 @@ def _array_references(value):
 
 def test_real_libero_runner_produces_recomputable_immutable_trace() -> None:
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "experiments/evaluation/libero-mock-smoke.yaml",
+        os.environ["OVLAB_MANUAL_EVALUATION_CONFIG"],
         local_profile=_profile(),
-        execution_profile="profiles/libero-bench-egl.yaml",
+        execution_profile="ovlab://profiles/egl.yaml",
     )
     run = RunContext(RunId(os.environ.get("OVLAB_RUN_ID", "gate-b-libero-mock")), 1, "Gate B LIBERO mock smoke", 42)
     plan = resolved.create_plan(run, (TaskId("libero/spatial/0"),))

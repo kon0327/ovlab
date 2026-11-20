@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from helpers.training_profiles import make_repository, training_document
+from helpers.evaluation_fixtures import write_evaluation_fixtures
 from ovlab_core.experiment_scope import ExperimentScope
 from ovlab_benchctl.checkpointing import checkpoint_spec_from_snapshot, CheckpointResolutionError
 from ovlab_benchctl.checkpoint_preparation import finish_snapshot
@@ -36,17 +38,14 @@ def tensor(path, name='layer.weight', value=1.0):
 @pytest.fixture
 def resources(tmp_path):
     repository, data = tmp_path / 'repository', tmp_path / 'data'
-    shutil.copytree(ROOT / 'configs', repository / 'configs')
-    shutil.copytree(ROOT / 'experiments', repository / 'experiments')
-    registrations = json.loads((ROOT / 'plugins/registry.json').read_text())
-    registrations['plugins']['openvla']['source']['path'] = str(ROOT / 'plugins/openvla')
-    (repository / 'plugins').mkdir()
-    (repository / 'plugins/registry.json').write_text(json.dumps(registrations))
-    # This fixture supplies a tiny, explicit resource catalog; real plugin
-    # defaults remain read-only and still provide the policy implementations.
-    for experiment in (repository / 'experiments/evaluation').glob('*.yaml'):
-        experiment.write_text(experiment.read_text().replace(
-            'plugin://openvla/resources/registry.yaml', 'resources/registry.yaml'))
+    make_repository(repository)
+    references = write_evaluation_fixtures(repository, repository / 'configs/.fixtures')
+    for reference in references.values():
+        path = repository / reference
+        doc = load(path)
+        doc['resources']['registry'] = 'resources/registry.yaml'
+        path.write_text(dumps(doc))
+    (repository / 'configs/resources').mkdir()
 
     revision = 'c' * 40
     base = data / 'checkpoints/huggingface/openvla-7b' / revision
@@ -55,16 +54,17 @@ def resources(tmp_path):
     (base / 'preprocessor_config.json').write_text('{}')
     tensor(base / 'model.safetensors')
     spec = checkpoint_spec_from_snapshot('openvla-7b', 'tiny/openvla', revision, base)
-    registry = load(ROOT / 'plugins/openvla/configs/resources/registry.yaml')
+    registry = {'schema_version': '0.1.0', 'kind': 'resource_registry', 'checkpoints': {}, 'repositories': {}}
     registry['checkpoints']['openvla-7b'] = {
         'repo_id': spec.repo_id, 'revision': revision, 'expected_sha256': spec.expected_sha256,
         'files': {name: {'size': size, 'sha256': digest} for name, size, digest in spec.files},
     }
     (repository / 'configs/resources/registry.yaml').write_text(dumps(registry))
-    profile = deepcopy(load_training_profile(repository / 'experiments/training/openvla-lora-libero10-smoke.yaml').document)
+    profile = training_document('lora')
     profile['model']['revision'] = revision
     profile['training']['peft'].update(rank=2, alpha=2)
-    return SimpleNamespace(repository=repository, data=data, base=base, spec=spec, profile=profile,
+    (repository / 'experiments/training/train.yaml').write_text(dumps(profile))
+    return SimpleNamespace(repository=repository, data=data, base=base, spec=spec, profile=profile, references=references,
                            environment={'OVLAB_DATA_ROOT': str(data), 'OVLAB_GLOBAL_HF_CACHE': str(tmp_path / 'empty-cache')})
 
 
@@ -73,7 +73,7 @@ def trained(resources, *, instance='study', node='lora', method='lora', finalize
     if method == 'quic':
         profile['training']['peft'] = {'method': 'quic', 'placement': {'id': 'custom'},
                                     'adapter': {'profile': 'QP2'}, 'targets': [{'names': ['layer']} ]}
-        profile['trainer']['implementation'] = 'openvla-quic'
+        profile['trainer'] = {'id': 'openvla-quic', 'implementation': 'openvla-quic'}
     base = {'resource_id': resources.spec.resource_id, 'repository': resources.spec.repo_id,
             'revision': resources.spec.revision, 'aggregate_sha256': resources.spec.expected_sha256}
     plan = {'profile_id': profile['id'], 'scientific_training_id': 'training-plan-' + 'a' * 32,
@@ -118,8 +118,8 @@ def trained(resources, *, instance='study', node='lora', method='lora', finalize
 
 
 def evaluation(resources, *, method='lora', source='lora'):
-    filename = 'libero10-quic-adapter-rpc-smoke.yaml' if method == 'quic' else 'libero10-lora-full-three-per-task.yaml'
-    plan = ExperimentWorkflow(resources.repository).plan(resources.repository / 'experiments/evaluation' / filename)
+    reference = resources.references['quic' if method == 'quic' else 'openvla']
+    plan = ExperimentWorkflow(resources.repository).plan(reference)
     configuration = deepcopy(plan['nodes'][0]['configuration']['evaluate'])
     configuration['checkpoint_from'] = source
     return configuration
@@ -225,7 +225,7 @@ def test_invalid_training_handoff_never_reaches_reference_evaluation(resources, 
         record['result']['result']['checkpoint_id'] = 'checkpoint-' + '0' * 32
     with pytest.raises((RuntimeError, ValueError)):
         bind(resources, configuration, profile, record, converter)
-    assert configuration['document']['components']['policy'] == 'plugin://openvla/policies/openvla-lora/merged-libero10.yaml'
+    assert configuration['document']['components']['policy'] == 'plugin://openvla/policy/lora.yaml'
     if failure == 'conversion':
         assert not list((resources.data / 'checkpoints/local/inference').rglob('manifest.json'))
     else:
@@ -245,40 +245,40 @@ def test_cached_snapshot_tampering_fails_without_remerging(resources):
     assert converter.merges == 1
 
 
-def workflow_document():
+def workflow_document(resources):
     return {'schema_version': 'ovlab.experiment/v1', 'kind': 'workflow', 'id': 'study', 'name': 'Study',
-            'config': {'train': {'profile': 'openvla-lora-libero10-smoke.yaml'}},
+            'config': {'train': {'profile': 'experiments/training/train.yaml'}},
             'children': [{'id': 'lora', 'execute': ['train'], 'config': {'evaluate': {
-                'checkpoint_from': 'lora', 'profile': 'libero10-lora-full-three-per-task.yaml'}},
+                'checkpoint_from': 'lora', 'profile': resources.references['openvla']}},
                 'children': [{'id': 'full', 'execute': ['evaluate']}, {'id': 'eight', 'execute': ['evaluate'],
                              'config': {'evaluate': {'component_patches': {'policy': {'settings': {'runtime': {'quantization': '8bit'}}}}}}}]}]}
 
 
-def test_checkpoint_from_is_inherited_and_adds_the_training_dependency(tmp_path):
+def test_checkpoint_from_is_inherited_and_adds_the_training_dependency(tmp_path, resources):
     source = tmp_path / 'tree.yaml'
-    source.write_text(dumps(workflow_document()))
-    plan = ExperimentWorkflow(ROOT).plan(source)
+    source.write_text(dumps(workflow_document(resources)))
+    plan = ExperimentWorkflow(resources.repository).plan(source)
     assert plan['steps'][0] == {'node': 'lora', 'phase': 'train'}
     for node in plan['nodes'][2:]:
         assert node['configuration']['evaluate']['checkpoint_from'] == 'lora'
         assert node['depends_on'] == []
     with pytest.raises(ExperimentSpecError, match='missing training phase'):
-        ExperimentWorkflow(ROOT).plan(source, node='lora/full')
+        ExperimentWorkflow(resources.repository).plan(source, node='lora/full')
 
 
 @pytest.mark.parametrize('change', ['missing', 'cycle', 'wrong-method'])
-def test_invalid_checkpoint_dependencies_are_rejected_before_workloads(tmp_path, change):
-    document = workflow_document()
+def test_invalid_checkpoint_dependencies_are_rejected_before_workloads(tmp_path, change, resources):
+    document = workflow_document(resources)
     if change == 'missing':
         document['children'][0]['config']['evaluate']['checkpoint_from'] = 'unknown'
     elif change == 'cycle':
         document['children'][0]['depends_on'] = [{'node': 'lora/full', 'phase': 'evaluate'}]
     else:
-        document['children'][0]['config']['evaluate']['profile'] = 'libero10-oft-full-three-per-task.yaml'
+        document['children'][0]['config']['evaluate']['profile'] = resources.references['oft']
     source = tmp_path / 'tree.yaml'
     source.write_text(dumps(document))
     with pytest.raises((ExperimentSpecError, ConfigCompatibilityError)):
-        ExperimentWorkflow(ROOT).plan(source)
+        ExperimentWorkflow(resources.repository).plan(source)
 
 
 def run_fixture_workflow(resources, monkeypatch, *, finalized=True):
@@ -292,7 +292,7 @@ def run_fixture_workflow(resources, monkeypatch, *, finalized=True):
     monkeypatch.setattr(handoff, 'prepare_dense_checkpoint', prepare)
     seen = []
     source = resources.repository / 'experiment.yaml'
-    document = workflow_document()
+    document = workflow_document(resources)
     document['execution'] = {'max_workers': 2}
     document['config']['train']['patch'] = {'model': {'revision': resources.spec.revision},
                                           'training': {'peft': {'rank': 2, 'alpha': 2}}}

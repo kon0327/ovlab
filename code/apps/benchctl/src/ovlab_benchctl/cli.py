@@ -934,7 +934,7 @@ def _compact(command: str, result) -> str:
                               "No dataset providers found."),
         "dataset list": ("datasets", (("DATASET", ("logical_name",)), ("VERSION", ("dataset_version",)),
                                       ("PATH", ("path",))), "No datasets found."),
-        "train profiles": ("profiles", (("PROFILE", ("id",)), ("VALID", ("valid",)),
+        "train profiles": ("profiles", (("PROFILE", ("id",)), ("TEMPLATE", ("template",)), ("VALID", ("valid",)),
                                         ("PATH", ("path",))), "No training profiles found."),
         "checkpoint list": ("checkpoints", (("CHECKPOINT", ("checkpoint_id",)), ("KIND", ("kind",)),
                                             ("MERGE STATUS", ("merge_status",)), ("PATH", ("host_path",))),

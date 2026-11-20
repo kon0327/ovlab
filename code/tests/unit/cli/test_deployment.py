@@ -22,8 +22,8 @@ from ovlab_benchctl.image_metadata import IMAGE_CONTRACT_LABEL
 REPOSITORY = Path(__file__).resolve().parents[4]
 OVLAB = REPOSITORY / "ovlab"
 ENV_FILE = "deploy/compose/.env.example"
-LORA = "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
-OFT = "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml"
+LORA = "configs/.tests/evaluation/openvla.yaml"
+OFT = "configs/.tests/evaluation/oft.yaml"
 _PREFLIGHT_IMAGES = ComposeDeployment._preflight_images
 
 
@@ -60,7 +60,7 @@ def test_quic_adapter_override_requires_both_files_and_resolves_from_environment
     env_file = tmp_path / "compose.env"
     env_file.write_text("OVLAB_QUIC_ADAPTER_HOST_PATH=adapter\n", encoding="utf-8")
     deployment = ComposeDeployment(REPOSITORY, environment={})
-    plan = SimpleNamespace(profile="quic", env_file=str(env_file), experiment="experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml")
+    plan = SimpleNamespace(profile="quic", env_file=str(env_file), experiment="configs/.tests/evaluation/quic.yaml")
     with pytest.raises(ComposeDeploymentError, match="adapter.json, adapter.safetensors"):
         deployment._runtime_mounts(plan)
     (adapter / "adapter.json").write_text("{}", encoding="utf-8")
@@ -157,7 +157,7 @@ def test_openvla_egl_run_preflights_starts_and_reaps_one_project(deployment_envi
     assert publish[-6:] == ["--profile", "reporting", "run", "--rm", "--no-deps", "reporting"]
     assert runner.calls[-1]["env"]["OVLAB_REPORT_RUN_ID"] == "simulated-run"
     assert runner.calls[-1]["env"]["OVLAB_REPORT_ENABLED"] == "true"
-    container_experiment = "/opt/ovlab/configs/experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
+    container_experiment = "/opt/ovlab/configs/.tests/evaluation/openvla.yaml"
     assert all(
         call["env"]["OVLAB_EXPERIMENT_CONFIG"] == container_experiment
         for call in runner.calls
@@ -267,7 +267,7 @@ def test_oft_glfw_plan_selects_oft_services_and_renderer_overlay():
     assert plan.benchmark_service == "benchmark-oft"
     assert deployment.service_spec(plan)["services"][plan.benchmark_service]["environment"]["MUJOCO_GL"] == "glfw"
     assert plan.up_command[-2:] == ("--exit-code-from", "benchmark-oft")
-    assert plan.experiment == OFT
+    assert plan.experiment == OFT.removeprefix("configs/")
 
 
 def test_deployment_defaults_are_read_from_experiment_yaml():
@@ -293,11 +293,11 @@ def test_deployment_defaults_are_read_from_experiment_yaml():
 def test_deploy_target_resolves_bare_experiment_name():
     deployment = ComposeDeployment(REPOSITORY)
     plan = deployment.plan(
-        "libero10-lora-merged-rpc-smoke",
+        LORA,
         env_file=ENV_FILE,
         project_name="ovlab-test-bare-target",
     )
-    assert plan.experiment == LORA
+    assert plan.experiment == LORA.removeprefix("configs/")
 
 
 def test_quantization_override_is_validated_and_recorded_in_plan():
@@ -309,7 +309,7 @@ def test_quantization_override_is_validated_and_recorded_in_plan():
     assert (plan.quantization, plan.quantization_source) == ("4bit", "cli")
     with pytest.raises(ValueError, match="does not support quantization"):
         deployment.plan(
-            "experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml",
+            "configs/.tests/evaluation/quic.yaml",
             quantization="4bit", env_file=ENV_FILE,
         )
     with pytest.raises(ValueError, match="does not support quantization"):
@@ -356,25 +356,29 @@ def test_offline_flag_is_part_of_the_deployment_plan():
 def test_evaluation_offline_setting_is_resolved_from_yaml(tmp_path):
     repository = tmp_path / "repository"
     shutil.copytree(REPOSITORY / "configs", repository / "configs")
+    shutil.copytree(REPOSITORY / "config", repository / "config")
     shutil.copytree(REPOSITORY / "experiments", repository / "experiments")
     shutil.copytree(REPOSITORY / "plugins", repository / "plugins", ignore=shutil.ignore_patterns('.cache', '__pycache__', '*.egg-info', 'build', 'dist'))
     environment_file = repository / "deploy/compose/.env"
     environment_file.parent.mkdir(parents=True)
     environment_file.write_text("")
     source = repository / LORA
-    source.write_text(source.read_text().replace("  renderer: egl", "  renderer: egl\n  offline: true"))
+    from ovlab_benchctl.strict_yaml import load, dumps
+    document = load(source)
+    document["deployment"]["offline"] = True
+    source.write_text(dumps(document))
     deployment = ComposeDeployment(repository, environment={})
     plan = deployment.plan(LORA, project_name="offline-from-config")
     assert plan.offline is True
     assert plan.document(side_effects_performed=False)["offline"] is True
     assert deployment.plan(LORA, offline=False).offline is False
     builder = ConfigBundleBuilder(repository)
-    bundle = builder.build(LORA, "profiles/libero-bench-egl.yaml")
+    bundle = builder.build(LORA, "ovlab://profiles/egl.yaml")
     from ovlab_benchctl.strict_yaml import load
     with builder.materialize(bundle) as materialized:
-        runtime = load(materialized / LORA)
+        runtime = load(materialized / LORA.removeprefix("configs/"))
         assert "offline" not in runtime["deployment"]
-    source_entry = next(item for item in bundle.files if item["path"] == LORA)
+    source_entry = next(item for item in bundle.files if item["path"] == LORA.removeprefix("configs/"))
     assert "source_sha256" in source_entry
 
 
@@ -682,19 +686,19 @@ def test_dry_run_has_no_docker_side_effects():
 
 def test_config_bundle_is_minimal_deterministic_and_read_only(tmp_path):
     builder = ConfigBundleBuilder(REPOSITORY)
-    first = builder.build(LORA, "profiles/libero-bench-egl.yaml")
-    second = builder.build(LORA, "profiles/libero-bench-egl.yaml")
+    first = builder.build(LORA, "ovlab://profiles/egl.yaml")
+    second = builder.build(LORA, "ovlab://profiles/egl.yaml")
 
     assert first == second
     paths = {item["path"] for item in first.files}
-    assert "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml" in paths
-    assert "benchmarks/libero/libero10-smoke.yaml" in paths
-    assert "benchmarks/libero/libero10.yaml" in paths
-    assert "plugins/configs/openvla/policies/openvla-lora/merged-libero10.yaml" in paths
-    assert "interfaces/actions/libero-osc-pose-v1.yaml" in paths
-    assert "plugins/configs/openvla/resources/registry.yaml" in paths
-    assert "profiles/libero-bench-egl.yaml" in paths
-    assert "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml" not in paths
+    assert ".tests/evaluation/openvla.yaml" in paths
+    assert ".tests/components/openvla-benchmark.yaml" in paths
+    assert ".tests/components/openvla-protocol.yaml" in paths
+    assert "plugins/configs/openvla/policy/lora.yaml" in paths
+    assert "ovlab/interfaces/actions/libero-osc-pose-v1.yaml" in paths
+    assert "plugins/configs/openvla/registry/default.yaml" in paths
+    assert "ovlab/profiles/egl.yaml" in paths
+    assert "configs/.tests/evaluation/oft.yaml" not in paths
 
     with builder.materialize(first) as root:
         manifest = root / ".ovlab-bundle.json"
@@ -709,8 +713,8 @@ def test_quantization_override_changes_materialized_policy_and_bundle_identity(t
     import hashlib
 
     builder = ConfigBundleBuilder(REPOSITORY)
-    original = builder.build(LORA, "profiles/libero-bench-egl.yaml")
-    quantized = builder.build(LORA, "profiles/libero-bench-egl.yaml", quantization="4bit")
+    original = builder.build(LORA, "ovlab://profiles/egl.yaml")
+    quantized = builder.build(LORA, "ovlab://profiles/egl.yaml", quantization="4bit")
     assert quantized.sha256 != original.sha256
     assert quantized.summary()["quantization_override"] == "4bit"
     assert quantized.document()["quantization_override"] == "4bit"
@@ -723,13 +727,11 @@ def test_quantization_override_changes_materialized_policy_and_bundle_identity(t
         copied = tmp_path / "overridden"
         shutil.copytree(root, copied / "configs")
         policy = ConfigBundleBuilder(copied).load_component(
-            "policies/openvla-lora/merged-libero10.yaml", "policy",
+            "plugin://openvla/policy/lora.yaml", "policy",
         )
         assert policy["settings"]["runtime"]["quantization"] == "4bit"
 
-    assert (REPOSITORY / "plugins/openvla/configs/policies/openvla-lora/merged-libero10.yaml").read_text().find(
-        "quantization: none"
-    ) >= 0
+    assert builder.load_component("plugin://openvla/policy/lora.yaml", "policy")["settings"]["runtime"]["quantization"] == "none"
 
 
 def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
@@ -738,26 +740,27 @@ def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
     source = REPOSITORY / "configs"
     destination = copied / "configs"
     shutil.copytree(source, destination)
+    shutil.copytree(REPOSITORY / "config", copied / "config")
     shutil.copytree(REPOSITORY / "experiments", copied / "experiments")
     shutil.copytree(REPOSITORY / "plugins", copied / "plugins", ignore=shutil.ignore_patterns('.cache', '__pycache__', '*.egg-info', 'build', 'dist'))
     builder = ConfigBundleBuilder(copied)
-    before = builder.build(LORA, "profiles/libero-bench-egl.yaml")
-    experiment = copied / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
+    before = builder.build(LORA, "ovlab://profiles/egl.yaml")
+    experiment = copied / "configs/.tests/evaluation/openvla.yaml"
     experiment.write_text(
         experiment.read_text(encoding="utf-8").replace(
-            "methodological reference", "methodological reference changed"
+            "evaluation smoke", "evaluation smoke changed"
         ),
         encoding="utf-8",
     )
-    after = builder.build(LORA, "profiles/libero-bench-egl.yaml")
+    after = builder.build(LORA, "ovlab://profiles/egl.yaml")
     assert before.sha256 != after.sha256
 
 
 def test_deployment_rejects_non_experiment_configuration():
     deployment = ComposeDeployment(REPOSITORY)
-    with pytest.raises(ValueError, match="experiments/evaluation"):
+    with pytest.raises(ValueError, match="kind"):
         deployment.plan(
-            "configs/policies/openvla-vanilla/base.yaml",
+            "plugin://openvla/policy/default.yaml",
             profile="openvla",
             renderer="egl",
             env_file=ENV_FILE,
@@ -788,7 +791,7 @@ def test_public_cli_exposes_compose_dry_run_without_invoking_docker():
 
 
 def test_public_cli_quantization_override_changes_dry_run_bundle():
-    common = [str(OVLAB), "eval", "run", "libero10-lora-merged-rpc-smoke", "--dry-run", "--json"]
+    common = [str(OVLAB), "eval", "run", LORA, "--dry-run", "--json"]
     environment = {**os.environ, "OVLAB_COMPOSE_ENV_FILE": ENV_FILE}
     normal = subprocess.run(
         common, cwd=REPOSITORY, env=environment, text=True,

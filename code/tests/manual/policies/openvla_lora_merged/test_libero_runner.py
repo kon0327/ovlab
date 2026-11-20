@@ -73,7 +73,7 @@ def _service_process(socket_path: Path, log_path: Path) -> OwnedPolicyServicePro
         "--socket",
         str(socket_path),
         "--registry",
-        str(REPOSITORY / "configs/resources/registry.yaml"),
+        str(REPOSITORY / "plugins/openvla/configs/registry/default.yaml"),
         "--resource-id",
         "openvla-7b-finetuned-libero-10",
         "--unnorm-key",
@@ -101,9 +101,9 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     assert os.environ.get("CONDA_DEFAULT_ENV") == "openvla-oft"
     assert "ovlab_openvla_oft" not in sys.modules
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml",
+        os.environ["OVLAB_MANUAL_EVALUATION_CONFIG"],
         local_profile=_profile(),
-        execution_profile="profiles/libero-bench-egl.yaml",
+        execution_profile="ovlab://profiles/egl.yaml",
     )
     renderer = resolved.benchmark_settings.renderer
     assert renderer.requested_backend is LiberoRendererBackend.EGL

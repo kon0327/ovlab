@@ -1,0 +1,68 @@
+# Composable QuIC training defaults. The caller supplies dataset.ref and checkpoint-compatible normalization.
+# Task subsets, smoke limits and ablations belong in experiments, not in plugin defaults.
+schema_version: "ovlab.training-profile/v1"
+kind: "training"
+id: "openvla-quic-default"
+trainer:
+  id: "openvla-quic"
+  implementation: "openvla-quic"
+model:
+  base_checkpoint: "openvla-7b"
+  revision: "47a0ec7fc4ec123775a391911046cf33cf9ed83f"
+  processor: "inherited"
+  adaptation_state: "none"
+dataset:
+  preparation: "openvla-rlds"
+  split: "train"
+  partition:
+    seed: 42
+    validation_fraction: 0.1
+    action_normalization: "host"
+training:
+  mode: "peft"
+  peft:
+    method: "quic"
+    placement:
+      id: "A3"
+      action_proximal_last_n: 4
+      allow_action_proximal: false
+    adapter:
+      profile: "QP2"
+      operation: "determinant"
+      orders:
+        - 1
+        - 2
+      block_count: 8
+      base_size: "largest_feasible"
+      share_across_blocks: false
+      orthogonal: true
+      construction_dtype: "float32"
+      orientation: "output"
+    targets:
+      - names:
+          - "language_model.model.layers.4.self_attn.o_proj"
+          - "language_model.model.layers.12.self_attn.o_proj"
+          - "language_model.model.layers.20.self_attn.o_proj"
+          - "language_model.model.layers.27.self_attn.o_proj"
+        region: "language"
+    max_trainable_parameters: 1000000
+  seed: 42
+  max_steps: 10000
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0001
+  precision: "bf16"
+  gradient_checkpointing: true
+  quantization: "none"
+  validation_batches: 4
+  normalization:
+    unnorm_key: "bridge_orig"
+checkpointing:
+  save_strategy: "final"
+  save_optimizer_state: false
+  output_kind: "adapter"
+resources:
+  accelerator: "cuda"
+  gpu_count: 1
+  max_vram_gib: 32
+  network: "disabled"

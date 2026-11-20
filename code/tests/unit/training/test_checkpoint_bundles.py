@@ -48,7 +48,7 @@ def _context(tmp_path, *, rank=2, base=None):
     plan = {
         "scientific_training_id": "training-plan-" + "a" * 32,
         "execution_plan_id": "training-execution-" + "b" * 32,
-        "scientific": {
+        "scientific": {"trainer": {"id": "openvla-reference"},
             "output": {"output_kind": "adapter"},
             "training": {"mode": "peft", "peft": {"method": "lora", "rank": rank, "alpha": 2, "target_modules": ["all-linear"]}},
             "base_checkpoint": base or {"resource_id": "base", "revision": "c" * 40, "aggregate_sha256": "d" * 64},

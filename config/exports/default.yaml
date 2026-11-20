@@ -1,0 +1,21 @@
+# Example report export; choose run IDs or filters in your own local extension.
+schema_version: "ovlab.export-spec/v1"
+id: "default"
+selection:
+  suite: "libero_10"
+  run_ids: []
+  filters:
+    status: "completed"
+group_by:
+  - "policy.variant"
+  - "task.id"
+outputs:
+  - id: "metrics"
+    kind: "table"
+    builder: "metric_summary"
+    metrics:
+      - "task.success_rate"
+      - "action.smoothness_1"
+      - "action.smoothness_2"
+    formats:
+      - "csv"

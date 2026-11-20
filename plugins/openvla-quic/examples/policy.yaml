@@ -1,0 +1,14 @@
+# Copy to configs/policy/my-model.yaml. Select a supported inference precision here.
+# For an adapter checkpoint, also supply its real path and verified identity; never use dummy hashes.
+schema_version: "0.1.0"
+kind: "policy"
+extends: "plugin://openvla-quic/policy/default.yaml"
+settings:
+  runtime:
+    quantization: "none"
+# A standalone local adapter also needs these fields under settings.quic:
+#   adapter_path: /absolute/path/to/finalized-adapter
+#   adapter_manifest_sha256: <SHA256 of adapter.json>
+#   adapter_tensor_sha256: <SHA256 of adapter.safetensors>
+# Its base checkpoint, preprocessing and normalization must match the adapter.
+# A workflow with checkpoint_from fills these fields from its training output.

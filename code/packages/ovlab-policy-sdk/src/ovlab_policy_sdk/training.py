@@ -30,6 +30,14 @@ class TrainingPlugin(ABC):
     def validate_profile(self, document: Mapping) -> Mapping:
         """Return a normalized profile or reject invalid model/trainer settings."""
 
+    def validate_profile_template(self, document: Mapping) -> Mapping:
+        """Validate composable defaults; implementations define allowed omissions.
+
+        The default remains strict. Template validation never authorizes model
+        execution, which always requires validate_profile on the final document.
+        """
+        return self.validate_profile(document)
+
     @abstractmethod
     def estimated_vram(self, profile) -> float:
         """Return a documented planning estimate in GiB."""

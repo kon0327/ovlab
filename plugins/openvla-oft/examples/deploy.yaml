@@ -1,0 +1,7 @@
+# Copy to configs/deploy/my-model.yaml, then run: ovlab deploy run configs/deploy/my-model.yaml
+schema_version: "ovlab.deployment/v1"
+kind: "deployment"
+extends: "plugin://openvla-oft/deploy/default.yaml"
+id: "openvla-oft-local"
+service:
+  port: 8010

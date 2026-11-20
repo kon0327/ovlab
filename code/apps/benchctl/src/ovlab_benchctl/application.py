@@ -141,14 +141,15 @@ class OvlabApplication:
     def _config_path(self, config: str | Path) -> Path:
         from .config_references import ConfigReferences
         references = ConfigReferences(self.repository_root, self.config_root)
-        if str(config).startswith("plugin:"):
+        if str(config).startswith(("plugin:", "ovlab:")):
             path = references.source(str(config))
             if not path.is_file():
                 raise ConfigReferenceError(f"configuration does not exist: {config}")
             return path
         path = Path(config).expanduser()
         if not path.is_absolute():
-            path = self.repository_root / path
+            direct = self.repository_root / path
+            path = direct if direct.is_file() else references.source(str(path))
         path = path.resolve()
         if not path.is_file():
             raise ConfigReferenceError(f"configuration does not exist: {path}")
@@ -943,15 +944,49 @@ class OvlabApplication:
 
     @with_registry
     def train_profiles(self):
-        from .training_composition import load_training_profile
+        from .training_composition import load_training_document
+        from .policy_plugins import plugin_config_roots, registry_document
+        registry = registry_document(self.repository_root)
+        candidates = []
+        suffixes = {".yaml", ".yml", ".json"}
+        for project, root in sorted(plugin_config_roots(self.repository_root).items()):
+            templates = registry["projects"][project].get("config_templates", {}).get("train", [])
+            paths = {root / reference for reference in templates}
+            paths.update((root / "train").rglob("*"))
+            for path in sorted(paths):
+                if path.is_file() and path.suffix in suffixes:
+                    relative = path.relative_to(root).as_posix()
+                    candidates.append((path, f"plugin://{project}/{relative}", relative in templates))
+        for root in (self.repository_root / "experiments/training", self.config_root / "train"):
+            for path in sorted(root.rglob("*")):
+                if path.is_file() and path.suffix in suffixes and ".generated" not in path.parts:
+                    candidates.append((path, path.relative_to(self.repository_root).as_posix(), False))
         profiles = []
-        for path in sorted((self.repository_root / "experiments/training").rglob("*.yaml")):
+        for path, reference, template in candidates:
+            item = {"path": str(path), "reference": reference, "template": template}
+            template_validated = False
             try:
-                profile = load_training_profile(path, config_root=(self.repository_root / "experiments" if path.is_relative_to(self.repository_root / "experiments") else self.config_root))
+                document = load_training_document(path, repository_root=self.repository_root, expected_kind="training")
+                item["id"] = document.get("id", path.stem)
+                if document.get("schema_version") != "ovlab.training-profile/v1" or not isinstance(document.get("trainer"), dict):
+                    raise ValueError("training profile requires schema_version ovlab.training-profile/v1 and trainer")
+                if template:
+                    from .training_plugins import backend_for_profile
+                    backend_for_profile(document).validate_profile_template(document)
+                    template_validated = True
+                from .training_profiles import TrainingProfile
+                profile = TrainingProfile.from_document(document)
             except Exception as exc:
-                profiles.append({"path": str(path), "valid": False, "error": str(exc)})
+                # A declared template is composable source, not an executable
+                # profile. Report validation diagnostics without marking an
+                # intentionally incomplete document as an executable success.
+                if template_validated:
+                    item.update(valid=None, complete=False, validation_error=str(exc))
+                else:
+                    item.update(valid=False, complete=False, error=str(exc))
             else:
-                profiles.append({"id": profile.profile_id, "path": str(path), "valid": True})
+                item.update(id=profile.profile_id, valid=True, complete=True)
+            profiles.append(item)
         return {"schema_version": "ovlab.training-profiles/v1", "profiles": profiles}
 
     @with_registry

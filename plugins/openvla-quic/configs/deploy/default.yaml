@@ -1,0 +1,18 @@
+# Persistent policy service defaults. Override ports and resources in a local extension.
+schema_version: "ovlab.deployment/v1"
+kind: "deployment"
+id: "openvla-quic"
+components:
+  policy: "plugin://openvla-quic/policy/default.yaml"
+resources:
+  registry: "plugin://openvla-quic/registry/default.yaml"
+build: true
+runtime:
+  quantization: "none"
+  gpu: "all"
+service:
+  host: "127.0.0.1"
+  port: 8000
+  container_port: 8000
+  restart: "unless-stopped"
+  readiness_timeout_s: 900

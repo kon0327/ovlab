@@ -1,0 +1,14 @@
+# Copy to configs/local/machine.yaml and replace absolute paths for your machine.
+schema_version: "0.1.0"
+kind: "local_profile"
+id: "example-local-machine"
+paths:
+  checkpoint_root: "/absolute/path/to/ovlab-data/checkpoints/huggingface"
+  dataset_root: "/absolute/path/to/ovlab-data/datasets/libero"
+  runs_root: "/absolute/path/to/ovlab-data/runs"
+devices:
+  primary_gpu: "cuda:0"
+execution:
+  libero:
+    renderer:
+      device_id: 0

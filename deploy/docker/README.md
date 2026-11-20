@@ -1,258 +1,76 @@
-# OVLAB Docker deployment
+# Runtime image recipes
 
-QuIC role images, pinned requirements, adapter mounts, and console progress
-are documented in [QUIC.md](QUIC.md).
+This directory owns the benchmark, reporting and dataset infrastructure images.
+Model runtime recipes live with their independently registered plugin projects:
 
-This directory contains the production Dockerfiles for the isolated OVLAB
-runtime. The public `ovlab run` command owns the Compose lifecycle; users
-do not need to activate Conda or start containers separately. The Dockerfiles
-are not intended to collapse the benchmark and policy service into one
-container.
+| Project | Recipes |
+| --- | --- |
+| [`openvla`](../../plugins/openvla/README.md) | Vanilla/LoRA policy, reference training, checkpoint finalizer. |
+| [`openvla-oft`](../../plugins/openvla-oft/README.md) | Native OFT policy. |
+| [`openvla-quic`](../../plugins/openvla-quic/README.md) | QuIC policy, training and checkpoint finalizer. |
 
-For the complete reproducibility and security contract, see
-[`deploy/README.md`](../README.md). Dependency locks are documented in
-[`deploy/locks/README.md`](../locks/README.md).
-
-## Runtime topology
-
-| Image | Responsibility | Persistent access |
-|---|---|---|
-| `ovlab-benchmark-libero:local` | OVLAB CLI, runner, LIBERO, Robosuite and MuJoCo | datasets read-only, canonical runs read-write |
-| `ovlab-reporting:local` | Offline HTML reports, dashboards and exports | canonical runs read-only, exports read-write |
-| `ovlab-policy-openvla:local` | OpenVLA Vanilla and merged-LoRA policy service | checkpoints read-only |
-| `ovlab-policy-openvla-oft:local` | OpenVLA-OFT policy service | checkpoints read-only |
-
-The benchmark and policy containers communicate only through a versioned
-AF_UNIX socket in a Compose-managed volume. They expose no TCP service and run
-with networking disabled. Model weights and datasets are never copied into an
-image.
-
-## Prerequisites
-
-- Docker Engine with Compose v2;
-- NVIDIA Container Toolkit and a CUDA 12.1-compatible host driver;
-- local, complete checkpoint and LIBERO dataset trees;
-- sufficient storage for the four pinned images;
-- an EGL-capable device for unattended benchmark execution.
-
-Check the host before building:
+Build recipes and their dependency locks are selected by the plugin registry.
+Shared support code is installed through explicitly declared sources; the core
+installer does not hardcode model package paths.
 
 ```bash
-docker version
-docker compose version
-docker info
-nvidia-smi
-```
-
-## Build images
-
-Run builds from the repository root:
-
-```bash
+bash deploy/scripts/build-images.sh --dry-run
 bash deploy/scripts/build-images.sh
 ```
 
-Build only one role when iterating:
+Builds default to temporary source contexts acquired from pinned Git commits or
+snapshotted local projects. They do not depend on mutable `external/` directories.
+The optional `--workspace-sources` mode is for managed development checkouts. See the
+[deployment guide](../README.md) for host preparation, selected roles, explicit
+configuration bundling and runtime commands.
+
+## Runtime boundaries
+
+| Role | Runtime responsibility | Writable persistent storage |
+| --- | --- | --- |
+| Benchmark | LIBERO/Robosuite/MuJoCo, runner, RPC client | Canonical run evidence. |
+| Policy | Model loading and inference | None. |
+| Dataset | Acquire and prepare demonstrations | Managed dataset storage. |
+| Training | Optimization and staging | The scoped training run directory. |
+| Finalizer | Verify and publish a staged checkpoint | Checkpoint storage and scoped training evidence. |
+| Reporting | Verify evidence, generate HTML and exports | Derived exports. |
+
+Images do not contain model weights or datasets. Evaluation services communicate
+over a private AF_UNIX socket, run with networking disabled, read-only root
+filesystems and UID/GID `10001:10001`. Dataset acquisition is the separate online
+phase. Checkpoints, datasets and optional adapters are mounted only into the
+roles that need them, read-only where applicable. Reporting cannot modify
+canonical evidence.
+
+## Build and runtime identity
+
+Production recipes pin base images by digest and install hash-locked artifacts
+without dependency resolution or unlocked PEP 517 build isolation. They record
+source, plugin, dependency and package-inventory metadata. OVLAB checks image role
+and deployment/plugin compatibility before starting workloads. Rebuild when
+runtime code, plugin implementations, upstream pins, locks or Docker recipes
+change.
+
+Configuration is a separate explicit closure. `config/` contains shipped OVLAB
+defaults, plugin projects contain their own defaults, and `configs/` plus
+`experiments/` contain ignored user content. Runtime composition snapshots only
+selected references into a read-only bundle. Ordinary user YAML edits therefore
+need no image rebuild. `--config FILE` can instead bake a selected complete
+evaluation/deployment closure into a compatible image; its digest invalidates
+the secret-consuming build layer.
+
+## Verification
 
 ```bash
-bash deploy/scripts/build-images.sh benchmark
-bash deploy/scripts/build-images.sh reporting
-bash deploy/scripts/build-images.sh policy-openvla
-bash deploy/scripts/build-images.sh policy-openvla-oft
+ovlab run examples/experiments/openvla-eval.yaml --plan
+ovlab run examples/experiments/openvla-oft-eval.yaml --plan
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml
 ```
 
-The build uses pinned base-image digests and hash-locked Python artifacts. It
-embeds a source manifest and marks an image as dirty when the source worktree is
-dirty. Building does not modify the host Conda environments. Experiment YAML is
-not copied into production images.
+The last workflow verifies training, checkpoint handoff, evaluation and reporting
+through the QuIC plugin on one GPU. It is deliberately too short to measure task
+performance. Planning checks configuration without launching workloads.
 
-Inspect the resulting identities:
-
-```bash
-docker image inspect ovlab-benchmark-libero:local
-docker image inspect ovlab-reporting:local
-docker image inspect ovlab-policy-openvla:local
-docker image inspect ovlab-policy-openvla-oft:local
-```
-
-## Prepare host data
-
-Keep deployment evidence outside the source checkout:
-
-```text
-/home/kony/dissertation/ovlab-data/
-├── checkpoints/
-│   ├── huggingface/   # pinned snapshots managed by the OVLAB CLI
-│   └── local/         # unpublished QuIC and experimental artifacts
-├── datasets/
-│   └── libero/        # LIBERO demonstrations mounted read-only
-├── runs/
-│   ├── evaluate/      # canonical traces, per-episode videos, metrics and provenance
-│   └── train/         # canonical training evidence and staged output
-└── exports/
-    ├── evaluate/
-    │   ├── grouped/       # comparison tables and figures
-    │   ├── isolated/      # per-run publication exports
-    │   ├── derived/       # regenerated evaluation reports
-    │   └── interactive/   # offline evaluation dashboards
-    └── train/
-        ├── derived/       # regenerated training reports
-        └── interactive/   # offline training dashboards
-```
-
-The CLI creates a missing `runs/` directory with mode `2770` and passes the
-invoking user's primary GID to benchmark containers as a supplementary group.
-For direct Compose use, create the directories yourself and set
-`OVLAB_HOST_ARTIFACT_GID` to `id -g`. Evaluation writes under `runs/evaluate/`;
-the isolated trainer writes under `runs/train/`.
-After runtime teardown, the reporting image mounts `runs/` read-only and
-`exports/` read-write. The exports root is not mounted into the
-benchmark or policy containers.
-
-Copy the environment template and replace every host-specific value:
-
-```bash
-cp deploy/compose/.env.example deploy/compose/.env
-```
-
-At minimum, configure:
-
-```dotenv
-OVLAB_GLOBAL_HF_CACHE=/home/kony/.cache/huggingface
-OVLAB_MANAGED_CHECKPOINTS_ROOT=/home/kony/dissertation/ovlab-data/checkpoints/huggingface
-# Optional; defaults to /home/kony/dissertation/ovlab-data/datasets/libero
-OVLAB_DATASETS_PATH=/home/kony/dissertation/ovlab-data/datasets/libero
-OVLAB_RUNS_ROOT=/home/kony/dissertation/ovlab-data/runs
-OVLAB_EXPORTS_ROOT=/home/kony/dissertation/ovlab-data/exports
-OVLAB_GPU_DEVICE=0
-OVLAB_EGL_DEVICE_ID=0
-```
-
-Host paths, renderer device IDs, socket names and Docker tags are execution
-settings. They do not change the scientific configuration hash.
-
-The checkpoint variables are discovery and storage roots, not direct policy
-mounts. The CLI resolves the experiment's logical checkpoint ID, verifies its
-pinned registry revision and file hashes, and mounts only that snapshot at
-`/checkpoints/resolved/<checkpoint-id>:ro`. Existing global Hugging Face cache
-data is reused with hard links instead of copying weight bytes.
-When `OVLAB_DATASETS_PATH` is omitted, the CLI derives `datasets/libero` next
-to `runs`, creates it if necessary, and mounts it read-only into the benchmark.
-
-## Validate Compose
-
-Preview the resolved orchestration without starting containers:
-
-```bash
-./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --plan
-```
-
-The real command performs its own `docker compose config --quiet` preflight. It
-checks the versioned deployment contract on selected images, without requiring
-their source hash or Git revision to match the current checkout. The CLI validates the selected experiment and its
-transitive `extends`, component, registry and renderer-profile closure, hashes
-that closure and mounts it into both services at `/opt/ovlab/configs:ro`. The
-temporary host bundle is removed after Compose teardown. New or changed YAML
-therefore needs no image rebuild. Rebuild images when you want changes to
-packaged Python source, dependencies, Dockerfiles or external source to take
-effect:
-
-```bash
-bash deploy/scripts/build-images.sh benchmark reporting policy-openvla-oft
-```
-
-OVLAB-specific OCI labels use the project
-`io.github.ovlab.*` namespace. Image authorship is recorded separately
-with the standard `org.opencontainers.image.authors` label as Jiří Konečný,
-VSB – Technical University of Ostrava. These labels describe image provenance
-and compatibility; they do not affect scientific configuration hashes.
-
-## Run with EGL
-
-EGL is the supported backend for headless and automated LIBERO execution:
-
-```bash
-./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-```
-
-Run OpenVLA-OFT separately:
-
-```bash
-./ovlab run experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml
-```
-
-The policy service loads checkpoints offline, becomes healthy only after
-initialization and is then consumed by the benchmark through the local socket.
-Canonical output is written below `${OVLAB_RUNS_ROOT}` on the host.
-
-By default, a checkpoint absent from the global and managed caches is downloaded
-at its pinned revision by the host orchestrator before policy startup. For a
-strictly offline run, require an already verified artifact:
-
-```bash
-# Set deployment.offline: true in this evaluation YAML first.
-./ovlab run experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml
-```
-
-## Run the interactive GLFW path
-
-GLFW requires a live X11 or Wayland display such as WSLg. It is not a truly
-headless backend; hiding a window does not remove the display-server dependency.
-
-```bash
-# Set deployment.renderer: glfw in this evaluation YAML first.
-./ovlab run experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-```
-
-The overlay forces `MUJOCO_GL=glfw`, removes the EGL device variable and mounts
-the host X11 socket read-only. Use EGL for CI and unattended benchmarks.
-
-## Publish a report and isolated export
-
-Set a canonical run directory name and report profile:
-
-```bash
-export OVLAB_REPORT_RUN_ID=<run-directory-name>
-export OVLAB_REPORT_PROFILE=libero-task-default
-
-docker compose \
-  --env-file deploy/compose/.env \
-  --file deploy/compose/compose.yaml \
-  --profile reporting run --rm reporting
-```
-
-The report service reads `/var/lib/ovlab/runs` read-only and atomically writes
-the HTML bundle to `/var/lib/ovlab/exports/evaluate/derived/<run>/<profile>/<derived-build-id>`
-plus the isolated export to `/var/lib/ovlab/exports/evaluate/isolated/<run>`. It verifies
-canonical checksums and publishes manifests last. Grouped exports use the same
-image through the `export` Compose profile.
-
-## Shutdown and verification
-
-`ovlab run` always executes project-scoped Compose teardown, including
-its private RPC volume, on success, failure or interruption. Canonical bind-
-mounted run artifacts are not removed.
-
-Do not use a global Docker prune as part of the OVLAB workflow. After a run,
-verify that no service remains alive and inspect the host artifacts directly:
-
-```bash
-docker ps --filter name=ovlab
-find "${OVLAB_RUNS_ROOT}" -maxdepth 2 -type f
-```
-
-## Troubleshooting
-
-- `permission denied` below the runs directory: correct ownership or ACLs for
-  container UID/GID `10001:10001`.
-- checkpoint not found with `deployment.offline: true`: verify the logical ID, pinned registry
-  revision, global cache, managed cache, or local-profile override. With `deployment.offline: false`, inspect host network and managed-storage permissions. Policy
-  containers never receive network access.
-- CUDA unavailable: check the NVIDIA Container Toolkit, host driver and
-  `OVLAB_GPU_DEVICE`.
-- EGL initialization failure: verify graphics-device exposure and
-  `OVLAB_EGL_DEVICE_ID`; use GLFW only when a working display server is present.
-- policy health timeout: inspect the policy container logs for offline checkpoint,
-  CUDA, FlashAttention or compatibility errors.
-- socket permission failure: do not override the fixed UID/GID independently
-  between benchmark and policy services.
+For QuIC-specific mounts and role selection, see [QUIC.md](QUIC.md). Dependency
+maintenance is described in [`../locks/README.md`](../locks/README.md). The
+`Dockerfile.smoke` provider is test-only and never included in production images.

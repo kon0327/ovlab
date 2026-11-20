@@ -1,5 +1,0 @@
-# Local training profile; override plugin defaults below.
-schema_version: "ovlab.training-profile/v1"
-kind: "training"
-id: "openvla-full-reference"
-extends: plugin://openvla/training/openvla-full-reference.yaml

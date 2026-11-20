@@ -18,8 +18,8 @@ for directory in (ROOT / 'code/apps', ROOT / 'code/packages'):
 from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 from ovlab_benchctl.experiment_workflow import _validate_node
 from ovlab_benchctl.strict_yaml import load
-from ovlab_benchctl.training_composition import load_training_profile
-from ovlab_benchctl.policy_plugins import plugin_config_roots, plugin_project_root, registry_scope
+from ovlab_benchctl.training_composition import load_training_document
+from ovlab_benchctl.policy_plugins import plugin_config_roots, plugin_project_root, registry_scope, registry_document
 
 
 def build_catalog(root=ROOT):
@@ -30,7 +30,8 @@ def build_catalog(root=ROOT):
 def _build_catalog(root):
     bundle = ConfigBundleBuilder(root)
     catalog = {'version': 1, 'generated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-               'training': [], 'evaluation': [], 'workflows': [], 'components': {}, 'tasks': {}, 'excluded': []}
+               'training': [], 'evaluation': [], 'workflows': [], 'components': {}, 'tasks': {}, 'excluded': [],
+               'plugins': registry_document(root)['plugins']}
     files = set()
 
     def collect(path, callback, destination, reference):
@@ -45,20 +46,32 @@ def _build_catalog(root):
         except (ValueError, RuntimeError, OSError) as exc:
             catalog['excluded'].append({'ref': reference, 'reason': str(exc)})
 
-    for path in sorted((root / 'experiments/training').rglob('*.yaml')):
-        collect(path, lambda p=path: dict(load_training_profile(p).document), catalog['training'],
-                path.relative_to(root).as_posix())
-    for path in sorted((root / 'experiments/evaluation').rglob('*.yaml')):
-        reference = path.relative_to(root).as_posix()
-        collect(path, lambda r=reference: bundle.load_component(r, 'experiment'), catalog['evaluation'], reference)
+    for base in (root / 'examples/experiments', root / 'experiments'):
+        for path in sorted(base.rglob('*.yaml')):
+            if '.generated' in path.parts:
+                continue
+            reference = path.relative_to(root).as_posix()
+            kind = load(path).get('kind')
+            if kind == 'training':
+                collect(path, lambda p=path: load_training_document(p, repository_root=root),
+                        catalog['training'], reference)
+            elif kind == 'experiment':
+                collect(path, lambda r=reference: bundle.load_component(r, 'experiment'), catalog['evaluation'], reference)
+            elif kind == 'workflow':
+                def workflow(p=path):
+                    document = load(p)
+                    _validate_node(document)
+                    return document
+                collect(path, workflow, catalog['workflows'], reference)
     for kind, directory, schema in [('benchmark', 'benchmarks', 'benchmark'), ('policy', 'policies', 'policy'),
                                      ('protocol', 'protocols', 'protocol'), ('metrics', 'metrics', 'metric_set'),
                                      ('artifacts', 'artifacts', 'artifact_store')]:
         catalog['components'][kind] = []
-        for path in sorted((root / 'configs' / directory).rglob('*.yaml')):
-            reference = path.relative_to(root / 'configs').as_posix()
-            collect(path, lambda r=reference, s=schema: bundle.load_component(r, s),
-                    catalog['components'][kind], reference)
+        for base, prefix in ((root / 'config', 'ovlab://'), (root / 'configs', '')):
+            for path in sorted((base / directory).rglob('*.yaml')):
+                reference = prefix + path.relative_to(base).as_posix()
+                collect(path, lambda r=reference, s=schema: bundle.load_component(r, s),
+                        catalog['components'][kind], reference)
     component_kinds = {'benchmark': 'benchmark', 'policy': 'policy', 'protocol': 'protocol',
                        'metric_set': 'metrics', 'artifact_store': 'artifacts'}
     project_roots = plugin_config_roots(root)
@@ -67,6 +80,8 @@ def _build_catalog(root):
         for path in sorted(config_root.rglob('*.yaml')):
             if path.is_symlink() or not path.resolve().is_relative_to(config_root):
                 continue
+            if 'examples' in path.relative_to(config_root).parts:
+                continue
             files.add(path)
             try:
                 kind = load(path).get('kind')
@@ -74,16 +89,22 @@ def _build_catalog(root):
                 continue
             if kind in component_kinds:
                 reference = f'plugin://{project}/{path.relative_to(config_root).as_posix()}'
-                collect(path, lambda r=reference, s=kind: bundle.load_component(r, s),
+                def component(r=reference, s=kind):
+                    document = bundle.load_component(r, s, validate_document=False)
+                    if s == 'policy':
+                        from ovlab_benchctl.policy_plugins import plugin_for_type, call_plugin
+                        owner = plugin_for_type(document['type'], root)
+                        call_plugin(owner, 'validate_checkpoint_template', document, r)
+                    return document
+                collect(path, component,
                         catalog['components'][component_kinds[kind]], reference)
-    for path in sorted((root / 'experiments/workflows').glob('*')):
-        if path.suffix not in {'.yaml', '.yml', '.json'}:
-            continue
-        def workflow(p=path):
-            document = json.loads(p.read_text()) if p.suffix == '.json' else load(p)
-            _validate_node(document)
-            return document
-        collect(path, workflow, catalog['workflows'], path.relative_to(root).as_posix())
+            elif kind == 'training':
+                reference = f'plugin://{project}/{path.relative_to(config_root).as_posix()}'
+                collect(path, lambda p=path: load_training_document(p, repository_root=root), catalog['training'], reference)
+            elif kind == 'experiment':
+                reference = f'plugin://{project}/{path.relative_to(config_root).as_posix()}'
+                collect(path, lambda r=reference: bundle.load_component(r, 'experiment', validate_document=False),
+                        catalog['evaluation'], reference)
     task_source = root / 'external/libero/libero/libero/benchmark/libero_suite_task_map.py'
     if task_source.is_file():
         files.add(task_source)
@@ -93,6 +114,7 @@ def _build_catalog(root):
                 break
     # Include all component inputs (also inherited parents) and planner rules in
     # the snapshot identity, without importing any model or GPU implementation.
+    files.update((root / 'config').rglob('*.yaml'))
     files.update((root / 'configs').rglob('*.yaml'))
     for name in ('schema.py', 'experiment_workflow.py', 'training_profiles.py', 'workflow_checkpoints.py'):
         files.add(root / 'code/apps/benchctl/src/ovlab_benchctl' / name)

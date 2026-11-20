@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-import subprocess
+import json
+from functools import lru_cache
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pytest
@@ -27,22 +29,25 @@ def test_policy_service_entrypoint_imports_without_loading_the_model():
     assert callable(main)
 
 
-def test_recorded_oft_source_commit_matches_the_pinned_submodule_gitlink():
-    actual = subprocess.check_output(
-        ["git", "-C", str(REPOSITORY / "external/openvla-oft"), "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
+def test_recorded_oft_source_commit_matches_the_plugin_pin():
+    manifest = json.loads((REPOSITORY / "plugins/openvla-oft/plugin.json").read_text())
+    actual = manifest["sources"]["openvla-oft"]["commit"]
     assert OPENVLA_OFT_GIT_COMMIT == actual
     assert _resolved().policy_settings.artifact.method["training_provenance"]["source_commit"] == actual
 
 
+@lru_cache(maxsize=1)
 def _resolved():
-    return ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml",
-        local_profile=REPOSITORY / "configs/local/gate-b-showrack.yaml",
-        execution_profile="profiles/libero-bench-egl.yaml",
-        environment={},
-    )
+    from helpers.evaluation_fixtures import write_evaluation_fixtures
+    from helpers.training_profiles import make_repository
+    with TemporaryDirectory(prefix="ovlab-oft-unit-") as temporary:
+        root = make_repository(Path(temporary) / "repository")
+        references = write_evaluation_fixtures(root, root / "configs/test-inputs")
+        profile = root / "profile.yaml"
+        profile.write_text((REPOSITORY / "config/local/example.yaml").read_text())
+        return ConfigResolver(root / "configs", repository_root=root).resolve(
+            references["oft"], local_profile=profile,
+            execution_profile="ovlab://profiles/egl.yaml", environment={})
 
 
 def test_registered_method_is_strict_native_oft_and_accounts_all_adaptation_components():

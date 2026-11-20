@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers.training_profiles import training_document, write_training_profile
 from ovlab_benchctl.strict_yaml import dumps, load, loads
 from ovlab_benchctl.training_ablations import TrainingAblation
 from ovlab_benchctl.training_composition import load_training_profile
@@ -12,7 +13,7 @@ from ovlab_benchctl.training_data import build_episode_manifest, verify_episode_
 from ovlab_benchctl.training_identity import atomic_json
 
 ROOT = Path(__file__).resolve().parents[4]
-SUITE = ROOT / "configs/ablations/openvla-quic-placement-smoke.yaml"
+
 
 
 def _partition():
@@ -48,9 +49,15 @@ def test_partition_rejects_duplicate_records_small_groups_and_tampering():
         verify_episode_manifest(manifest)
 
 
-def test_training_profile_inheritance_and_quic_yaml_roundtrip():
-    profile = load_training_profile(ROOT / "experiments/training/quic/libero10-a9-qp2.yaml", config_root=ROOT / "experiments")
-    assert profile.document["training"]["peft"]["placement"]["id"] == "A9"
+def test_training_profile_inheritance_and_quic_yaml_roundtrip(tmp_path):
+    base = write_training_profile(tmp_path / "base.yaml", "quic")
+    child = tmp_path / "child.yaml"
+    child.write_text(dumps({"kind": "training", "extends": "base.yaml", "id": "child",
+                           "training": {"peft": {"placement": {"id": "custom"}, "targets": [
+                               {"names": ["vision_backbone.featurizer.blocks.0.attn.qkv"]},
+                               {"names": ["language_model.model.layers.12.self_attn.o_proj"]}]}}}))
+    profile = load_training_profile(child, config_root=tmp_path)
+    assert profile.document["training"]["peft"]["placement"]["id"] == "custom"
     assert len(profile.document["training"]["peft"]["targets"]) == 2
     assert loads(dumps(profile.document)) == profile.document
 
@@ -73,7 +80,7 @@ def test_training_extends_cannot_escape_root_or_cycle(tmp_path):
 def test_training_kind_is_required_in_each_inheritance_layer(tmp_path):
     root = tmp_path / "configs"
     root.mkdir()
-    base = load_training_profile(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml").as_dict()
+    base = training_document("lora")
     (root / "base.yaml").write_text(dumps(base))
     child = root / "child.yaml"
     child.write_text("extends: base.yaml\nid: child\n")
@@ -90,7 +97,7 @@ def test_training_kind_is_required_in_each_inheritance_layer(tmp_path):
 def _suite_copy(tmp_path, mutate):
     root = tmp_path / "configs"
     root.mkdir()
-    base = load_training_profile(ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml").as_dict()
+    base = training_document("quic")
     first = deepcopy(base)
     first["id"] = "first"
     first["training"]["peft"]["adapter"]["block_count"] = 4
@@ -110,8 +117,8 @@ def test_ablation_rejects_optimizer_or_split_drift(tmp_path):
         TrainingAblation(root / "suite.yaml", config_root=root)
 
 
-def test_ablation_materializes_existing_profiles_without_model_imports(tmp_path):
-    suite = TrainingAblation(SUITE, config_root=ROOT / "configs")
+def test_ablation_materializes_existing_profiles_without_model_imports(tmp_path, ablation_path):
+    suite = TrainingAblation(ablation_path, config_root=ablation_path.parent)
     first, second = suite.plan(), suite.plan()
     assert first["ablation_id"] == second["ablation_id"]
     result = suite.materialize(tmp_path / "study")
@@ -122,16 +129,8 @@ def test_ablation_materializes_existing_profiles_without_model_imports(tmp_path)
         suite.materialize(tmp_path / "study")
 
 
-def test_plugin_owned_ablation_uses_only_project_profiles():
-    plugin_suite = ROOT / 'plugins/openvla/configs/ablations/openvla-quic-placement-smoke.yaml'
-    native = TrainingAblation(plugin_suite, config_root=ROOT / 'configs')
-    compatibility = TrainingAblation(SUITE, config_root=ROOT / 'configs')
-    assert native.plan()['ablation_id'] == compatibility.plan()['ablation_id']
-    assert all(path.is_relative_to(ROOT / 'plugins/openvla/configs') for path, profile in native.variants.values())
-
-
-def test_ablation_runner_keeps_failure_evidence_for_partition_drift(tmp_path):
-    suite = TrainingAblation(SUITE, config_root=ROOT / "configs")
+def test_ablation_runner_keeps_failure_evidence_for_partition_drift(tmp_path, ablation_path):
+    suite = TrainingAblation(ablation_path, config_root=ablation_path.parent)
     class Deployment:
         count = 0
         def run(self, profile):
@@ -151,7 +150,7 @@ def test_ablation_runner_keeps_failure_evidence_for_partition_drift(tmp_path):
 
 def test_fit_override_changes_training_identity_without_mutating_profile_or_files(monkeypatch, tmp_path):
     from ovlab_benchctl.training_profiles import TrainingPlanner, with_fitted_action_normalization
-    path = ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml"
+    path = write_training_profile(tmp_path / "host.yaml", "quic")
     source = path.read_bytes()
     host_profile = load_training_profile(path)
     original = deepcopy(host_profile.document)
@@ -178,18 +177,21 @@ def test_fit_override_changes_training_identity_without_mutating_profile_or_file
     assert path.read_bytes() == source
 
 
-def test_fit_override_requires_explicit_partition():
+def test_fit_override_requires_explicit_partition(tmp_path):
     from ovlab_benchctl.training_profiles import with_fitted_action_normalization
-    profile = load_training_profile(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml")
+    document = training_document("lora")
+    document["dataset"].pop("partition")
+    from ovlab_benchctl.training_profiles import TrainingProfile
+    profile = TrainingProfile.from_document(document)
     with pytest.raises(TrainingProfileError, match="requires dataset.partition"):
         with_fitted_action_normalization(profile, True)
 
 
-def test_fit_ablation_override_is_shared_materialized_and_separate_from_host_plan(tmp_path):
-    source_paths = [SUITE, ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml", *(ROOT / "experiments/training/quic").glob("*.yaml")]
+def test_fit_ablation_override_is_shared_materialized_and_separate_from_host_plan(tmp_path, ablation_path):
+    source_paths = list(ablation_path.parent.glob("*.yaml"))
     source_bytes = {path: path.read_bytes() for path in source_paths}
-    host = TrainingAblation(SUITE, config_root=ROOT / "configs")
-    fitted = TrainingAblation(SUITE, config_root=ROOT / "configs", fit_action_normalization=True)
+    host = TrainingAblation(ablation_path, config_root=ablation_path.parent)
+    fitted = TrainingAblation(ablation_path, config_root=ablation_path.parent, fit_action_normalization=True)
     host_plan, fitted_plan = host.plan(), fitted.plan()
     assert host_plan["ablation_id"] != fitted_plan["ablation_id"]
     assert host_plan["scientific"]["partition_contract_id"] != fitted_plan["scientific"]["partition_contract_id"]
@@ -205,3 +207,9 @@ def test_fit_ablation_override_is_shared_materialized_and_separate_from_host_pla
     assert fitted.plan() == fitted_plan
     assert (tmp_path / "fitted-study/plan.json").read_bytes() == persisted_before
     assert all(path.read_bytes() == contents for path, contents in source_bytes.items())
+
+
+@pytest.fixture
+def ablation_path(tmp_path):
+    root = _suite_copy(tmp_path, lambda document: document["training"]["peft"]["adapter"].update(block_count=8))
+    return root / "suite.yaml"

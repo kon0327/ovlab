@@ -107,8 +107,12 @@ paths:
 devices:
   primary_gpu: cuda:0
 ''')
-    resolver = ConfigResolver(ROOT / "configs", repository_root=ROOT)
-    experiment = "experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml"
+    from helpers.evaluation_fixtures import write_evaluation_fixtures
+    from helpers.training_profiles import make_repository
+    root = make_repository(tmp_path / "repository")
+    references = write_evaluation_fixtures(root, root / "configs/test-inputs")
+    resolver = ConfigResolver(root / "configs", repository_root=root)
+    experiment = references["quic"]
     a = resolver.resolve(experiment, local_profile=profile, environment={"OVLAB_QUIC_ADAPTER_PATH": "/adapters/a"})
     b = resolver.resolve(experiment, local_profile=profile, environment={"OVLAB_QUIC_ADAPTER_PATH": "/adapters/b"})
     assert isinstance(a.policy_settings, OpenVlaQuICSettings)
@@ -118,7 +122,8 @@ devices:
 
 
 def test_quantized_quic_and_unsupported_codec_fail_during_schema_validation():
-    policy = ConfigResolver(ROOT / "configs", repository_root=ROOT).load_component("plugin://openvla/policies/openvla-quic/adapter-libero10.yaml", "policy")
+    from helpers.configuration_fixtures import evaluation_configuration
+    policy = evaluation_configuration("quic")["component_documents"]["policy"]["document"]
     policy["settings"]["runtime"]["quantization"] = "4bit"
     with pytest.raises(ValueError, match="dense"):
         validate(policy, "test", "policy")

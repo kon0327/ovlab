@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[4]
 class TinyDenseHost(nn.Module):
     def __init__(self, target_kind="Linear"):
         super().__init__()
+        self.config = SimpleNamespace(action_head=None)
         self.projection = nn.Conv2d(3, 8, 2, stride=2) if target_kind == "Conv2d" else nn.Linear(4, 8)
         self.norm_stats = {"fixture": {"action": {"q01": [-1.] * 7, "q99": [1.] * 7}}}
 

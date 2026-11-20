@@ -1,3 +1,0 @@
-extends: ../openvla-libero10-quic-smoke.yaml
-kind: training
-id: openvla-libero10-quic-a3-qp2

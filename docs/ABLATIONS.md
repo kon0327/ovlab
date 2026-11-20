@@ -9,34 +9,25 @@ The public entry point is `ovlab run PROFILE_OR_WORKFLOW`; use a workflow tree
 for hierarchical comparisons. The specialized suite utility below remains a
 compatibility interface for its stricter shared-factor checks.
 
-A suite uses `ovlab.training-ablation/v1`, a base profile, declared factor paths,
-and a mapping from variant IDs to profiles. See
-[`openvla-quic-placement-smoke.yaml`](../configs/ablations/openvla-quic-placement-smoke.yaml)
-and its A1/A3/A9 QP2 profiles. The example is a three-step integration smoke,
-not a scientific training budget. It starts from the registered **LIBERO-10
-suite-finetuned merged dense host**, whose config already contains the required
-normalization statistics. A9 is the source project's local placement extension.
+A suite uses `ovlab.training-ablation/v1`, a base profile, declared factor
+paths, and a mapping from variant IDs to profiles. Research recipes are user
+configuration: create complete profiles in ignored `configs/` or `experiments/`,
+extending `plugin://openvla-quic/train/default.yaml` as appropriate. The plugin
+ships defaults and one training example, not an ablation matrix.
 
 ```bash
-# Pure schema/invariant validation: no dataset/model imports or GPU allocation.
-./ovlab train ablate validate \
-  --suite configs/ablations/openvla-quic-placement-smoke.yaml
-
-# Resolve and verify the same immutable checkpoint and dataset for all variants.
-./ovlab train ablate plan \
-  --suite configs/ablations/openvla-quic-placement-smoke.yaml
-
-# Reviewable resolved profiles, a scientific plan and exact child commands.
-# OUTPUT must be a new directory; plans and profiles are immutable.
-./ovlab train ablate materialize \
-  --suite configs/ablations/openvla-quic-placement-smoke.yaml \
-  --output /tmp/quic-placement-plan
-
-# Sequential ordinary OVLAB training containers, finalizers and reports.
-./ovlab train ablate run \
-  --suite configs/ablations/openvla-quic-placement-smoke.yaml \
-  --output /tmp/quic-placement-run
+ovlab train ablate validate --suite configs/ablations/my-study.yaml
+ovlab train ablate plan --suite configs/ablations/my-study.yaml
+ovlab train ablate materialize --suite configs/ablations/my-study.yaml \
+  --output /tmp/my-study-plan
+ovlab train ablate run --suite configs/ablations/my-study.yaml \
+  --output /tmp/my-study-run
 ```
+
+These commands require your own suite and profiles; those paths are not shipped
+presets. See the [plugin training example](../plugins/openvla-quic/examples/train.yaml)
+and [pipeline smoke](../examples/experiments/plugin-pipeline-smoke.yaml) for
+composition and checkpoint handoff.
 
 `materialize` and `run` preflight local resources; fetch datasets explicitly
 first. A materialized profile can also be passed directly to `ovlab run`.
@@ -109,9 +100,9 @@ fitted statistics are separate scientific conditions. Reference full/LoRA
 partition profiles also support `train-q99`.
 
 ```bash
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml --verify
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml
+./ovlab train ablate run --suite configs/ablations/my-study.yaml \
   --fit-action-normalization --output /tmp/quic-placement-fitted-run
 ```
 

@@ -28,17 +28,17 @@ def load_training_document(path: str | Path, *, config_root: Path | None = None,
     selects another project's configuration tree.
     """
     raw_path = str(path)
-    candidate = Path(path).expanduser() if not raw_path.startswith("plugin:") else None
+    candidate = Path(path).expanduser() if not raw_path.startswith(("plugin:", "ovlab:")) else None
     if repository_root is None:
         repository_root = os.environ.get("OVLAB_ROOT")
     if repository_root is None and candidate is not None:
         absolute = candidate.resolve()
-        repository_root = next((parent for parent in absolute.parents if (parent / "code").is_dir() and (parent / "configs").is_dir()), None)
+        repository_root = next((parent for parent in absolute.parents if (parent / "code").is_dir() and ((parent / "configs").is_dir() or (parent / "config").is_dir())), None)
         if repository_root is None:
-            owner = Path(config_root).resolve() if config_root else next((p for p in absolute.parents if p.name in {"configs", "experiments"}), absolute.parent)
+            owner = Path(config_root).resolve() if config_root else next((p for p in absolute.parents if p.name in {"configs", "config", "experiments", "examples"}), absolute.parent)
             repository_root = owner.parent
     refs = ConfigReferences(repository_root or Path.cwd(), config_root=config_root)
-    path = refs.source(raw_path) if raw_path.startswith("plugin:") else candidate.resolve()
+    path = refs.source(raw_path) if raw_path.startswith(("plugin:", "ovlab:")) else candidate.resolve()
     root = Path(config_root).resolve() if config_root else None
     if path in stack:
         raise TrainingProfileError("training extends cycle: " + " -> ".join(str(item) for item in (*stack, path)))
@@ -51,7 +51,7 @@ def load_training_document(path: str | Path, *, config_root: Path | None = None,
     if reference is None:
         return raw
     if config_root is None:
-        owner = next((p for p in path.parents if p.name in {"configs", "experiments"}), path.parent)
+        owner = next((p for p in path.parents if p.name in {"configs", "config", "experiments", "examples"}), path.parent)
         refs = ConfigReferences(refs.repository_root, config_root=owner)
     try:
         parent_path = refs.parent(path, reference)

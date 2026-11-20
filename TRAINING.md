@@ -1,357 +1,98 @@
-# Training operations
+# Training and checkpoint handoff
 
-Training profiles live in `experiments/training/` and use the shared experiment
-entry point: `ovlab run PROFILE`. `--plan` resolves the configuration tree;
-`--verify` validates a source or checks the canonical evidence of a stored run or
-experiment ID/hash. Runtime preflight checks local datasets and checkpoints before
-starting the isolated trainer. Use `ovlab data list runs --detail` for recorded
-run information and `ovlab report RUN_OR_EXPERIMENT_ID` for reporting.
+Model plugins own training implementations and defaults. OVLAB owns dataset and
+checkpoint storage, scheduling, evidence and reporting. Training is selected
+explicitly by an experiment; registering a model does not schedule training.
 
-Detailed dataset-provider, acquisition, local-import and integrity procedures
-are documented separately in [`DATASETS.md`](DATASETS.md). This guide focuses
-on the end-to-end training and checkpoint lifecycle.
+The maintained [pipeline smoke](examples/experiments/plugin-pipeline-smoke.yaml)
+trains a QuIC adapter for three optimizer steps, finalizes its immutable
+checkpoint, evaluates that checkpoint on one LIBERO task and publishes reports.
+It is configured for a single 24 GiB GPU; actual resources and inputs are checked
+by runtime preflight.
 
-OVLAB manages training as a separate, reproducible pipeline:
-
-```text
-explicit dataset acquisition -> verified preparation -> validated profile
--> offline trainer -> finalized immutable checkpoint -> explicit deployment handoff
+```bash
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml --plan
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml
 ```
 
-The input configuration schedules training and evaluation explicitly. Canonical `runs/` and reporting
-`exports/derived/` and other publication outputs remain separate from model data. The host
-model-data root defaults to `../ovlab-data` relative to the repository and may be
-set with `OVLAB_MODEL_DATA_ROOT`.
+## Compose your own training
 
-## Storage
+Copy the workflow into ignored `experiments/` and select a model's default:
 
-Every execution stores its source, resolved tree and phase results in
-`runs/<instance>/.experiment/`. A standalone profile uses the root node; a
-workflow uses its explicit child paths.
+```yaml
+config:
+  train:
+    profile: plugin://openvla-quic/train/default.yaml
+    patch:
+      id: my-training
+      dataset:
+        ref: libero/libero_10
+      training:
+        normalization:
+          unnorm_key: libero_10
+```
+
+This fragment illustrates composition, not a complete workflow. See each
+plugin's `examples/train.yaml` and the pipeline example for checkpoint choice,
+partitioning, resource limits and execution. Plugin defaults deliberately leave
+`dataset.ref` to the experiment. Complete composed profiles use
+`ovlab.training-profile/v1` and `kind: training`.
+
+OpenVLA supports LoRA and full fine-tuning. OpenVLA-QuIC supports its own adapter
+training. OFT currently supports inference only. Quantization and adaptation
+support is declared in each plugin manifest and validated by that plugin;
+unsupported combinations fail rather than silently selecting another method.
+See [OpenVLA](plugins/openvla/README.md), [OFT](plugins/openvla-oft/README.md) and
+[QuIC](plugins/openvla-quic/README.md).
+
+Local extensions can `extends: plugin://openvla/train/default.yaml` and supply
+only their changed fields. Select the extension explicitly in your workflow.
+Ablations and dataset-specific recipes belong to your experiment/configuration
+collection. OVLAB does not ship a matrix of historical research presets.
+The generic `ovlab train ablate` commands still accept an explicitly selected
+user suite; `ovlab train ablate --help` describes the commands.
+
+## Data and execution
+
+Use [dataset operations](DATASETS.md) to explicitly fetch/import and verify data.
+The normal training pipeline is:
+
+```text
+verified dataset preparation -> complete profile validation -> offline trainer
+-> checkpoint finalization -> explicit evaluation binding -> reports
+```
+
+The host model-data root defaults to `../ovlab-data` and can be changed with
+`OVLAB_MODEL_DATA_ROOT`. Source code and checkpoints remain separate:
 
 ```text
 ovlab-data/
-├── datasets/<provider>/<name>/<revision>/<build-id>/
-│   ├── raw/
-│   ├── prepared/
-│   ├── dataset.json
-│   └── manifest.json
-├── runs/<instance>/train/<node-path>/<training-run-id>/
-│   ├── original-profile.yaml
-│   ├── resolved-profile.yaml
-│   ├── training-plan.json
-│   ├── provenance.json
-│   ├── events.jsonl
-│   ├── metrics.jsonl
-│   ├── data-flow.json              # bounded first-batch input/output evidence
-│   ├── logs/
-│   ├── staging-checkpoints/
-│   ├── result.json
-│   └── manifest.json
-└── checkpoints/local/<immutable-checkpoint-id>/
-    ├── weights-or-adapter/
-    ├── processor/
-    ├── auxiliary/
-    ├── checkpoint.json
-    └── manifest.json
+├── datasets/              Imported and prepared dataset revisions
+├── checkpoints/           Verified model and adapter artifacts
+├── runs/<instance>/       Canonical train/evaluate evidence and experiment plan
+└── exports/<instance>/    Derived reports and publication outputs
 ```
 
-Checkpoint storage separates `checkpoints/huggingface/` (managed downloads),
-`checkpoints/local/` (OVLAB training bundles), and `checkpoints/others/`
-(manually obtained or externally supplied artifacts). Existing finalized bundles
-at the old `checkpoints/checkpoint-...` location remain readable by ID.
-To inspect the migration plan and verify every existing legacy bundle, run
-`python deploy/scripts/migrate-checkpoint-layout.py --model-data-root /path/to/ovlab-data`.
-Run the same command with `--apply` when no checkpoint finalizers are active
-to move the verified bundles. Sealed directories owned by a container account
-may require administrator privileges. The migration leaves immutable training
-run evidence untouched, including its historical checkpoint path. Rebuild the
-dataset image with `bash deploy/scripts/build-images.sh dataset` before the next
-isolated training run so its finalizer writes to the new location. Externally
-supplied checkpoints can be referenced from `others/` via a local profile.
+The trainer writes staged artifacts; the finalizer verifies them before
+publishing an immutable checkpoint. Training output records the model revision,
+processor, normalization, dataset split, trainable parameters and weight hashes.
+A failed or incomplete checkpoint cannot satisfy an evaluation dependency.
 
-Ready datasets and finalized checkpoints are read-only and content-addressed.
-Evaluation evidence is stored alongside it under `runs/evaluate/<run-id>/`.
-Existing training artifacts under `training-runs/` remain readable.
-Host paths and timestamps are provenance only; they do not affect scientific
-identities. Failed or interrupted work remains evidence under staging or the
-training run and is never advertised as ready.
-
-New OpenVLA runs capture the first actual microbatch and its model output in
-`data-flow.json`. It records full tensor shapes/dtypes and bounded previews of
-the first sample, including prompt/action tokens, transformed pixels, predicted
-supervised tokens, loss and optimizer defaults. `metrics.jsonl` records actual
-examples, microbatches, non-padding tokens and action-token accuracy per
-optimizer step. These artifacts enter the finalized training inventory.
-`train report` publishes the existing HTML and its interactive companion under
-`exports/interactive/training/`, alongside `exports/derived/`; see [`REPORTING.md`](REPORTING.md).
-
-The training CLI accepts custom images through `OVLAB_TRAINING_IMAGE` or
-`OVLAB_TRAINING_QUIC_IMAGE`. Image preflight checks the declared training
-deployment contract, not a fixed image role, Git revision or source hash.
-Dataset and reporting images are checked against their respective contracts.
-Rebuild an image when you want current source changes inside its container;
-build provenance remains recorded in the resulting image.
-
-## Dataset commands
-
-Dataset commands use the dedicated non-root `ovlab-dataset` image. Read-only
-operations have no network. Only `dataset fetch` receives network access and a
-writable dataset mount.
+Declare `config.evaluate.checkpoint_from` to consume a finalized output from the
+same workflow. `""` selects root training; another node uses its root-relative
+path. The dependency and binding are recorded in the experiment plan and evidence.
+LoRA merging occurs before inference quantization; QuIC keeps its adapter and
+verified dense base as separate artifacts.
 
 ```bash
-./ovlab dataset providers
-./ovlab dataset resolve --benchmark libero --suite libero_10
-./ovlab dataset fetch --source libero --name libero_10
-./ovlab dataset fetch --source url --name custom --version 1 \
-  --url https://example.org/dataset.tar.zst --sha256 SHA256 --archive tar.zst
-./ovlab dataset import --name custom --version 1 --path /host/source
-./ovlab dataset list
-./ovlab dataset inspect --dataset DATASET_ID
-./ovlab dataset verify --dataset DATASET_ID
+ovlab checkpoint list
+ovlab checkpoint list --source registry --offline
+ovlab checkpoint verify CHECKPOINT_ID
+ovlab run EXPERIMENT_ID_OR_HASH --verify
+ovlab report EXPERIMENT_ID_OR_HASH
 ```
 
-The built-in LIBERO bridge resolves the four OpenVLA RLDS suites
-`libero_spatial`, `libero_object`, `libero_goal` and `libero_10` at a pinned
-provider revision. URL imports require HTTPS and a SHA-256 digest. Embedded
-credentials, unsafe redirects, traversal paths, archive links and excessive
-extraction sizes are rejected. Local imports are copied into controlled storage
-so an external mutable path never becomes a training input.
-
-Fetch datasets explicitly before starting an experiment. Training rejects a
-missing dataset and keeps acquisition outside the training lifecycle.
-
-## Profiles and planning
-
-Portable YAML profiles live in `experiments/training/` and use
-`ovlab.training-profile/v1` and require `kind: training` in every file,
-including files using `extends`. They contain immutable logical model and dataset
-selectors, a seed, bounded hyperparameters, precision, training mode and output
-semantics. Relative `extends` composes a shared base with variant overrides; mappings
-merge and sequences replace. Absolute host paths, shell commands, unknown keys
-and unresolved aliases are rejected.
-
-```bash
-./ovlab run experiments/training/openvla-libero10-lora-smoke.yaml --verify
-./ovlab run openvla-libero10-quic-smoke.yaml
-./ovlab run --plan openvla-libero10-quic-hard.yaml
-./ovlab run --plan experiments/training/openvla-libero10-lora-smoke.yaml
-```
-
-`model.revision` accepts a pinned 40-character commit, `local/main`,
-`remote/main`, or `latest`. Omitting it means `local/main`. Descriptor planning
-records this selector without accessing model bytes. At execution preflight,
-`local/main` reads cached Hugging Face `refs/main`; `remote/main` and its alias
-`latest` resolve the current commit. The runtime checks or acquires the selected
-snapshot before starting its isolated offline worker. The selected commit and observed file hashes
-are recorded in the training plan. If the registry also pins a commit, an
-explicit commit must match it and its registered hashes are enforced. With a
-moving registry entry, an explicit commit selects that cached snapshot and
-records its observed file hashes.
-
-`openvla-libero10-quic-hard.yaml` is the longer LIBERO-10 QuiC run: up to 20
-episodes per task, an 80/20 episode split, one frame in eight, 2,000 optimizer
-steps, effective batch size four, and up to 1,400 teacher-forced validation
-batches. It inherits the smoke profile's frozen host action normalization;
-set `dataset.partition.action_normalization: train-q99` to fit training-only
-q01/q99 statistics instead.
-
-Validation does not resolve large assets. Planning verifies local dataset and
-base-checkpoint bytes, negotiates capabilities and evaluates resources, but
-does not initialize OpenVLA, allocate CUDA or download anything. The generic
-schema represents `full` and `peft`, including unquantized LoRA and the
-experimental `quic` method. QuIC selects the `openvla-quic` trainer and the
-independent `quic-petf-vla` method dependency. QLoRA and quantized training
-remain unsupported.
-
-The OpenVLA reference LoRA recipe uses `target_modules: [all-linear]`, an
-explicit rank, `alpha: min(rank, 16)`, BF16 or FP32 and an unmerged adapter
-output. Reference guidance estimates at least 27 GiB for unquantized LoRA;
-planning fails if either the profile limit or detected GPU memory is lower.
-
-## QuIC profiles and ablations
-
-The QuIC smoke profile uses a dense, suite-finetuned LIBERO-10 host with its
-inherited action statistics, explicit deterministic episode train/validation
-partition, and adapter-only output:
-
-```bash
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
-./ovlab run --plan experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab train ablate run --suite configs/ablations/openvla-quic-placement-smoke.yaml \
-  --output /tmp/quic-placement-run
-```
-
-Suites validate declared factors and shared host/data/training invariants,
-materialize ordinary resolved profiles, execute through the existing isolated
-owner and compare immutable split/normalization manifests across child runs.
-See [`docs/ABLATIONS.md`](docs/ABLATIONS.md) for plan/materialize commands, data
-selection, source-workflow differences, and the vanilla normalization sidecar
-limitation. A three-step smoke verifies wiring, not training quality.
-
-Every explicit partition splits immutable TFDS episode IDs before frame
-sampling. Training and validation cannot share an episode. QuIC defaults to frozen selected
-host action statistics. Set `dataset.partition.action_normalization: train-q99`
-in the profile to fit training-only q01/q99 statistics. It requires an explicit
-partition and changes the scientific identity. Reference full/LoRA profiles also
-support this mode. Validation episodes never fit the bounds. Frozen statistics
-accompany the QuIC adapter through reload and inference. Teacher-forced validation
-remains separate from benchmark rollout evaluation.
-
-Training optimizer steps, QuIC teacher-forced validation, and rollout task/episode
-progress write to stderr. In an interactive `ovlab run`, Docker receives a
-terminal and each progress bar updates in place. Worker logs retain periodic
-plain-text snapshots. Redirected output and `--json` use plain progress lines
-on stderr, leaving JSON stdout intact. `OVLAB_PROGRESS=off` disables the
-console tracker; set the same variable on the relevant container/service
-environment when invoking a worker directly. The short human result includes
-separate checkpoint and validation checks: a completed smoke run can have a
-valid checkpoint while teacher-forced action-token accuracy remains low.
-
-## Isolated execution
-
-Build the purpose-specific images after changing packaged source or locks:
-
-```bash
-bash deploy/scripts/build-images.sh dataset training-openvla training-openvla-quic reporting
-```
-
-Then start a bounded run:
-
-```bash
-./ovlab run \
-  experiments/training/openvla-libero10-lora-smoke.yaml
-```
-
-The trainer has one requested GPU, no network, a read-only prepared dataset, a
-read-only base checkpoint and one writable training-run directory. It cannot
-write the finalized checkpoint registry. A second non-GPU, network-disabled
-finalizer reopens and validates the staged safetensors, creates the manifest
-last, and atomically publishes the bundle. The isolated reporting image then
-reads the finalized training run read-only and publishes its performance
-report. Base weights are never modified and LoRA weights remain unmerged.
-
-Before starting the trainer, OVLAB's checkpoint resolver prepares a verified
-managed snapshot with hardlinks, so Hugging Face blob symlinks cannot become
-broken references inside the isolated mount. Planning stays read-only. The
-mounted run keeps its canonical run ID in both the trainer and finalizer.
-Run directories explicitly use shared-group permissions (`2770`, with `660`
-for append-only metrics/events), independently of the host umask. Workers
-receive the actual groups of their writable mounts; running as root or making
-the run directory world-writable is unnecessary.
-When finalization crosses bind mounts, the finalizer copies staged files after
-an `EXDEV` link failure and publishes them through the same verified, atomic
-checkpoint path. Worker-owned evidence receives shared-group read access,
-including private Safetensors staging files, so host-side verification works.
-
-Inspect canonical evidence offline:
-
-```bash
-./ovlab data list runs --detail
-./ovlab run TRAINING_RUN_ID --verify
-./ovlab report TRAINING_RUN_ID
-./ovlab checkpoint list
-./ovlab checkpoint inspect --checkpoint CHECKPOINT_ID
-./ovlab checkpoint verify --checkpoint CHECKPOINT_ID
-# Copy the verified immutable bundle or make a tar archive:
-./ovlab checkpoint export CHECKPOINT_ID --format bundle --output /path/to/new-bundle
-./ovlab checkpoint export CHECKPOINT_ID --format tar --output /path/to/checkpoint.tar
-```
-
-`bundle` and `tar` preserve the finalized checkpoint and its metadata; adapter
-bundles still require their separately identified base model. ONNX conversion is
-not yet implemented for complete policies.
-
-`checkpoint list` defaults to finalized local training bundles. To list portable
-checkpoint resources declared in `configs/resources/registry.yaml`, use:
-
-```bash
-./ovlab checkpoint list --source registry --offline
-./ovlab checkpoint list --source registry --online --json
-./ovlab checkpoint list --source registry --offline --profile configs/local/profile.yaml
-```
-
-Registry listing defaults to offline. It checks the global Hugging Face cache,
-an optional local profile override, and the managed cache in resolver order.
-`present_unverified` means the snapshot and expected file sizes are present;
-the listing does not hash files or guarantee that deployment will succeed.
-`incomplete` means the first matching snapshot is missing files or sizes differ.
-Moving revisions may show `revision_unknown` when their commit cannot be resolved
-locally. Online mode additionally queries Hugging Face for each selected revision
-without downloading weights. `not_found_or_inaccessible` includes private or
-unauthorized repositories; `unknown` includes network and server errors. Use
-`HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` for private repositories. The command is
-read-only in both modes; registry entries remain visible even if checks fail.
-
-Add `--json` to any of these commands for one stable machine-readable document.
-Checkpoint verification parses safetensors metadata and finite floating-point
-payloads without importing or executing model code.
-
-Each optimizer step records a versioned system-performance sample: PyTorch CUDA
-allocator `allocated`, `reserved`, peak-allocated and peak-reserved bytes;
-exact total/trainable/frozen/adapter parameter counts; and an explicitly
-qualified estimated-GFLOPs value. VRAM is process allocator telemetry, not
-whole-device NVML usage. The compute value is the documented analytical proxy
-`(2 * total parameters + 4 * trainable parameters) * non-padding tokens`, not
-a measured hardware counter. This keeps LoRA backward cost separate from the
-frozen base-model forward path.
-
-`train report` runs in the locked reporting image. It mounts
-`runs/train/` read-only and writes a checksummed, self-contained HTML/JSON
-bundle to:
-
-```text
-exports/derived/training/<training-run-id>/system-performance/<build-id>/
-```
-
-The report includes interactive VRAM and estimated-compute time series,
-descriptive statistics, runtime parameter classes, lifecycle peaks and source
-checksums. Use `--verify --build BUILD_ID` to verify an exact build. Report
-generation never changes canonical training evidence or checkpoint identity.
-
-## Deployment handoff
-
-Deployment must select the content-derived `checkpoint-<32 hex>` ID explicitly.
-The resolver rejects `latest`, incomplete/failed/interrupted staging output,
-checksum failures, incompatible base dependencies and unsupported schemas. For
-LoRA it resolves and records both the immutable base checkpoint and immutable
-adapter bundle, mounts both read-only, and starts neither training nor dataset
-access. A later portable experiment may expose this as:
-
-```yaml
-policy:
-  provider: openvla
-  checkpoint:
-    id: checkpoint-0123456789abcdef0123456789abcdef
-```
-
-## Interruption and recovery
-
-SIGINT or SIGTERM reaches the foreground trainer. Completed events and metrics
-remain readable, the run becomes `interrupted`, partial checkpoints stay in
-`staging-checkpoints/`, and no registry checkpoint is published. Retry dataset
-acquisition explicitly after inspecting its `.staging` evidence. OVLAB removes
-only containers it owns; it never uses global Docker prune operations.
-
-## Weights & Biases tracking
-
-W&B tracking is optional at runtime, and the W&B SDK installs automatically as
-a dependency of `ovlab-benchctl` through the [host CLI environment](ENVIRONMENT.md).
-Authenticate with `wandb login` or
-`WANDB_API_KEY`, then set `OVLAB_WANDB_PROJECT` (or the standard
-`WANDB_PROJECT`) before running
-training. `OVLAB_WANDB_ENTITY` selects a team; standard W&B settings such as
-`WANDB_MODE=offline` also apply. For example:
-
-```bash
-OVLAB_WANDB_PROJECT=ovlab ./ovlab run openvla-lora-libero10-smoke
-```
-
-The host uploads the training plan, result and manifest as a small W&B artifact,
-logs optimizer-step loss, learning rate, accuracy and performance measurements,
-and records the checkpoint ID. Upload occurs after isolated checkpoint
-finalization. It does not upload model weights. If W&B fails, the
-CLI reports the tracking error separately; the canonical training result is
-unchanged. The `wandb` field in the CLI result contains the sync status and URL.
+Plugin checkpoint catalogs contain pinned references and file identities, not
+weight files. A user may select a plugin checkpoint, a local checkpoint override,
+or a previously trained artifact. Large weights are neither committed to the
+plugin project nor copied into every runtime image.

@@ -46,15 +46,16 @@ ENV OVLAB_ROOT=/opt/ovlab OVLAB_IMAGE_ROLE=training-openvla \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /opt/ovlab
-COPY external/plugin-openvla/locks/openvla-oft.requirements.txt external/plugin-openvla/locks/training-openvla.requirements.txt /tmp/locks/
+COPY external/plugin-openvla/locks/training-runtime-base.requirements.txt external/plugin-openvla/locks/training-openvla.requirements.txt /tmp/locks/
 RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx /opt/conda/lib/python3.10/site-packages/networkx-*.dist-info \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes \
-      -r /tmp/locks/openvla-oft.requirements.txt -r /tmp/locks/training-openvla.requirements.txt \
+      -r /tmp/locks/training-runtime-base.requirements.txt -r /tmp/locks/training-openvla.requirements.txt \
     && rm -rf /tmp/locks
 COPY --from=wheel-builder /wheelhouse /wheelhouse
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /wheelhouse/*.whl && rm -rf /wheelhouse
 COPY code /opt/ovlab/code
 COPY external/plugin-openvla /opt/ovlab/external/plugin-openvla
+COPY external/openvla-support /opt/ovlab/external/openvla-support
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 COPY external/openvla /opt/ovlab/external/openvla
@@ -64,6 +65,7 @@ RUN --mount=type=secret,id=ovlab_source_manifest \
     --mount=type=secret,id=ovlab_config_bundle \
     test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
     && bash /tmp/install-ovlab-packages.sh \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla-support \
     && bash /opt/ovlab/external/plugin-openvla/scripts/install-plugin.sh \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla \
     && rm /tmp/install-ovlab-packages.sh \

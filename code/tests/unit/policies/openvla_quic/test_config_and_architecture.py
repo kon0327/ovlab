@@ -1,119 +1,33 @@
-from copy import deepcopy
+"""QuIC defaults are explicit templates; algorithms remain outside OVLAB."""
 from pathlib import Path
 
 import pytest
 
-from ovlab_benchctl.errors import ConfigSchemaError
-from ovlab_benchctl.resolver import ConfigResolver
+from ovlab_benchctl.config_bundle import ConfigBundleBuilder
+from ovlab_benchctl.policy_plugins import call_plugin, plugin_for_type
 from ovlab_benchctl.schema import validate
-from ovlab_benchctl.strict_yaml import load
-from ovlab_openvla_quic import (
-    EXTERNAL_QUIC_COMMIT,
-    QuICImplementationUnavailableError,
-    QuICVariant,
-    descriptor_from_document,
-)
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
-CONFIG_ROOT = REPOSITORY_ROOT / "configs"
-PACKAGE_ROOT = REPOSITORY_ROOT / "plugins/openvla"
-CONFIGS = {
-    QuICVariant.PEFT: "policies/openvla-quic/quic-peft-bones.yaml",
-    QuICVariant.WC: "policies/openvla-quic/quic-wc-bones.yaml",
-}
+PACKAGE_ROOT = REPOSITORY_ROOT / "plugins/openvla-quic"
 
 
-def _walk(value):
-    if isinstance(value, dict):
-        for item in value.values():
-            yield from _walk(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _walk(item)
-    else:
-        yield value
+def test_default_adapter_template_validates_only_for_explicit_checkpoint_handoff():
+    reference = "plugin://openvla-quic/policy/default.yaml"
+    document = ConfigBundleBuilder(REPOSITORY_ROOT).load_component(reference, "policy", validate_document=False)
+    owner = plugin_for_type(document["type"], REPOSITORY_ROOT)
+    call_plugin(owner, "validate_checkpoint_template", document, reference)
+    assert not {"adapter_path", "adapter_manifest_sha256", "adapter_tensor_sha256"} & document["settings"]["quic"].keys()
+    with pytest.raises(ValueError, match="adapter"):
+        validate(document, reference, "policy")
+    document["settings"]["runtime"]["quantization"] = "4bit"
+    with pytest.raises(ValueError, match="dense"):
+        call_plugin(owner, "validate_checkpoint_template", document, reference)
 
 
-@pytest.mark.parametrize("variant", list(QuICVariant))
-def test_portable_descriptor_only_configuration_validates_without_external_import(variant):
-    resolver = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT)
-    document = resolver.load_component(CONFIGS[variant], "quic_policy_descriptor")
-    descriptor = descriptor_from_document(document)
-    assert descriptor.variant is variant
-    assert descriptor.provider.source_commit == EXTERNAL_QUIC_COMMIT
-    assert document["descriptor_mode"] is True
-    assert document["implementation_status"] == "skeleton"
-    assert document["runtime_validated"] is False
-    assert document["training_validated"] is False
-    assert document["libero_validated"] is False
-    assert document["compression_verified"] is False
-    assert all(
-        not (isinstance(value, str) and Path(value).is_absolute())
-        for value in _walk(document)
-    )
-    with pytest.raises(QuICImplementationUnavailableError):
-        descriptor.require_runtime_ready()
-
-
-@pytest.mark.parametrize("variant", list(QuICVariant))
-def test_skeleton_configuration_rejects_runtime_or_compression_claims(variant):
-    document = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[variant], "quic_policy_descriptor")
-    for field in (
-        "runtime_validated", "training_validated", "libero_validated", "compression_verified"
-    ):
-        mutation = deepcopy(document)
-        mutation[field] = True
-        with pytest.raises(ConfigSchemaError, match="cannot claim"):
-            validate(mutation, "test", "quic_policy_descriptor")
-
-
-def test_source_availability_and_dense_materialization_cannot_cross_modes():
-    peft = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
-    peft["source_import_status"] = "absent"
-    with pytest.raises(ConfigSchemaError, match="source_import_status"):
-        validate(peft, "test", "quic_policy_descriptor")
-
-    wc = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.WC], "quic_policy_descriptor")
-    wc["semantics"]["dense_adapter_materialization_allowed"] = True
-    with pytest.raises(ConfigSchemaError, match="misclassifies QuIC-WC"):
-        validate(wc, "test", "quic_policy_descriptor")
-
-
-def test_configurations_cannot_alias_or_swap_peft_and_wc_semantics():
-    peft = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
-    peft["id"] = "quic-wc"
-    with pytest.raises(ConfigSchemaError, match="id must equal"):
-        validate(peft, "test", "quic_policy_descriptor")
-
-    wc = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.WC], "quic_policy_descriptor")
-    wc["published_method_relation"] = "direct"
-    with pytest.raises(ConfigSchemaError, match="published_method_relation"):
-        validate(wc, "test", "quic_policy_descriptor")
-
-
-@pytest.mark.parametrize("profile", ("QP1", "QP2", "QP3", "QP4"))
-def test_gate_f_qp_profiles_remain_unresolved_without_invented_numbers(profile):
-    document = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
-    document["profile"] = {
-        "id": profile,
-        "definition_availability": "unresolved",
-        "definition_version": None,
-        "definition_hash": None,
-    }
-    validate(document, "test", "quic_policy_descriptor")
-    mutation = deepcopy(document)
-    mutation["profile"]["definition_version"] = "guessed-v1"
-    mutation["profile"]["definition_hash"] = "a" * 64
-    with pytest.raises(ConfigSchemaError, match="must not invent"):
-        validate(mutation, "test", "quic_policy_descriptor")
-
-
-def test_provider_boundary_is_pinned_and_cannot_be_redirected():
-    document = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
-    document["external_provider"]["source_commit"] = "0" * 40
-    with pytest.raises(ConfigSchemaError, match="pinned public API boundary"):
-        validate(document, "test", "quic_policy_descriptor")
+def test_non_quic_checkpoint_method_metadata_has_no_qp_fields():
+    registry = ConfigBundleBuilder(REPOSITORY_ROOT).load_component("plugin://openvla/registry/default.yaml", "resource_registry")
+    for resource_id, entry in registry["checkpoints"].items():
+        assert not any(key.lower().startswith("qp") for key in entry.get("method", {})), resource_id
 
 
 def test_quic_package_contains_only_wrapper_contract_layers():
@@ -137,24 +51,3 @@ def test_quic_package_contains_only_wrapper_contract_layers():
         "conversion.py", "optimizers.py", "losses.py",
     }
     assert not production_files & forbidden_modules
-
-
-def test_non_quic_registry_method_metadata_has_no_qp_fields():
-    registry = load(CONFIG_ROOT / "resources/registry.yaml")
-    for resource_id, entry in registry["checkpoints"].items():
-        method = entry.get("method", {})
-        assert not any(key.lower().startswith("qp") for key in method), resource_id
-
-
-def test_weight_compression_remains_unavailable_and_peft_has_an_explicit_adapter_configuration():
-    experiment_text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (CONFIG_ROOT.parent / "experiments/evaluation").rglob("*.yaml")
-    )
-    assert "quic-wc" not in experiment_text
-    policy = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(
-        "policies/openvla-quic/adapter-libero10.yaml", "policy"
-    )
-    assert policy["type"] == "openvla_quic"
-    assert policy["settings"]["runtime"]["quantization"] == "none"
-    assert "adapter_manifest_sha256" in policy["settings"]["quic"]

@@ -162,6 +162,14 @@ def expand_projects(document, root, *, offline=False):
             raise ConfigSchemaError(f"plugin {name} configs and capabilities must be mappings")
         config_root = configs.get("root", "configs")
         _inside(project, config_root, "plugin configuration root")
+        templates = configs.get("templates", {})
+        if not isinstance(templates, dict):
+            raise ConfigSchemaError(f"plugin {name} config templates must map categories to paths")
+        for category, paths in templates.items():
+            if not isinstance(category, str) or not _NAME.fullmatch(category):
+                raise ConfigSchemaError(f"plugin {name} has an invalid template category")
+            for path in _strings(paths, "plugin configuration templates"):
+                _inside(project / config_root, path, "plugin configuration template")
         aliases = manifest.get("config_aliases", {})
         if isinstance(aliases, str):
             aliases = read_document(_inside(project, aliases, "plugin configuration aliases"))
@@ -172,6 +180,7 @@ def expand_projects(document, root, *, offline=False):
             "configs_root": config_root, "config_aliases": aliases,
             "capabilities": deepcopy(manifest.get("capabilities", {})),
             "checkpoint_catalogs": deepcopy(configs.get("checkpoints", [])),
+            "config_templates": deepcopy(templates),
         }
     return result
 
@@ -182,7 +191,7 @@ def project_root(name, root, registry, *, acquire=True):
     if not isinstance(metadata, dict):
         raise ConfigReferenceError(f"unknown plugin project: {name}")
     bundled = root / "configs/plugins/projects" / name
-    if bundled.is_dir():
+    if (root / "configs/.ovlab-bundle.json").is_file() and bundled.is_dir():
         return bundled
     source_id = metadata["source_id"]
     source = registry["sources"][source_id]
@@ -211,6 +220,44 @@ def project_root(name, root, registry, *, acquire=True):
     if not acquire:
         raise ConfigReferenceError(f"plugin project {name} is unavailable in this runtime")
     return acquire_project(root, name, source)
+
+
+def control_source_root(name, root, registry, *, acquire=True):
+    """Locate an explicit Python control dependency independently of external/.
+
+    Pinned dependencies use the same isolated source preparation as builds. They
+    may be shared across model projects without depending on a development
+    checkout, and frozen workers use their bundled local source directly.
+    """
+    root = Path(root).resolve()
+    from .policy_plugins import _OFFLINE
+    acquire = acquire and not _OFFLINE.get()
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
+        raise ConfigSchemaError(f"invalid control source identifier: {name}")
+    try:
+        source = registry["sources"][name]
+    except KeyError as exc:
+        raise ConfigReferenceError(f"unknown control source: {name}") from exc
+    _source(source)
+    bundled = root / "configs/plugins/sources" / name
+    if (root / "configs/.ovlab-bundle.json").is_file() and bundled.is_dir():
+        if bundled.is_symlink() or not bundled.resolve().is_relative_to(root):
+            raise ConfigReferenceError("bundled control source escapes its runtime root")
+        return bundled.resolve()
+    if source["kind"] == "local":
+        path = Path(source["path"]).expanduser()
+        path = (path if path.is_absolute() else root / path).resolve()
+        if not path.is_dir():
+            raise ConfigReferenceError(f"control source does not exist: {path}")
+        return path
+    cache = root / "plugins/.cache/control" / name / source["commit"]
+    for parent in (root / "plugins", root / "plugins/.cache", root / "plugins/.cache/control",
+                   cache.parent, cache):
+        if parent.is_symlink():
+            raise ConfigReferenceError("control source cache cannot contain symlinks")
+    from .plugin_sources import prepared_sources
+    with prepared_sources(cache, [name], registry={"sources": {name: source}}, offline=not acquire):
+        return cache / "external" / name
 
 
 def register_project(root, location, *, commit=None, registry_path=None, dry_run=False):

@@ -1,0 +1,16 @@
+# Composition example: copy to experiments/my-evaluation.yaml and select compatible benchmark inputs.
+# OFT requires primary+wrist RGB and robot proprioception. QuIC requires a trained adapter.
+# For the complete validated smoke composition see OVLAB examples/experiments/.
+schema_version: "0.1.0"
+kind: "experiment"
+extends: "plugin://openvla/evaluate/default.yaml"
+experiment:
+  id: "openvla-local-eval"
+  name: "Local openvla evaluation"
+  tags:
+    - "example"
+components:
+  benchmark: "ovlab://benchmarks/libero.yaml"
+  metrics: "ovlab://metrics/default.yaml"
+  protocol: "ovlab://protocols/smoke.yaml"
+  artifacts: "ovlab://artifacts/default.yaml"

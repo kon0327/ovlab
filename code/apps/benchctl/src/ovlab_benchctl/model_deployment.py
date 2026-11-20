@@ -73,8 +73,6 @@ class ModelDeployment:
         config_root = self.repository_root / "configs"
         builder = ConfigBundleBuilder(self.repository_root)
         reference = builder.references.reference(path)
-        if not path.is_relative_to(config_root / "deploy") and not reference.startswith("plugin:"):
-            raise ConfigReferenceError("deployment configs must be below configs/deploy/ or a registered plugin configuration root")
         doc = builder.load_component(reference, "deployment")
         policy = builder.load_component(doc["components"]["policy"], "policy")
         from .policy_plugins import plugin_for_type
@@ -100,7 +98,7 @@ class ModelDeployment:
             profile = str(profile.resolve())
         normalized = {**doc, "effective_quantization": effective, "published_port": selected_port}
         return ModelDeploymentPlan(
-            doc["id"], (reference if reference.startswith("plugin:") else f"configs/{reference}"), role, doc.get("image", deployment["image"]), doc.get("build", True),
+            doc["id"], (reference if reference.startswith(("plugin:", "ovlab:")) else f"configs/{reference}"), role, doc.get("image", deployment["image"]), doc.get("build", True),
             settings.get("host", "127.0.0.1"), selected_port, settings.get("container_port", 8000),
             settings.get("restart", "unless-stopped"), settings.get("readiness_timeout_s", 900),
             doc.get("runtime", {}).get("gpu", "all" if deployment.get("gpu", True) else None), effective, selected, offline, profile,

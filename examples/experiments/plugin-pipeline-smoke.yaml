@@ -1,0 +1,85 @@
+# End-to-end plugin verification on one 24 GiB GPU.
+# Three QuIC optimizer steps, finalized adapter, one two-step rollout, training/evaluation reports.
+# Run: ovlab run examples/experiments/plugin-pipeline-smoke.yaml
+# Inspect without GPU workloads: ovlab run --plan examples/experiments/plugin-pipeline-smoke.yaml
+schema_version: "ovlab.experiment/v1"
+kind: "workflow"
+id: "plugin-pipeline-smoke"
+name: "Plugin training, checkpoint handoff, evaluation and reporting smoke"
+execution:
+  max_workers: 1
+config:
+  train:
+    profile: "plugin://openvla-quic/train/default.yaml"
+    patch:
+      id: "plugin-pipeline-smoke-train"
+      model:
+        base_checkpoint: "openvla-7b-finetuned-libero-10"
+        revision: "80970322773f81baa2e22fe495d0487b93a05cfa"
+        adaptation_state: "merged"
+      dataset:
+        ref: "libero/libero_10"
+        partition:
+          groups:
+            - "LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket"
+          max_episodes_per_group: 2
+          validation_fraction: 0.5
+          frame_stride: 8
+          max_frames_per_episode: 4
+      training:
+        max_steps: 3
+        per_device_batch_size: 1
+        gradient_accumulation_steps: 1
+        validation_batches: 1
+        normalization:
+          unnorm_key: "libero_10"
+      resources:
+        max_vram_gib: 24
+  evaluate:
+    profile: "plugin://openvla-quic/evaluate/default.yaml"
+    checkpoint_from: ""
+    patch:
+      experiment:
+        id: "plugin-pipeline-smoke-eval"
+        name: "Evaluate the newly trained adapter"
+        tags:
+          - "plugins"
+          - "quic"
+          - "checkpoint-handoff"
+          - "reporting"
+          - "smoke"
+      components:
+        benchmark: "ovlab://benchmarks/libero.yaml"
+        metrics: "ovlab://metrics/default.yaml"
+        protocol: "ovlab://protocols/smoke.yaml"
+        artifacts: "ovlab://artifacts/default.yaml"
+      reporting:
+        enabled: true
+        profile: "libero-task-default"
+        on_task_finalize: true
+        on_run_finalize: true
+        failure_policy: "warn"
+    component_patches:
+      benchmark:
+        settings:
+          task_indices:
+            - 0
+          initialization:
+            settling_steps: 1
+      policy:
+        settings:
+          checkpoint_id: "openvla-7b-finetuned-libero-10"
+          processor_id: "openvla-7b-finetuned-libero-10"
+          unnorm_key: "libero_10"
+          quic:
+            adaptation_state: "merged"
+      protocol:
+        reproducibility:
+          require_checkpoint_identity: true
+execute:
+  - "train"
+children:
+  - id: "evaluate-checkpoint"
+    name: "Evaluate finalized checkpoint and publish reports"
+    execute:
+      - "evaluate"

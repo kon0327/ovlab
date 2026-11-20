@@ -1,93 +1,69 @@
-# QuIC OpenVLA runtime
+# QuIC model plugin runtime
 
-Build the dedicated serving and training roles from the repository root:
-
-```bash
-./ovlab plugin sync quic-peft
-bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic dataset
-```
-
-The images are `ovlab-policy-openvla-quic:local` and
-`ovlab-training-openvla-quic:local`. They install the portable
-`external/quic-peft-vla` method before the host integration in
-`external/openvla-quic`. Neither image installs LIBERO, Robosuite, MuJoCo, or
-OpenGL. OVLAB's benchmark image owns rollout environments and communicates
-with the policy over the existing AF_UNIX service contract.
-
-The dataset image also owns strict checkpoint finalization. Rebuild it with
-the training image when using the Linear/Conv2d QuIC manifest extension; an
-older finalizer does not accept the new convolutional layer metadata. The
-[LoRA coverage experiment](../../docs/QUIC_LORA_COVERAGE.md) uses this extension
-for vision patch projections.
-
-Both roles use `deploy/locks/quic-openvla.pylock.toml` and its generated,
-hashed requirements. This closure adapts OVLAB's reviewed training runtime:
-Python 3.10, Torch 2.2.0/CUDA 12.1 from digest-pinned images, standard
-Transformers 4.40.1, NumPy 1.26.4, FlashAttention 2.5.5, TensorFlow 2.15.0,
-and the source migration fixes `tensorflow-metadata==1.17.2` and
-`protobuf==4.21.12`. The latter hashes match the source project's
-`environments/openvla/requirements-fixes.txt`; wheel coordinates were checked
-against [TensorFlow Metadata release metadata](https://pypi.org/pypi/tensorflow-metadata/1.17.2/json)
-and [Protobuf release metadata](https://pypi.org/pypi/protobuf/4.21.12/json).
-The immutable dlimp commit is built separately; the QuIC method has no dlimp
-dependency. TensorFlow remains in serving because the host preprocessing
-contract uses its image transforms. The OFT Transformers fork is excluded.
-This is a reconstructed OVLAB runtime, not an exact copy of the source
-project's Conda snapshot. The closure also pins `ninja==1.13.0` for
-FlashAttention and `pyopenssl==26.3.0` for compatibility with the inherited
-`cryptography==49.0.0`; the older base-image pyOpenSSL is incompatible.
-Each image runs `pip check` after installation
-and records its actual Pip/Conda inventories under `/usr/share/ovlab/`.
-
-Regenerate the requirements after an intentional lock update:
+The independent [`openvla-quic` project](../../plugins/openvla-quic/README.md)
+owns its policy, training and checkpoint-finalizer recipes. Its manifest declares
+pinned upstream OpenVLA-QuIC and QuIC-PEFT sources plus the shared OpenVLA support
+package. OVLAB acquires those dependencies through the same source interface as
+any external plugin.
 
 ```bash
-python deploy/scripts/render_requirements_lock.py \
-  deploy/locks/quic-openvla.pylock.toml deploy/locks/quic-openvla.requirements.txt
+bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic finalizer-openvla-quic dataset benchmark reporting
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml --plan
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml
 ```
 
-Use the existing `ovlab run` command with an experiment declaring
-`deployment: {profile: quic, renderer: egl}` and policy type `openvla_quic`.
-The composed policy's `settings.quic.adapter_path` selects the adapter
-directory; a relative path is interpreted from the OVLAB repository root.
-`OVLAB_QUIC_ADAPTER_HOST_PATH` in the Compose environment can override its
-machine-local location. Relative overrides resolve from the environment
-file directory. The deployment verifies `adapter.json` and
-`adapter.safetensors`, mounts that directory read-only at `/adapters/quic`,
-and sets `OVLAB_QUIC_ADAPTER_PATH` for the provider. The dense host checkpoint
-uses the existing verified, read-only checkpoint resolver. Simulator and
-benchmark processes receive no adapter mount.
+Source synchronization into `external/` is optional for the default isolated
+build. Existing local edits there are preserved. Plugin image settings can be
+overridden through `OVLAB_QUIC_IMAGE`, `OVLAB_TRAINING_QUIC_IMAGE` and
+`OVLAB_FINALIZER_QUIC_IMAGE`.
 
-Override images through `OVLAB_QUIC_IMAGE` and `OVLAB_TRAINING_QUIC_IMAGE`.
-Builds use the current working tree of both external projects. Source and
-dependency hashes are recorded for provenance, but deployment checks only the
-versioned runtime contract. A changed local source tree does not invalidate
-an otherwise compatible image; rebuild it when you want that source in the
-container.
+## Configuration and checkpoint handoff
 
-# Console progress
+Plugin defaults are modular:
 
-`ovlab_core.progress.ConsoleProgress` provides shared stderr tracking for
-optimizer steps, validation batches, and evaluation episodes. Interactive
-`ovlab run` attaches a Docker terminal so the worker redraws each bar in
-place; its evidence log records plain start, periodic (at most every 30
-seconds), and final snapshots. Redirected runs print plain progress snapshots
-to stderr. Interactive JSON-mode runs redraw the bar on stderr while JSON
-remains on stdout. Failure or interruption preserves the partial
-count. `OVLAB_PROGRESS=on` records every update in captured logs;
-`OVLAB_PROGRESS=off` silences tracking. JSON command results remain on stdout.
-Console progress supplements persisted scientific metrics without changing
-their values.
-
-```python
-from ovlab_core.progress import ConsoleProgress
-
-with ConsoleProgress("Train", total=max_steps, unit="step") as progress:
-    for step in range(max_steps):
-        loss = optimize_one_step()
-        progress.advance(detail=f"loss={loss:.4f}")
+```text
+plugin://openvla-quic/policy/default.yaml
+plugin://openvla-quic/deploy/default.yaml
+plugin://openvla-quic/registry/default.yaml
+plugin://openvla-quic/train/default.yaml
+plugin://openvla-quic/evaluate/default.yaml
 ```
 
-The upstream OpenVLA trainer already uses tqdm. OVLAB's rollout runner now
-tracks completed episodes for every benchmark; QuIC training uses the shared
-helper for optimizer steps and teacher-forced validation.
+Train/evaluate defaults are fragments completed by an experiment. Task selection,
+smoke limits and ablations belong to ignored user experiments, rather than the
+plugin's shipped defaults. Each supported category has one commented example in
+`plugins/openvla-quic/examples/`.
+
+The policy default intentionally contains no fabricated adapter path or SHA.
+`checkpoint_from` binds the finalized adapter from a selected training phase and
+adds its execution dependency. A failed/unfinalized training output prevents
+evaluation. An evaluation-only scenario must provide an existing adapter's real
+path and verified manifest/tensor identities in its local policy extension.
+
+Runtime validates and mounts the adapter directory read-only at
+`/checkpoints/quic-adapter` and exposes that path through
+`OVLAB_QUIC_ADAPTER_PATH`. The dense checkpoint uses the ordinary verified
+checkpoint resolver. The benchmark receives neither model weights nor adapter
+mounts. An explicit `OVLAB_QUIC_ADAPTER_HOST_PATH` override changes the
+machine-local adapter location; it does not replace identity verification.
+
+## Dependency and finalization boundaries
+
+QuIC locks live in [`plugins/openvla-quic/locks/`](../../plugins/openvla-quic/locks/).
+They select the standard Transformers runtime and exclude the OFT-specific
+Transformers fork. Policy/training roles include the preprocessing and tensor
+libraries they need; rollout environments remain in the benchmark image. Every
+production build records inventories and runs dependency checks.
+
+The trainer writes staged output. Its separate CPU finalizer verifies the
+adapter inventory and scientific manifest before publishing the immutable
+checkpoint. Rebuild the finalizer whenever checkpoint-format support changes;
+it is not provided by the dataset image.
+
+## Console progress
+
+The shared console progress utility reports optimizer steps, validation batches
+and evaluation episodes on stderr. Interactive terminals redraw a progress bar;
+redirected runs emit periodic plain-text updates. JSON results remain on stdout.
+`OVLAB_PROGRESS=on` records every update and `OVLAB_PROGRESS=off` silences progress
+output. Persisted metrics and checkpoint evidence are independent of presentation.

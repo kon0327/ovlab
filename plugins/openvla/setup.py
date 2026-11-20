@@ -6,7 +6,7 @@ from setuptools import setup
 
 ROOT = Path(__file__).parent
 assets = [ROOT / name for name in ("plugin.json", "README.md", "pyproject.toml", "setup.py", "MANIFEST.in")]
-for directory in ("configs", "docker", "locks", "scripts", "src"):
+for directory in ("configs", "examples", "docker", "locks", "scripts", "src"):
     for path in (ROOT / directory).rglob("*"):
         relative = path.relative_to(ROOT)
         if path.is_file() and not any(part == "__pycache__" or part.endswith(".egg-info") for part in relative.parts):

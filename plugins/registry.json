@@ -6,6 +6,18 @@
         "kind": "local",
         "path": "plugins/openvla"
       }
+    },
+    "openvla-oft": {
+      "source": {
+        "kind": "local",
+        "path": "plugins/openvla-oft"
+      }
+    },
+    "openvla-quic": {
+      "source": {
+        "kind": "local",
+        "path": "plugins/openvla-quic"
+      }
     }
   },
   "sources": {

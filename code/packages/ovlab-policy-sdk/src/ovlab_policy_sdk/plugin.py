@@ -47,6 +47,16 @@ class PolicyPlugin(ABC):
     def validate_policy(self, doc: dict, path: str) -> None:
         """Validate the complete composed policy document."""
 
+    def validate_checkpoint_template(self, doc: dict, path: str) -> None:
+        """Validate a policy awaiting a workflow training checkpoint.
+
+        Called only when the workflow explicitly binds ``checkpoint_from``.
+        Plugins may omit the identity that their checkpoint-binding hook will
+        supply, but must validate every other setting. Runtime validation always
+        calls ``validate_policy`` on the fully bound document.
+        """
+        self.validate_policy(doc, path)
+
     @abstractmethod
     def resolve_settings(self, doc: dict, benchmark_doc: dict, action_spec: ActionSpec,
                          checkpoints: Mapping, devices: Mapping, *,

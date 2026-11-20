@@ -1,0 +1,5 @@
+# Empty catalog for model-free runs. Model checkpoint catalogs belong to plugins.
+schema_version: "0.1.0"
+kind: "resource_registry"
+checkpoints: {}
+repositories: {}

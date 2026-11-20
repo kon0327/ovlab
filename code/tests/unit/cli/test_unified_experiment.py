@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from helpers.configuration_fixtures import training_config, training_document, evaluation_document
 from helpers.runner_fixtures import TrackingBenchmark, TrackingPolicy, runner_plan
 from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 from ovlab_benchctl.experiment_references import find_experiment
@@ -30,20 +31,18 @@ def _hash_tree(root):
             for p in root.rglob('*') if p.is_file()}
 
 
-@pytest.mark.parametrize('source,phase', [
-    ('experiments/training/openvla-libero10-quic-smoke.yaml', 'train'),
-    ('experiments/evaluation/libero10-lora-4bit-three-per-task.yaml', 'evaluate'),
-])
-def test_standalone_sources_share_the_tree_plan_and_remain_unchanged(tmp_path, source, phase):
+@pytest.mark.parametrize('phase', ['train', 'evaluate'])
+def test_standalone_sources_share_the_tree_plan_and_remain_unchanged(tmp_path, phase):
     workflow = ExperimentWorkflow(ROOT, environment={'OVLAB_DATA_ROOT': str(tmp_path / 'data')})
-    source_path = ROOT / source
+    source_path = tmp_path / (phase + '.yaml')
+    source_path.write_text(dumps(training_document() if phase == 'train' else evaluation_document()))
     before = source_path.read_bytes()
-    first = workflow.plan(source)
-    assert first == workflow.plan(source)
+    first = workflow.plan(source_path)
+    assert first == workflow.plan(source_path)
     assert first['steps'] == [{'node': '', 'phase': phase}]
     assert first['nodes'][0]['execute'] == [phase]
     assert first['nodes'][0]['configuration'][phase]['document']['kind'] in {'training', 'experiment'}
-    assert workflow.verify(source)['source_type'] == 'configuration'
+    assert workflow.verify(source_path)['source_type'] == 'configuration'
     assert source_path.read_bytes() == before
     assert not (tmp_path / 'data').exists()
 
@@ -51,10 +50,10 @@ def test_standalone_sources_share_the_tree_plan_and_remain_unchanged(tmp_path, s
 @pytest.mark.parametrize('phase', ['train', 'evaluate'])
 def test_external_standalone_yaml_resolves_extends_before_normalizing(tmp_path, phase):
     if phase == 'train':
-        document = dict(load_training_profile(ROOT / 'experiments/training/openvla-libero10-quic-smoke.yaml').document)
+        document = training_document()
         child = {'kind': 'training', 'extends': 'base.yaml', 'training': {'max_steps': 2}}
     else:
-        document = ConfigBundleBuilder(ROOT).load_component('experiments/evaluation/libero10-lora-4bit-three-per-task.yaml', 'experiment')
+        document = evaluation_document()
         child = {'kind': 'experiment', 'extends': 'base.yaml', 'experiment': {'name': 'Inherited external evaluation'}}
     (tmp_path / 'base.yaml').write_text(dumps(document))
     source = tmp_path / 'child.yaml'
@@ -68,19 +67,25 @@ def test_external_standalone_yaml_resolves_extends_before_normalizing(tmp_path, 
         assert resolved['experiment']['name'] == 'Inherited external evaluation'
 
 
-def test_bare_experiment_names_are_unique_across_all_source_types():
-    workflow = ExperimentWorkflow(ROOT)
-    assert workflow.plan('openvla-libero10-quic-smoke')['steps'] == [{'node': '', 'phase': 'train'}]
+def test_bare_experiment_names_are_unique_across_all_source_types(tmp_path):
+    root = tmp_path / "ovlab"
+    for folder in ("examples/experiments", "experiments/training"):
+        target = root / folder / "duplicate.yaml"
+        target.parent.mkdir(parents=True)
+        target.write_text(dumps({'schema_version': 'ovlab.experiment/v1', 'kind': 'workflow',
+                                 'id': 'empty', 'name': 'Empty', 'execute': []}))
     with pytest.raises(ExperimentSpecError, match='ambiguous'):
-        workflow.plan('example')
+        ExperimentWorkflow(root).plan('duplicate')
+    assert ExperimentWorkflow(ROOT).plan('mock-smoke')['steps'] == [{'node': '', 'phase': 'evaluate'}]
     with pytest.raises(ExperimentSpecError, match='kind'):
-        workflow.plan('configs/policies/openvla-quic/quic-peft-bones.yaml')
+        ExperimentWorkflow(ROOT).plan('plugin://openvla/policy/default.yaml')
 
 
 def _tree():
+    train = training_config()
+    train['patch']['training']['max_steps'] = 2
     return {'schema_version': 'ovlab.experiment/v1', 'kind': 'workflow', 'id': 'study', 'name': 'Study',
-            'execution': {'max_workers': 1},
-            'config': {'train': {'profile': 'openvla-libero10-quic-smoke.yaml', 'patch': {'training': {'max_steps': 2}}}},
+            'execution': {'max_workers': 1}, 'config': {'train': train},
             'children': [{'id': 'a', 'execute': ['train']},
                          {'id': 'b', 'execute': ['train'], 'config': {'train': {'patch': {'training': {'seed': 99}}}}}]}
 
@@ -96,44 +101,19 @@ def test_execution_settings_and_configuration_inherit_from_yaml(tmp_path):
     assert plan['nodes'][1]['configuration']['train']['document']['training']['seed'] != 99
 
 
-def test_two_task_training_smoke_binds_training_outputs_and_keeps_oft_reference():
-    workflow = ExperimentWorkflow(ROOT)
-    plan = workflow.plan('experiments/workflows/libero10-two-task-training-smoke.yaml')
+def test_plugin_smoke_binds_training_output_and_explicit_report_configuration():
+    plan = ExperimentWorkflow(ROOT).plan('examples/experiments/plugin-pipeline-smoke.yaml')
     assert plan['execution']['max_workers'] == 1
-    nodes = {node['path']: node for node in plan['nodes']}
-    expected = {
-        'lora/full': ('openvla_lora_merged', 'none'),
-        'lora/eight-bit': ('openvla_lora_merged', '8bit'),
-        'lora/four-bit': ('openvla_lora_merged', '4bit'),
-        'quic/full': ('openvla_quic', 'none'),
-        'oft/full': ('openvla_oft', 'none'),
-        'oft/eight-bit': ('openvla_oft', '8bit'),
-        'oft/four-bit': ('openvla_oft', '4bit'),
-    }
-    assert len(plan['steps']) == len(expected) + 2
-    for node_path in ('lora', 'quic'):
-        profile = nodes[node_path]['configuration']['train']['document']
-        assert nodes[node_path]['execute'] == ['train']
-        assert profile['training']['max_steps'] == 3
-        assert len(profile['dataset']['partition']['groups']) == 2
-    for node_path, (policy_type, quantization) in expected.items():
-        node = nodes[node_path]
-        configuration = node['configuration']['evaluate']
-        assert node['execute'] == ['evaluate']
-        benchmark = configuration['component_documents']['benchmark']['document']
-        assert benchmark['settings']['task_indices'] == [0, 1]
-        protocol = workflow.bundle.load_component(configuration['document']['components']['protocol'], 'protocol')
-        assert protocol['execution']['rollouts_per_task'] == 1
-        assert protocol['execution']['maximum_episode_steps'] == 520
-        policy = configuration['component_documents'].get('policy', {}).get('document')
-        if policy is None:
-            policy = workflow.bundle.load_component(configuration['document']['components']['policy'], 'policy')
-        assert policy['type'] == policy_type
-        assert policy['settings']['runtime']['quantization'] == quantization
-        if node_path.startswith(('lora/', 'quic/')):
-            assert configuration['checkpoint_from'] == node_path.split('/')[0]
-    assert nodes['quic/full']['configuration']['evaluate']['checkpoint_from'] == 'quic'
-    assert 'checkpoint_from' not in nodes['oft/full']['configuration']['evaluate']
+    root, evaluation = plan['nodes']
+    train = root['configuration']['train']['document']
+    assert root['execute'] == ['train']
+    assert train['training']['max_steps'] == 3
+    assert len(train['dataset']['partition']['groups']) == 1
+    config = evaluation['configuration']['evaluate']
+    assert config['checkpoint_from'] == ''
+    assert config['component_documents']['benchmark']['document']['settings']['task_indices'] == [0]
+    assert config['document']['reporting']['enabled'] is True
+    assert evaluation['execute'] == ['evaluate']
 
 
 @pytest.mark.parametrize('workers', [0, 33, True, '2'])
@@ -154,7 +134,7 @@ def test_standalone_execution_has_experiment_metadata_and_scoped_worker(tmp_path
         result = ({'run_path': str(tmp_path / 'runs' / instance / 'evaluate' / 'run-one')}
                   if command[1] == '_native-run' else {'status': 'completed'})
         return SimpleNamespace(returncode=0, stdout=json.dumps({'status': 'success', 'result': result}))
-    result = ExperimentWorkflow(ROOT, environment={'OVLAB_DATA_ROOT': str(tmp_path)}, runner=worker).run('experiments/evaluation/mock-e2e-smoke.yaml')
+    result = ExperimentWorkflow(ROOT, environment={'OVLAB_DATA_ROOT': str(tmp_path)}, runner=worker).run('examples/experiments/mock-smoke.yaml')
     assert result['status'] == 'completed'
     assert calls == ['_native-run', 'report']
     metadata = tmp_path / 'runs' / result['experiment_id'] / '.experiment'
@@ -183,7 +163,7 @@ def stored_experiment(tmp_path):
     run = store._run_path(runner.plan.run_context.run_id)
     spec = {'schema_version': 'ovlab.experiment/v1', 'kind': 'workflow', 'id': 'study', 'name': 'Study',
             'children': [{'id': 'model', 'children': [{'id': 'task', 'execute': ['evaluate'],
-                         'config': {'evaluate': {'profile': 'mock-e2e-smoke.yaml'}}}]}]}
+                         'config': {'evaluate': {'profile': 'examples/experiments/mock-smoke.yaml'}}}]}]}
     source = tmp_path / 'source.yaml'
     source.write_text(dumps(spec))
     plan = ExperimentWorkflow(ROOT).plan(source)

@@ -73,13 +73,14 @@ Check the host before deploying:
 
 ```bash
 ./ovlab doctor
-./ovlab doctor --experiment experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
-./ovlab doctor --experiment experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml --json
+./ovlab doctor --experiment configs/evaluate/my-model.yaml
+./ovlab doctor --experiment configs/evaluate/my-model.yaml --json
 ```
 
 `doctor` reads the checkout and Compose environment, probes Docker Compose and
 the Docker daemon, and reports a fix for each failed check. With `--experiment`
-it also validates the configuration bundle, checks host artifact paths, and
+it accepts a complete standalone evaluation document (for example a user file
+`configs/evaluate/my-model.yaml`), validates its configuration bundle, checks host artifact paths, and
 inspects the selected images for the current deployment contract label. It
 does not create directories, start containers, download checkpoints, or load a
 model. Warnings return exit code 0; failed checks return exit code 6. JSON
@@ -98,11 +99,11 @@ one command:
 
 ```bash
 ./ovlab run \
-  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml
+  examples/experiments/openvla-eval.yaml
 ```
 
 `EXPERIMENT` accepts an explicit YAML path, a workflow JSON path, or a unique
-name below `experiments/`. Its schema and kind select the phase automatically.
+name below ignored `experiments/` or tracked `examples/experiments/`. Its schema and kind select the phase automatically.
 
 The CLI validates the Compose model, passes the same experiment to both
 containers, waits for policy readiness, runs the benchmark, propagates failure,
@@ -159,11 +160,11 @@ Inference quantization is `settings.runtime.quantization` in the policy componen
 (`none`, `8bit`, or `4bit`). A workflow can set it through an inherited
 `config.evaluate.component_patches.policy` mapping. QuIC requires `none`.
 
-Run the five-task cross-suite Vanilla NF4 experiment with:
+Run the maintained one-task pretrained model smoke with:
 
 ```bash
 ./ovlab run \
-  experiments/evaluation/libero10-openvla-vanilla-4bit-five-episodes.yaml
+  examples/experiments/openvla-eval.yaml
 ```
 
 The selected policy configuration determines the inference representation and
@@ -203,7 +204,7 @@ contain absolute paths or host-specific device assumptions.
 For diagnostics, a LIBERO execution profile can be selected with:
 
 ```bash
-export OVLAB_EXECUTION_PROFILE=configs/profiles/libero-bench-egl.yaml
+export OVLAB_EXECUTION_PROFILE=ovlab://profiles/egl.yaml
 ```
 
 Use `ovlab report RUN_ID` to export one canonical run, or `ovlab report
@@ -275,17 +276,13 @@ Descriptor validation checks configuration identity and structure without
 requiring a runnable provider:
 
 ```bash
-./ovlab config validate \
-  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
-  --mode descriptor
+./ovlab config validate plugin://openvla/policy/default.yaml --mode descriptor
 ```
 
 Runtime validation additionally requires a complete runnable configuration:
 
 ```bash
-./ovlab config validate \
-  experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml \
-  --mode runtime
+./ovlab run examples/experiments/openvla-eval.yaml --verify
 ```
 
 Print deterministic resolved configuration as YAML or JSON:
@@ -377,9 +374,9 @@ inference trace. Privileged benchmark signals are not part of the RPC schema.
 ## 5. Unified experiment execution
 
 ```bash
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --plan
-./ovlab run experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
-./ovlab run experiments/workflows/libero-model-tree.yaml
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml --plan
+./ovlab run examples/experiments/openvla-eval.yaml
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml
 ```
 
 Standalone training and evaluation inputs become one-node trees. Every execution
@@ -540,11 +537,11 @@ Gate F QuIC configurations can be inspected safely:
 
 ```bash
 ./ovlab config validate \
-  configs/policies/openvla-quic/quic-peft-bones.yaml \
+  configs/policies/my-quic-descriptor.yaml \
   --mode descriptor
 
 ./ovlab policy describe \
-  configs/policies/openvla-quic/quic-wc-bones.yaml
+  configs/policies/my-compression-descriptor.yaml
 ```
 
 These are not runnable examples. Runtime validation, service startup, and

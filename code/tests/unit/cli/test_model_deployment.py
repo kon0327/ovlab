@@ -70,7 +70,7 @@ def deployment(tmp_path, monkeypatch):
 
 def test_model_deployment_builds_only_policy_and_retains_a_verified_service(deployment):
     owner, docker = deployment
-    plan = owner.plan("openvla-libero10", quantization="4bit", port=8123)
+    plan = owner.plan("configs/.tests/deploy/openvla.yaml", quantization="4bit", port=8123)
     docker.plan = plan
     result = owner.run(plan)
     assert result["status"] == "ready"
@@ -81,27 +81,27 @@ def test_model_deployment_builds_only_policy_and_retains_a_verified_service(depl
     assert command[-1] == "--persistent"
     assert not any("benchmark" in arg or arg == "reporting" for arg in command)
     assert docker.created
-    assert owner.inspect("openvla-libero10")["state"]["Running"]
-    assert owner.verify("openvla-libero10")["verified"] is True
-    preview = owner.stop("openvla-libero10", dry_run=True)
+    assert owner.inspect("test-openvla")["state"]["Running"]
+    assert owner.verify("test-openvla")["verified"] is True
+    preview = owner.stop("test-openvla", dry_run=True)
     assert preview["side_effects_performed"] is False and docker.created
-    assert owner.stop("openvla-libero10")["status"] == "stopped" and not docker.created
+    assert owner.stop("test-openvla")["status"] == "stopped" and not docker.created
 
 
 def test_model_deployment_dry_run_has_no_docker_or_disk_side_effects(deployment):
     owner, docker = deployment
-    plan = owner.plan("openvla-libero10", quantization="8bit")
+    plan = owner.plan("configs/.tests/deploy/openvla.yaml", quantization="8bit")
     result = owner.run(plan, dry_run=True)
     assert result["quantization"] == "8bit"
     assert result["side_effects_performed"] is False
     assert not docker.commands and not owner.state_root.exists()
-    offline = owner.run(owner.plan("openvla-libero10", offline=True), dry_run=True)
+    offline = owner.run(owner.plan("configs/.tests/deploy/openvla.yaml", offline=True), dry_run=True)
     assert offline["build_command"][-2:] == ["policy-openvla", "--offline"]
 
 
 def test_deployment_rejects_existing_container_and_cleans_failed_start(deployment):
     owner, docker = deployment
-    plan = owner.plan("openvla-libero10")
+    plan = owner.plan("configs/.tests/deploy/openvla.yaml")
     docker.plan = plan
     docker.created = True
     with pytest.raises(ConfigCompatibilityError, match="already exists"):
@@ -116,28 +116,29 @@ def test_deployment_rejects_existing_container_and_cleans_failed_start(deploymen
 
 def test_deployment_verify_detects_modified_bundle(deployment):
     owner, docker = deployment
-    plan = owner.plan("openvla-libero10")
+    plan = owner.plan("configs/.tests/deploy/openvla.yaml")
     docker.plan = plan
     owner.run(plan)
-    path = Path(plan.state_directory) / "configs/plugins/configs/openvla/policies/openvla-lora/merged-libero10.yaml"
+    path = Path(plan.state_directory) / "configs/plugins/configs/openvla/policy/lora.yaml"
     path.chmod(0o644)
     path.write_text(path.read_text() + "\n# modified\n")
     with pytest.raises(ConfigCompatibilityError, match="config file changed"):
-        owner.verify("openvla-libero10")
+        owner.verify("test-openvla")
 
 
 def test_deployment_cli_override_reaches_service_settings_without_benchmark(tmp_path, monkeypatch):
     builder = ConfigBundleBuilder(ROOT)
-    bundle = builder.build("configs/deploy/openvla-libero10.yaml", None, quantization="4bit", kind="deployment")
+    bundle = builder.build("configs/.tests/deploy/openvla.yaml", None, quantization="4bit", kind="deployment")
     repo = tmp_path / "repository"
     with builder.materialize(bundle) as root:
         shutil.copytree(root, repo / "configs")
-    local = ROOT / "configs/local/gate-b-showrack.yaml"
+    local = tmp_path / "machine.yaml"
+    local.write_text((ROOT / "config/local/example.yaml").read_text())
     app = OvlabApplication(repo, environment={"OVLAB_LOCAL_PROFILE": str(local)})
     monkeypatch.setattr(app.resolver, "_benchmark", lambda *args: pytest.fail("deployment constructed a benchmark"))
-    resolved = resolve_policy_service(app, repo / "configs/deploy/openvla-libero10.yaml")
+    resolved = resolve_policy_service(app, repo / "configs/.tests/deploy/openvla.yaml")
     assert resolved.policy_settings.quantization.value == "4bit"
-    assert builder.load_component("deploy/openvla-libero10.yaml", "deployment")["runtime"]["quantization"] == "none"
+    assert builder.load_component("plugin://openvla/policy/lora.yaml", "policy")["settings"]["runtime"]["quantization"] == "none"
     assert not any(item["path"].startswith(("benchmarks/", "protocols/", "metrics/")) for item in bundle.files)
 
 
@@ -157,8 +158,8 @@ def test_train_dry_run_uses_planner_without_starting_trainer(monkeypatch):
     assert result["side_effects_performed"] is False
 
 
-def test_predefined_paths_cover_moved_training_and_evaluation():
-    assert resolve_config_path("libero10-lora-merged-rpc-smoke", ROOT, "experiments/evaluation").is_file()
-    assert resolve_config_path("quic/libero10-a1-qp2", ROOT, "experiments/training").is_file()
+def test_explicit_plugin_paths_cover_model_deployment_and_training():
+    assert resolve_config_path("plugin://openvla/deploy/default.yaml", ROOT, "deploy").is_file()
+    assert resolve_config_path("plugin://openvla-quic/train/default.yaml", ROOT, "experiments/training").is_file()
     assert not (ROOT / "configs/training").exists()
     assert not list((ROOT / "experiments").glob("*.yaml"))

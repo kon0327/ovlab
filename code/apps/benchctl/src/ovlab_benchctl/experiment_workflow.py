@@ -28,6 +28,7 @@ from .strict_yaml import dumps, loads as load_yaml
 from .training_composition import load_training_document, load_training_profile
 from .training_profiles import TrainingProfile
 from .schema import validate
+from .policy_plugins import with_registry
 from ovlab_core.experiment_scope import ExperimentScope
 
 
@@ -310,12 +311,14 @@ class ExperimentWorkflow:
         self.config_root = self.repository_root / "configs"
         self.environment = dict(os.environ if environment is None else environment)
         self.runner = runner
-        self.bundle = ConfigBundleBuilder(self.repository_root)
+        self.bundle = ConfigBundleBuilder(self.repository_root, environment=self.environment)
         self._process_lock = threading.Lock()
         self._active_processes: set[subprocess.Popen] = set()
         self._cancelled = threading.Event()
 
     def _spec_path(self, reference: str | Path) -> Path:
+        if str(reference).startswith(("plugin:", "ovlab:")):
+            return self.bundle.references.source(str(reference))
         path = Path(reference).expanduser()
         if path.is_absolute():
             return path.resolve()
@@ -327,8 +330,8 @@ class ExperimentWorkflow:
             return direct
         names = {path.name} if path.suffix else {path.name + suffix for suffix in (".yaml", ".yml", ".json")}
         candidates = []
-        for section in ("workflows", "training", "evaluation"):
-            base = self.repository_root / "experiments" / section
+        for section in ("experiments/workflows", "experiments/training", "experiments/evaluation", "examples/experiments"):
+            base = self.repository_root / section
             for candidate in base.rglob("*"):
                 if candidate.name in names and ".generated" not in candidate.parts and candidate.is_file():
                     # Qualified section-relative names disambiguate equal basenames.
@@ -357,33 +360,50 @@ class ExperimentWorkflow:
                 "config": {phase: {"profile": str(path)}}, "execute": [phase]}
 
     def _phase_document(self, path, phase):
+        # Defaults may be partial. Validate the final document after workflow
+        # patches, just as extends validates the final local configuration.
         if phase == "train":
-            return dict(load_training_profile(path).document)
-        if path.is_relative_to(self.repository_root / "experiments"):
-            return self.bundle.load_component(path.relative_to(self.repository_root).as_posix(), "experiment")
-        if path.is_relative_to(self.config_root):
-            return self.bundle.load_component(path.relative_to(self.config_root).as_posix(), "experiment")
-        document = load_training_document(path, expected_kind="experiment")
-        validate(document, str(path), "experiment")
-        return document
+            return load_training_document(path, expected_kind="training", repository_root=self.repository_root)
+        try:
+            reference = self.bundle.references.reference(path)
+        except ValueError:
+            return load_training_document(path, expected_kind="experiment", repository_root=self.repository_root)
+        return self.bundle.load_component(reference, "experiment", validate_document=False)
 
     def _profile_path(self, reference, phase):
-        path = Path(reference).expanduser()
-        if path.is_absolute():
-            candidate = path.resolve()
-        elif path.parts and path.parts[0] in {"configs", "experiments"}:
-            candidate = (self.repository_root / path).resolve()
+        if str(reference).startswith(("plugin:", "ovlab:")):
+            candidate = self.bundle.references.source(str(reference))
         else:
-            candidate = (self.repository_root / "experiments" / ("training" if phase == "train" else "evaluation") / path).resolve()
-            if not candidate.is_file() and not candidate.suffix:
-                candidate = candidate.with_suffix(".yaml")
-        if not candidate.is_file() or path.is_symlink() or candidate.is_symlink():
+            path = Path(reference).expanduser()
+            if path.is_absolute():
+                candidate = path.resolve()
+            elif path.parts and path.parts[0] in {"configs", "config", "experiments", "examples"}:
+                candidate = (self.repository_root / path).resolve()
+            else:
+                candidate = (self.repository_root / "experiments" / ("training" if phase == "train" else "evaluation") / path).resolve()
+                if not candidate.is_file() and not candidate.suffix:
+                    candidate = candidate.with_suffix(".yaml")
+        if not candidate.is_file() or candidate.is_symlink():
             raise ExperimentSpecError(f"{phase} profile must be a regular file: {reference}")
         return candidate
 
+    def _validate_component(self, document, reference, kind, *, checkpoint_template=False):
+        if kind == "policy" and checkpoint_template and document.get("type") != "mock":
+            from .schema import header, mapping
+            from .policy_plugins import plugin_for_type, call_plugin
+            header(document, reference, "policy", typed=True)
+            mapping(document, reference, required=("schema_version", "kind", "type", "settings"))
+            call_plugin(plugin_for_type(document["type"], self.repository_root),
+                        "validate_checkpoint_template", document, reference)
+        else:
+            validate(document, reference, kind, repository_root=self.repository_root)
+
     def _resolved_config(self, phase, state):
         path = self._profile_path(state["profile"], phase)
-        reference = path.relative_to(self.repository_root).as_posix() if path.is_relative_to(self.repository_root) else str(path)
+        try:
+            reference = self.bundle.references.reference(path)
+        except ValueError:
+            reference = str(path)
         base = self._phase_document(path, phase)
         document = deepcopy(base)
         for _, patch in state["patches"]:
@@ -406,12 +426,13 @@ class ExperimentWorkflow:
             component_documents = {}
             for kind, patches in state["component_patches"].items():
                 component_ref = document["components"][kind]
-                component_base = self.bundle.load_component(component_ref, _COMPONENTS[kind])
+                component_base = self.bundle.load_component(component_ref, _COMPONENTS[kind], validate_document=False)
                 component = deepcopy(component_base)
                 for _, patch in patches:
                     component = _merge(component, patch)
                 component.pop("extends", None)
-                validate(component, component_ref, _COMPONENTS[kind])
+                self._validate_component(component, component_ref, _COMPONENTS[kind],
+                                         checkpoint_template="checkpoint_from" in state)
                 component_documents[kind] = {
                     "profile": component_ref,
                     "document": component,
@@ -421,10 +442,18 @@ class ExperimentWorkflow:
             # Verify every unpatched reference without requiring runtime resources.
             for kind, component_ref in document["components"].items():
                 if kind not in component_documents:
-                    self.bundle.load_component(component_ref, _COMPONENTS[kind])
+                    component = self.bundle.load_component(component_ref, _COMPONENTS[kind], validate_document=False)
+                    self._validate_component(component, component_ref, _COMPONENTS[kind],
+                                             checkpoint_template="checkpoint_from" in state)
+                    if kind == "policy" and "checkpoint_from" in state:
+                        component_documents[kind] = {
+                            "profile": component_ref, "document": component,
+                            "field_sources": _field_sources(component, component_ref, []),
+                        }
             self.bundle.load_component(document["resources"]["registry"], "resource_registry")
         return result
 
+    @with_registry
     def plan(self, spec: str | Path, *, node: str | None = None, node_only=False,
              sequential=False, max_workers=None):
         if sequential and max_workers is not None:

@@ -1,0 +1,13 @@
+lock-version = "1.0"
+created-by = "pip"
+
+[[packages]]
+name = "flash-attn"
+version = "2.5.5"
+
+[packages.sdist]
+name = "flash_attn-2.5.5.tar.gz"
+url = "https://files.pythonhosted.org/packages/3b/ff/33a4ccc778c56d2ab9845b5ea09ab15d368ac39fa945f0bd2bd2724e18e8/flash_attn-2.5.5.tar.gz"
+
+[packages.sdist.hashes]
+sha256 = "751cee17711d006fe7341cdd78584af86a6239afcfe43b9ed11c84db93126267"

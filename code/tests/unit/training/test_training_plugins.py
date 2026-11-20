@@ -18,6 +18,27 @@ from ovlab_benchctl.training_errors import CheckpointBundleError, TrainingProfil
 from ovlab_benchctl.training_worker import _train
 
 
+def test_image_helper_uses_only_providers_whose_project_sources_are_frozen(monkeypatch):
+    from types import SimpleNamespace
+    import ovlab_benchctl.training_plugins as extensions
+
+    registry = {"projects": {"first": {"source_id": "plugin-first"},
+                             "second": {"source_id": "plugin-second"}},
+                "source_identities": {"plugin-first": {}}}
+    first = SimpleNamespace(descriptor={"project": "first", "training": {
+        "entrypoint": "shared:plugin", "implementations": ["first-trainer"],
+        "modules": {"helper": "shared.helpers"}}}, registry=registry)
+    second = SimpleNamespace(descriptor={"project": "second", "training": {
+        "entrypoint": "shared:plugin", "implementations": ["second-trainer"],
+        "modules": {"helper": "shared.helpers"}}}, registry=registry)
+    monkeypatch.setattr(extensions, "registered_plugins", lambda root=None: [first, second])
+    assert [owner for owner, _ in extensions._extensions()] == [first]
+    registry["source_identities"] = {"plugin-second": {}}
+    assert [owner for owner, _ in extensions._extensions()] == [second]
+    registry.pop("source_identities")
+    assert [owner for owner, _ in extensions._extensions()] == [first, second]
+
+
 def registered_trainer(tmp_path, *, include_training=True):
     root = tmp_path / "checkout"
     project = root / "plugins" / "fixture"
@@ -157,3 +178,67 @@ def test_planner_keeps_its_registry_after_profile_loading_scope_ends(tmp_path):
         profile = TrainingProfile.from_document(document)
     result = TrainingPlanner(root, tmp_path / 'data').plan(profile)
     assert result['custom_width'] == 3
+
+
+def test_training_profile_discovery_lists_explicit_plugin_templates_and_complete_user_overrides(tmp_path):
+    from helpers.training_profiles import make_repository, training_document
+    from ovlab_benchctl.application import OvlabApplication
+    from ovlab_benchctl.strict_yaml import dumps
+
+    root = make_repository(tmp_path / 'checkout')
+    local = root / 'configs/train/own.yaml'
+    local.parent.mkdir()
+    local.write_text(dumps(training_document('lora')))
+    generated = root / 'experiments/training/.generated/temporary.yaml'
+    generated.parent.mkdir()
+    generated.write_text('invalid internal materialization')
+    result = OvlabApplication(root, environment={}).train_profiles()
+    rows = {item['reference']: item for item in result['profiles']}
+    assert set(rows) == {'plugin://openvla/train/default.yaml', 'plugin://openvla-quic/train/default.yaml',
+                         'configs/train/own.yaml'}
+    for reference in ('plugin://openvla/train/default.yaml','plugin://openvla-quic/train/default.yaml'):
+        assert rows[reference]['template'] is True
+        assert rows[reference]['complete'] is False and rows[reference]['valid'] is None
+        assert 'ref' in rows[reference]['validation_error']
+    assert rows['configs/train/own.yaml']['valid'] is True
+    assert rows['configs/train/own.yaml']['complete'] is True
+    assert rows['configs/train/own.yaml']['template'] is False
+
+
+def test_declared_training_template_does_not_hide_invalid_values_or_headers(tmp_path):
+    from ovlab_benchctl.application import OvlabApplication
+    from ovlab_benchctl.strict_yaml import dumps
+
+    root, document, _ = registered_trainer(tmp_path)
+    project = root / 'plugins/fixture'
+    path = project / 'configs/train/default.yaml'
+    path.parent.mkdir(parents=True)
+    manifest = json.loads((project / 'plugin.json').read_text())
+    manifest['configs'] = {'root':'configs','templates':{'train':['train/default.yaml']}}
+    (project / 'plugin.json').write_text(json.dumps(manifest))
+    document['custom_width'] = 'bad'
+    path.write_text(dumps(document))
+    row, = OvlabApplication(root, environment={}).train_profiles()['profiles']
+    assert row['template'] is True and row['valid'] is False
+    assert 'custom_width' in row['error']
+    document['schema_version']='invalid'
+    path.write_text(dumps(document))
+    row, = OvlabApplication(root, environment={}).train_profiles()['profiles']
+    assert row['valid'] is False and 'schema_version' in row['error']
+
+
+def test_training_template_discovery_uses_declared_paths_outside_conventional_directory(tmp_path):
+    from ovlab_benchctl.application import OvlabApplication
+    from ovlab_benchctl.strict_yaml import dumps
+
+    root, document, _ = registered_trainer(tmp_path)
+    project = root / "plugins/fixture"
+    path = project / "configs/recipes/adaptation.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(dumps(document))
+    manifest = json.loads((project / "plugin.json").read_text())
+    manifest["configs"] = {"root": "configs", "templates": {"train": ["recipes/adaptation.yaml"]}}
+    (project / "plugin.json").write_text(json.dumps(manifest))
+    row, = OvlabApplication(root, environment={}).train_profiles()["profiles"]
+    assert row["reference"] == "plugin://fixture/recipes/adaptation.yaml"
+    assert row["valid"] is True and row["template"] is True

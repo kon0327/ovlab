@@ -1,5 +1,7 @@
 from dataclasses import replace
 import sys
+import os
+import subprocess
 
 import numpy as np
 import pytest
@@ -100,5 +102,5 @@ def test_quantization_is_explicit_and_part_of_settings_identity(tmp_path):
 
 
 def test_import_is_torch_free():
-    assert "torch" not in sys.modules
-    assert "transformers" not in sys.modules
+    code = "import sys, ovlab_openvla_common, ovlab_openvla_vanilla; assert not {'torch','transformers'} & sys.modules.keys()"
+    subprocess.run([sys.executable, "-c", code], env=os.environ.copy(), check=True, capture_output=True, text=True)

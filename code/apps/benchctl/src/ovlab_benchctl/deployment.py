@@ -120,8 +120,8 @@ class ComposeDeployment:
 
     _RENDERERS = {"egl", "glfw"}
     _RENDERER_EXECUTION_PROFILES = {
-        "egl": "profiles/libero-bench-egl.yaml",
-        "glfw": "profiles/libero-playground-glfw.yaml",
+        "egl": "ovlab://profiles/egl.yaml",
+        "glfw": "ovlab://profiles/glfw.yaml",
     }
     _IMAGE_CONTRACT_LABEL = IMAGE_CONTRACT_LABEL
     _POLICY_CONTRACT = "resolved-checkpoint-quantization-config-bundle-v2"
@@ -241,19 +241,10 @@ class ComposeDeployment:
     ) -> ComposeDeploymentPlan:
         from .config_paths import resolve_config_path
 
-        experiment_path = self._inside_repository(
-            resolve_config_path(experiment, self.repository_root, "experiments/evaluation"),
-            kind="experiment configuration",
-        )
-        config_root = self.repository_root / "configs"
-        if not (experiment_path.is_relative_to(self.repository_root / "experiments/evaluation") or experiment_path.is_relative_to(config_root / "experiments/evaluation")):
-            raise ValueError("Docker deployment requires an experiment below experiments/evaluation/")
-        experiment_reference = str(experiment_path.relative_to(self.repository_root))
-
         resolver = ConfigBundleBuilder(self.repository_root)
-        experiment_doc = resolver.load_component(
-            (str(experiment_path.relative_to(self.repository_root)) if experiment_path.is_relative_to(self.repository_root / "experiments") else str(experiment_path.relative_to(config_root))), "experiment"
-        )
+        experiment_path = resolve_config_path(experiment, self.repository_root, "experiments/evaluation")
+        experiment_reference = resolver.references.reference(experiment_path)
+        experiment_doc = resolver.load_component(experiment_reference, "experiment")
         configured = experiment_doc.get("deployment")
         if configured is None:
             raise ValueError(

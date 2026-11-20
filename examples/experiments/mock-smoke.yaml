@@ -1,0 +1,25 @@
+# Dependency-light descriptor verification using test-only mock interfaces.
+# Inspect: ovlab run --plan examples/experiments/mock-smoke.yaml
+# Execution of mock adapters is provided by the CPU integration test scaffold.
+schema_version: "0.1.0"
+kind: "experiment"
+experiment:
+  id: "mock-smoke"
+  name: "Model-free CPU pipeline smoke"
+  tags:
+    - "mock"
+    - "smoke"
+components:
+  benchmark: "ovlab://benchmarks/mock.yaml"
+  metrics: "ovlab://metrics/default.yaml"
+  protocol: "ovlab://protocols/smoke.yaml"
+  artifacts: "ovlab://artifacts/default.yaml"
+  policy: "ovlab://policies/mock.yaml"
+resources:
+  registry: "ovlab://registry/default.yaml"
+reporting:
+  enabled: true
+  profile: "libero-task-default"
+  on_task_finalize: true
+  on_run_finalize: true
+  failure_policy: "warn"

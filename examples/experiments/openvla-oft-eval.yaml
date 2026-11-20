@@ -1,0 +1,53 @@
+# One task, one rollout, two environment steps. Verifies integration, not model quality.
+schema_version: "ovlab.experiment/v1"
+kind: "workflow"
+id: "openvla-oft-eval-smoke"
+name: "openvla-oft plugin evaluation and reporting smoke"
+execution:
+  max_workers: 1
+config:
+  evaluate:
+    profile: "plugin://openvla-oft/evaluate/default.yaml"
+    patch:
+      experiment:
+        id: "openvla-oft-eval-smoke"
+        name: "openvla-oft evaluation smoke"
+        tags:
+          - "openvla-oft"
+          - "smoke"
+      components:
+        benchmark: "ovlab://benchmarks/libero.yaml"
+        metrics: "ovlab://metrics/default.yaml"
+        protocol: "ovlab://protocols/smoke.yaml"
+        artifacts: "ovlab://artifacts/default.yaml"
+      reporting:
+        enabled: true
+        profile: "libero-task-default"
+        on_task_finalize: true
+        on_run_finalize: true
+        failure_policy: "warn"
+    component_patches:
+      benchmark:
+        settings:
+          task_indices:
+            - 0
+          initialization:
+            settling_steps: 1
+          observation:
+            profile: "native_oft"
+            cameras:
+              primary:
+                native_name: "agentview"
+                canonical_name: "camera.primary.rgb"
+              wrist:
+                native_name: "robot0_eye_in_hand"
+                canonical_name: "camera.wrist.rgb"
+            width: 256
+            height: 256
+            color_space: "rgb"
+            dtype: "uint8"
+      protocol:
+        reproducibility:
+          require_checkpoint_identity: true
+execute:
+  - "evaluate"

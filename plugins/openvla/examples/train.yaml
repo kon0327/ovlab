@@ -1,0 +1,8 @@
+# Copy to experiments/my-training.yaml and select your dataset and compute budget.
+# The defaults describe a real training recipe, not a smoke run. Inspect with ovlab run --plan FILE.
+schema_version: "ovlab.training-profile/v1"
+kind: "training"
+extends: "plugin://openvla/train/default.yaml"
+id: "openvla-local-train"
+dataset:
+  ref: "libero/libero_10"

@@ -7,12 +7,22 @@
   const storageKey = 'ovlab.workflow-studio.v1';
   if (!catalog || !C || !window.OVLABStudioDOM) { document.body.innerHTML = '<p class="fatal-error">Builder files are missing. Keep all editor files together and run python deploy/scripts/build-workflow-catalog.py from the repository.</p>'; return; }
   const own = C.own;
-  const methodLabel = method => ({quic: 'QuIC', lora: 'LoRA', oft: 'OFT', vanilla: 'Vanilla', full: 'Full weights', mock: 'Mock'})[method] || method;
+  const methodLabel = method => String(method || '').replace(/_/g, ' ');
   let workflow, selected = '', view = 'builder', zoom = 1, analysis, sourceDirty = false, toastTimer;
   let advancedDraft = null, advancedError = '', restored = false, storageAvailable = true;
   const history = [], future = [];
   const blank = () => ({schema_version: 'ovlab.experiment/v1', kind: 'workflow', id: 'new-experiment', name: 'New experiment', execution: {max_workers: 1}, children: []});
-  const defaultPreset = catalog.workflows.find(item => item.ref.endsWith('/libero10-quic-training-smoke.yaml')) || catalog.workflows[0];
+  const defaultPreset = catalog.workflows.find(item => C.flatten(item.document).some(node => (node.node.execute || []).includes('train'))) || catalog.workflows[0];
+  const phaseConfiguration = state => Object.fromEntries(['profile', 'patch', 'component_patches', 'checkpoint_from'].filter(key => own(state, key)).map(key => [key, C.clone(state[key])]));
+  function referenceConfigurations(phase) {
+    const entries = catalog.workflows.flatMap(item => C.flatten(item.document));
+    for (const source of catalog[phase === 'train' ? 'training' : 'evaluation']) entries.push({state: {[phase]: {profile: source.ref}}});
+    return entries.map(entry => ({resolved: C.resolve(entry, phase, catalog), config: phaseConfiguration(entry.state[phase] || {})})).filter(item => item.resolved && !item.resolved.unavailable);
+  }
+  function evaluationFor(trained) {
+    const choices = referenceConfigurations('evaluate');
+    return choices.find(item => C.bindingCompatible(trained, item.resolved)) || choices.find(item => item.resolved.components.policy?.type === 'mock') || choices[0];
+  }
   workflow = C.clone(defaultPreset?.document || blank());
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey));
@@ -126,7 +136,7 @@
   function profileMethod(source, phase) {
     if (phase === 'train') return source.document.training.mode === 'peft' ? source.document.training.peft.method : 'full';
     const policy = catalog.components.policy.find(item => item.ref === source.document.components.policy);
-    return ({openvla_quic: 'quic', openvla_lora_merged: 'lora', openvla_oft: 'oft', openvla_vanilla: 'vanilla', mock: 'mock'})[policy?.document.type] || 'other';
+    return catalog.plugins?.[policy?.document.type]?.family || policy?.document.type || 'other';
   }
   function profileField(item, phase) {
     const local = item.node.config?.[phase]?.profile, inherited = item.parent !== null ? C.flatten(workflow).find(node => node.path === item.parent).state[phase]?.profile : undefined;
@@ -154,7 +164,7 @@
         body += `<div class="field"><span class="field-label">Training task groups <button class="reset-field" data-reset="config.train.patch.dataset.partition.groups">Reset override</button></span><small>${doc.dataset.partition.groups?.length ?? tasks.length} / ${tasks.length} selected · ${esc(suite)}</small></div><div class="task-shortcuts"><button data-task-action="all">All</button><button data-task-action="first-two">First 2</button><button data-task-action="clear">Clear</button></div><div class="task-options">${tasks.map((task, index) => `<label class="task-option"><input type="checkbox" data-train-task="${esc(task)}" ${!doc.dataset.partition.groups || doc.dataset.partition.groups.includes(task) ? 'checked' : ''}><span>${index} · ${esc(task.replace(/_/g, ' '))}</span></label>`).join('')}</div>`;
         body += '<div class="field-row">' + field('Episodes per group', 'config.train.patch.dataset.partition.max_episodes_per_group', doc.dataset.partition.max_episodes_per_group, {type: 'number', min: 1, integer: true}) + field('Frames per episode', 'config.train.patch.dataset.partition.max_frames_per_episode', doc.dataset.partition.max_frames_per_episode, {type: 'number', min: 1, integer: true}) + '</div>';
       }
-      body += '<p class="helper">Only supported training implementations are listed. OFT training is unavailable. GPU and dataset availability are checked by the CLI.</p>';
+      body += '<p class="helper">The plugin declares supported training implementations. GPU and dataset availability are checked by the CLI.</p>';
     }
     return `<details open data-section="train"><summary><span class="pill train">T</span>Training configuration<span class="section-chip">${esc(item.state.train?.profileSource !== item.path && item.state.train?.profile ? 'inherited' : 'local')}</span></summary><div class="details-body">${body}</div></details>`;
   }
@@ -167,14 +177,14 @@
       body += '<div class="field"><label for="checkpoint-source">Checkpoint source</label><select id="checkpoint-source" data-checkpoint><option value="__inherit__" ' + (!own(local, 'checkpoint_from') ? 'selected' : '') + '>' + esc(own(inherited, 'checkpoint_from') ? 'Inherit · ' + (inherited.checkpoint_from || '<root>') + ':train' : 'Configured policy checkpoint') + '</option>';
       body += analysis.entries.filter(node => (node.node.execute || []).includes('train')).map(source => {
         const sourceMethod = C.family(C.resolve(source, 'train', catalog), 'train');
-        const compatible = ['lora', 'quic'].includes(method) && method === sourceMethod;
+        const compatible = C.bindingCompatible(C.resolve(source, 'train', catalog), resolved);
         return `<option value="${esc('node:' + source.path)}" ${own(local, 'checkpoint_from') && local.checkpoint_from === source.path ? 'selected' : ''} ${compatible ? '' : 'disabled'}>${esc((source.path || '<root>') + ':train · ' + methodLabel(sourceMethod) + (compatible ? '' : ' · incompatible'))}</option>`;
       }).join('');
       if (own(local, 'checkpoint_from') && !analysis.entries.some(node => node.path === local.checkpoint_from && (node.node.execute || []).includes('train'))) body += `<option value="${esc('node:' + local.checkpoint_from)}" selected>Missing: ${esc(local.checkpoint_from || '<root>')}</option>`;
       body += '</select><small>Training sources add a dependency and use their finalized output. Configured checkpoints use the policy settings.</small></div>';
       if (own(inherited, 'checkpoint_from') && !own(local, 'checkpoint_from')) body += `<p class="inheritance-note">Binding inherited from <button class="text-button" data-select="${esc(item.state.evaluate.checkpointSource)}">${esc(item.state.evaluate.checkpointSource || '<root>')}</button>. Edit that node to remove the binding, or choose another training source here.</p>`;
       const quantization = policy?.settings?.runtime?.quantization;
-      if (quantization !== undefined) body += selectField('Inference quantization', 'config.evaluate.component_patches.policy.settings.runtime.quantization', quantization, method === 'quic' ? [['none', 'Full precision · QuIC']] : [['none', 'Full precision'], ['8bit', '8-bit · INT8'], ['4bit', '4-bit · NF4']]);
+      if (quantization !== undefined) body += selectField('Inference quantization', 'config.evaluate.component_patches.policy.settings.runtime.quantization', quantization, (resolved.plugin?.deployment?.quantization || [quantization]).map(value => [value, value === 'none' ? 'Full precision' : value]));
       const benchmark = components.benchmark, protocol = components.protocol;
       if (benchmark?.type === 'libero') body += field('Evaluation task indices', 'config.evaluate.component_patches.benchmark.settings.task_indices', benchmark.settings.task_indices, {hint: 'Comma-separated task indices, e.g. 0, 1. Use all for the entire suite.'}) + '<div class="task-shortcuts"><button data-eval-tasks="0">Task 0</button><button data-eval-tasks="0,1">First 2</button><button data-eval-tasks="all">All tasks</button></div>';
       body += '<div class="field-row">' + field('Episodes per task', 'config.evaluate.component_patches.protocol.execution.rollouts_per_task', protocol?.execution?.rollouts_per_task, {type: 'number', min: 1, step: 1, integer: true}) + field('Max. episode steps', 'config.evaluate.component_patches.protocol.execution.maximum_episode_steps', protocol?.execution?.maximum_episode_steps, {type: 'number', min: 1, step: 1, integer: true}) + '</div>';
@@ -183,12 +193,13 @@
         const current = C.get(item.node, 'config.evaluate.patch.components.' + kind);
         let candidates = catalog.components[kind] || [];
         if (kind === 'policy' && policy) candidates = candidates.filter(option => option.document.type === policy.type);
-        if (kind === 'benchmark' && benchmark) candidates = candidates.filter(option => option.document.type === benchmark.type && (method !== 'oft' || option.document.settings.observation?.cameras?.wrist));
+        if (kind === 'benchmark' && benchmark) candidates = candidates.filter(option => option.document.type === benchmark.type);
         body += `<div class="field"><label for="component-${kind}">${esc(kind[0].toUpperCase() + kind.slice(1))} component</label><select id="component-${kind}" data-component="${kind}"><option value="__inherit__" ${!current ? 'selected' : ''}>From profile / parent</option>${options(candidates, current, option => option.ref)}</select><small class="effective">${esc(doc.components[kind])}</small></div>`;
       }
-      if (method === 'quic' && !own(item.state.evaluate, 'checkpoint_from')) {
+      const identity = resolved.plugin?.capabilities?.checkpoint_binding?.adapter_identity;
+      if (identity && !own(item.state.evaluate, 'checkpoint_from')) {
         body += '<div class="profile-info">Select a training checkpoint above, or configure an existing adapter and its hashes below.</div>';
-        for (const [key, label] of [['adapter_path', 'Existing adapter directory'], ['adapter_manifest_sha256', 'Adapter manifest SHA256'], ['adapter_tensor_sha256', 'Adapter tensor SHA256']]) body += field(label, 'config.evaluate.component_patches.policy.settings.quic.' + key, policy?.settings?.quic?.[key]);
+        for (const key of [identity.path, ...identity.hashes]) body += field(key.replace(/_/g, ' '), 'config.evaluate.component_patches.policy.settings.' + identity.settings_path + '.' + key, C.get(policy.settings, identity.settings_path + '.' + key));
       }
     }
     return `<details open data-section="evaluate"><summary><span class="pill evaluate">E</span>Evaluation configuration<span class="section-chip">${esc(item.state.evaluate?.profileSource !== item.path && item.state.evaluate?.profile ? 'inherited' : 'local')}</span></summary><div class="details-body">${body}</div></details>`;
@@ -316,36 +327,43 @@
     if (!canChange()) return;
     const inherited = C.resolve(entry(), 'evaluate', catalog);
     const trained = [...analysis.entries].filter(item => (item.path === selected || selected.startsWith(item.path ? item.path + '/' : '')) && (item.node.execute || []).includes('train')).at(-1);
-    const method = trained && C.family(C.resolve(trained, 'train', catalog), 'train');
-    $('#add-parent').textContent = 'Parent: ' + (selected || '<root>') + (inherited && !inherited.unavailable ? ' · A new evaluation inherits ' + methodLabel(C.family(inherited, 'evaluate')) + ' settings from this branch.' : ['lora', 'quic'].includes(method) ? ' · A new evaluation will use this branch’s ' + methodLabel(method) + ' training checkpoint.' : method === 'full' ? ' · Full-weight checkpoint handoff is unavailable; evaluation must select a configured policy checkpoint.' : ' · Choose a node type, then configure its profile.');
-    const inheritedTrain = C.resolve(entry(), 'train', catalog), inheritedMethod = C.family(inheritedTrain, 'train');
-    $('[data-template="handoff"] span:last-child').textContent = ['lora', 'quic'].includes(inheritedMethod) ? `Inherit ${methodLabel(inheritedMethod)} training and evaluate its finalized checkpoint.` : 'Start QuIC training and evaluate its finalized checkpoint.';
+    const trainedConfig = trained && C.resolve(trained, 'train', catalog);
+    const compatible = trainedConfig && C.bindingCompatible(trainedConfig, evaluationFor(trainedConfig)?.resolved);
+    $('#add-parent').textContent = 'Parent: ' + (selected || '<root>') + (inherited && !inherited.unavailable ? ' · A new evaluation inherits this branch’s settings.' : compatible ? ' · A new evaluation can use this branch’s training checkpoint.' : ' · Choose a node type, then configure its plugin profile.');
+    $('[data-template="handoff"] span:last-child').textContent = 'Use a compatible plugin training and evaluation configuration with a finalized checkpoint binding.';
     $('#add-dialog').showModal();
   }
   function addNode(template) {
     change(() => {
-      const inheritedTraining = C.resolve(entry(), 'train', catalog), method = C.family(inheritedTraining, 'train');
-      const handoffMethod = ['lora', 'quic'].includes(method) ? method : 'quic';
-      const parent = entry().node, id = C.uniqueId(parent, template === 'handoff' ? handoffMethod : template === 'evaluate' ? 'evaluation' : template === 'train' ? 'training' : 'group');
-      const path = selected ? selected + '/' + id : id, node = {id, name: template === 'group' ? 'New group' : template === 'handoff' ? methodLabel(handoffMethod) + ' train → evaluate' : template === 'train' ? 'Training' : 'Evaluation'};
-      const trainProfile = catalog.training.find(item => item.ref.endsWith('/openvla-libero10-quic-smoke.yaml')) || catalog.training[0];
+      const inheritedTraining = C.resolve(entry(), 'train', catalog);
+      const referenceTraining = referenceConfigurations('train')[0];
+      const training = inheritedTraining && !inheritedTraining.unavailable ? inheritedTraining : referenceTraining?.resolved;
+      const parent = entry().node, id = C.uniqueId(parent, template === 'handoff' ? 'train-evaluate' : template === 'evaluate' ? 'evaluation' : template === 'train' ? 'training' : 'group');
+      const path = selected ? selected + '/' + id : id, node = {id, name: template === 'group' ? 'New group' : template === 'handoff' ? 'Train → evaluate' : template === 'train' ? 'Training' : 'Evaluation'};
       if (template === 'train' || template === 'handoff') {
         node.execute = ['train'];
-        const inherited = C.resolve(entry(), 'train', catalog);
-        node.config = inherited && !inherited.unavailable && (template === 'train' || ['lora', 'quic'].includes(method)) ? {} : {train: {profile: trainProfile.ref}};
+        node.config = inheritedTraining && !inheritedTraining.unavailable ? {} : referenceTraining ? {train: C.clone(referenceTraining.config)} : {};
       }
       if (template === 'evaluate') {
         node.execute = ['evaluate']; node.config = {};
         const inherited = C.resolve(entry(), 'evaluate', catalog);
         if (!inherited || inherited.unavailable) {
           const source = [...analysis.entries].filter(item => (item.path === selected || (selected && (!item.path || selected.startsWith(item.path + '/')))) && (item.node.execute || []).includes('train')).at(-1);
-          const method = source && C.family(C.resolve(source, 'train', catalog), 'train');
-          const filename = method === 'quic' ? '/libero10-quic-adapter-rpc-smoke.yaml' : method === 'full' ? '/libero10-vanilla-rpc-smoke.yaml' : '/libero10-lora-merged-rpc-smoke.yaml';
-          node.config.evaluate = {profile: catalog.evaluation.find(item => item.ref.endsWith(filename)).ref};
-          if (['lora', 'quic'].includes(method)) node.config.evaluate.checkpoint_from = source.path;
+          const trained = source && C.resolve(source, 'train', catalog), choice = evaluationFor(trained);
+          if (choice) {
+            node.config.evaluate = C.clone(choice.config);
+            delete node.config.evaluate.checkpoint_from;
+            if (source && C.bindingCompatible(trained, choice.resolved)) node.config.evaluate.checkpoint_from = source.path;
+          }
         }
       }
-      if (template === 'handoff') node.children = [{id: 'full', name: 'Evaluate trained ' + methodLabel(handoffMethod), execute: ['evaluate'], config: {evaluate: {profile: 'experiments/evaluation/' + (handoffMethod === 'lora' ? 'libero10-lora-merged-rpc-smoke.yaml' : 'libero10-quic-adapter-rpc-smoke.yaml'), checkpoint_from: path, component_patches: {policy: {settings: {runtime: {quantization: 'none'}}}}}}}];
+      if (template === 'handoff') {
+        const choice = evaluationFor(training);
+        const evaluate = choice ? C.clone(choice.config) : {};
+        delete evaluate.checkpoint_from;
+        if (choice && C.bindingCompatible(training, choice.resolved)) evaluate.checkpoint_from = path;
+        node.children = [{id: 'evaluate-checkpoint', name: 'Evaluate finalized checkpoint', execute: ['evaluate'], config: {evaluate}}];
+      }
       (parent.children ||= []).push(node); selected = path;
     });
     $('#add-dialog').close();
@@ -532,7 +550,7 @@
   window.addEventListener('beforeunload', event => { if (!storageAvailable && (history.length || hasDraft())) { event.preventDefault(); event.returnValue = ''; } });
   $('#catalog-summary').textContent = `${catalog.training.length} training · ${catalog.evaluation.length} evaluation profiles`;
   $('#catalog-info').addEventListener('click', () => {
-    $('#catalog-detail').innerHTML = `<p>Built from resolved, validated repository YAMLs. ${catalog.training.length} training profiles, ${catalog.evaluation.length} evaluation profiles and ${Object.values(catalog.components).reduce((count, items) => count + items.length, 0)} reusable components.</p><p><strong>Supported:</strong> hierarchical groups, LoRA/QuIC training, native or deployed evaluation, quantization where supported, task selection, inherited patches, checkpoint handoff, dependencies, YAML/JSON workflow import, YAML export and local undo/redo.</p><p>Checkpoint handoff supports LoRA and QuIC. OFT evaluation is available; OFT training is unavailable. QuIC inference supports full precision only.</p><p>Browser checks do not replace the full CLI schema validation and cannot inspect your GPU, dataset or model files.</p><div class="command-box">Refresh after repository configuration changes:<br><code>python deploy/scripts/build-workflow-catalog.py</code></div><p class="muted">Generated: ${esc(catalog.generated_at)}<br>Source identity: ${esc(catalog.source_sha256.slice(0, 16))}</p>${catalog.excluded.length ? '<p>Excluded unsupported examples:</p><ul>' + catalog.excluded.map(item => '<li>' + esc(item.ref) + '</li>').join('') + '</ul>' : ''}`;
+    $('#catalog-detail').innerHTML = `<p>Built from resolved, validated repository YAMLs. ${catalog.training.length} training profiles, ${catalog.evaluation.length} evaluation profiles and ${Object.values(catalog.components).reduce((count, items) => count + items.length, 0)} reusable components.</p><p><strong>Supported:</strong> hierarchical groups, registered plugin training and evaluation, declared quantization choices, task selection, inherited patches, checkpoint handoff, dependencies, YAML/JSON workflow import, YAML export and local undo/redo.</p><p>Model capabilities and checkpoint compatibility come from the registered plugin manifests.</p><p>Browser checks do not replace the full CLI schema validation and cannot inspect your GPU, dataset or model files.</p><div class="command-box">Refresh after repository configuration changes:<br><code>python deploy/scripts/build-workflow-catalog.py</code></div><p class="muted">Generated: ${esc(catalog.generated_at)}<br>Source identity: ${esc(catalog.source_sha256.slice(0, 16))}</p>${catalog.excluded.length ? '<p>Excluded unsupported examples:</p><ul>' + catalog.excluded.map(item => '<li>' + esc(item.ref) + '</li>').join('') + '</ul>' : ''}`;
     $('#info-dialog').showModal();
   });
   window.OVLABStudio = {getDocument: () => C.clone(workflow), getAnalysis: () => C.analyze(workflow, catalog), load: document => replaceWorkflow(document, 'Workflow loaded.')};

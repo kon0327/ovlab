@@ -36,8 +36,11 @@ def initialize(root):
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     root, plugin = tmp_path / 'ovlab', tmp_path / 'independent-plugin'
-    shutil.copytree(ROOT / 'configs', root / 'configs')
-    shutil.copytree(ROOT / 'experiments/evaluation', root / 'experiments/evaluation')
+    shutil.copytree(ROOT / 'config', root / 'config')
+    shutil.copytree(ROOT / 'examples/experiments', root / 'examples/experiments')
+    (root / 'experiments/evaluation').mkdir(parents=True)
+    for category in ('plugins', 'policies'):
+        (root / 'configs' / category).mkdir(parents=True, exist_ok=True)
     shutil.copytree(ROOT / 'deploy/scripts', root / 'deploy/scripts')
     shutil.copytree(ROOT / 'examples/policy-plugin', plugin)
     (plugin / 'src/example_policy').rename(plugin / 'src/registered_policy')
@@ -61,9 +64,9 @@ def project(tmp_path, monkeypatch):
 def configure_experiment(root):
     override = {'schema_version': '0.1.0', 'kind': 'policy', 'type': 'example_policy',
                 'extends': 'plugin://example-policy/policy.yaml',
-                'settings': {'action': {'action_interface': 'interfaces/actions/mock-delta-gripper-v1.yaml'}}}
+                'settings': {'action': {'action_interface': 'ovlab://interfaces/actions/mock-delta-gripper-v1.yaml'}}}
     (root / 'configs/policies/custom.yaml').write_text(dumps(override))
-    experiment = load(root / 'experiments/evaluation/mock-e2e-smoke.yaml')
+    experiment = load(root / 'examples/experiments/mock-smoke.yaml')
     experiment['components']['policy'] = 'policies/custom.yaml'
     experiment['resources']['registry'] = 'plugin://example-policy/resources.yaml'
     (root / 'experiments/evaluation/custom.yaml').write_text(dumps(experiment))

@@ -73,25 +73,32 @@
     const invalid = message => ({unavailable: true, reference: state.profile, error: message});
     if (document.kind !== (phase === 'train' ? 'training' : 'experiment') || document.schema_version !== (phase === 'train' ? 'ovlab.training-profile/v1' : '0.1.0')) return invalid('Patches must preserve the profile kind and schema version.');
     if (phase === 'train' && (!object(document.training) || !object(document.model) || !object(document.dataset) || typeof document.dataset.ref !== 'string' || (document.training.mode === 'peft' && !object(document.training.peft)))) return invalid('Training patches must preserve the training, model and dataset objects.');
-    if (phase === 'train' && (!['full', 'peft'].includes(document.training.mode) || (document.training.mode === 'peft' && !['lora', 'quic'].includes(document.training.peft.method)))) return invalid('Training supports full weights, LoRA or QuIC; select a supported method.');
-    if (phase === 'evaluate' && !object(document.components)) return invalid('Evaluation patches must preserve the components object.');
+    const trainingPlugin = phase === 'train' && Object.values(catalog.plugins || {}).find(item => item.project === document.trainer?.id && (item.capabilities?.training?.implementations || []).includes(document.trainer?.implementation));
+    const method = document.training?.mode === 'peft' ? document.training.peft?.method : 'full';
+    if (phase === 'train' && (!['full', 'peft'].includes(document.training.mode) || typeof method !== 'string' || (trainingPlugin && !(trainingPlugin.capabilities.training.methods || []).includes(method)))) return invalid('Choose a supported method declared by the training plugin.');
+    if (phase === 'evaluate' && (!object(document.components) || !object(document.experiment) || ['policy', 'benchmark', 'protocol', 'metrics', 'artifacts'].some(kind => typeof document.components[kind] !== 'string'))) return invalid('Evaluation defaults need experiment details and explicit policy, benchmark, protocol, metrics and artifacts components.');
     if (phase === 'evaluate') for (const [kind, reference] of Object.entries(document.components || {})) {
       const component = (catalog.components[kind] || []).find(item => item.ref === reference);
       if (component) components[kind] = merge(component.document, (state.component_patches || {})[kind] || {});
     }
     if (phase === 'evaluate') {
       for (const kind of ['policy', 'benchmark']) if (components[kind] && (!object(components[kind]) || !object(components[kind].settings))) return invalid(`${kind} patches must preserve their settings object.`);
-      if (components.policy && !['mock', 'openvla_vanilla', 'openvla_lora_merged', 'openvla_oft', 'openvla_quic'].includes(components.policy.type)) return invalid('Unknown policy type; choose a supported policy component.');
-      if (components.benchmark && !['mock', 'libero'].includes(components.benchmark.type)) return invalid('Unknown benchmark type; choose a supported benchmark component.');
-      if (components.policy?.type?.startsWith('openvla_') && !object(components.policy.settings.runtime)) return invalid('OpenVLA policy patches must preserve runtime settings.');
+      if (components.policy && components.policy.type !== 'mock' && !own(catalog.plugins, components.policy.type)) return invalid('Unknown policy type; choose a registered policy component.');
+      if (components.benchmark && !(catalog.components.benchmark || []).some(item => item.document.type === components.benchmark.type)) return invalid('Unknown benchmark type; choose a catalog benchmark component.');
       if (components.protocol && (!object(components.protocol) || !object(components.protocol.execution))) return invalid('Protocol patches must preserve execution settings.');
     }
-    return {document, components, source, state};
+    return {document, components, source, state, plugin: phase === 'evaluate' ? catalog.plugins?.[components.policy?.type] : trainingPlugin};
   }
   function family(resolved, phase) {
     if (!resolved || resolved.unavailable) return '';
     if (phase === 'train') return resolved.document.training.mode === 'peft' ? resolved.document.training.peft.method : 'full';
-    return ({openvla_quic: 'quic', openvla_oft: 'oft', openvla_lora_merged: 'lora', openvla_vanilla: 'vanilla'})[resolved.components.policy?.type] || resolved.components.policy?.type || 'mock';
+    return resolved.plugin?.family || resolved.components.policy?.type || 'mock';
+  }
+  function bindingCompatible(trained, evaluated) {
+    if (!trained || trained.unavailable || !evaluated || evaluated.unavailable) return false;
+    const binding = evaluated.plugin?.capabilities?.checkpoint_binding;
+    return Boolean(binding && (binding.training_methods || []).includes(family(trained, 'train')) &&
+      (!evaluated.plugin.project || evaluated.plugin.project === trained.document.trainer?.id));
   }
   function sameDocument(a, b) {
     function canonical(item) { return Array.isArray(item) ? item.map(canonical) : object(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical(item[key])])) : item; }
@@ -150,22 +157,23 @@
           if (!(Number.isFinite(doc.training.learning_rate) && doc.training.learning_rate > 0)) issue('error', entry.path, 'Learning rate must be positive.');
           if (!['bf16', 'fp32'].includes(doc.training.precision)) issue('error', entry.path, 'Training precision must be bf16 or fp32.');
           const groups = doc.dataset.partition?.groups, suite = (doc.dataset.ref || '').split('/').at(-1);
-          if (groups && (!Array.isArray(groups) || !groups.length || groups.some(group => !(catalog.tasks[suite] || []).includes(group)))) issue('error', entry.path, 'Training task groups must be nonempty and belong to the dataset suite.');
+          if (groups && (!Array.isArray(groups) || !groups.length || groups.some(group => typeof group !== 'string' || (catalog.tasks[suite]?.length && !catalog.tasks[suite].includes(group))))) issue('error', entry.path, 'Training task groups must be nonempty and belong to the dataset suite.');
         } else {
           for (const [kind, reference] of Object.entries(doc.components || {})) if (!resolved.components[kind]) issue('error', entry.path, `Unknown ${kind} component: ${reference}`);
           const policy = resolved.components.policy, benchmark = resolved.components.benchmark, protocol = resolved.components.protocol;
-          if (policy?.type?.startsWith('openvla_') && !['none', '8bit', '4bit'].includes(policy.settings?.runtime?.quantization)) issue('error', entry.path, 'Unsupported inference quantization.');
-          if (policy?.type === 'openvla_quic' && policy.settings.runtime.quantization !== 'none') issue('error', entry.path, 'QuIC currently supports full precision inference only.');
-          const expectedDeployment = {openvla_quic: 'quic', openvla_oft: 'oft', openvla_lora_merged: 'openvla', openvla_vanilla: 'openvla'}[policy?.type];
+          const descriptor = resolved.plugin, quantization = descriptor?.deployment?.quantization;
+          if (quantization && !quantization.includes(policy?.settings?.runtime?.quantization)) issue('error', entry.path, `Unsupported inference quantization. This plugin supports: ${quantization.join(', ')}.`);
+          const expectedDeployment = descriptor?.deployment?.profile;
           if (expectedDeployment && doc.deployment && doc.deployment.profile !== expectedDeployment) issue('error', entry.path, `This policy requires deployment.profile: ${expectedDeployment}.`);
           if (doc.deployment && !['egl', 'glfw'].includes(doc.deployment.renderer)) issue('error', entry.path, 'Renderer must be egl or glfw.');
           for (const key of ['rollouts_per_task', 'maximum_episode_steps']) if (protocol && (!Number.isInteger(protocol.execution[key]) || protocol.execution[key] < 1)) issue('error', entry.path, `${key} must be a positive integer.`);
           const indices = benchmark?.settings?.task_indices;
           if (indices !== undefined && indices !== 'all' && (!Array.isArray(indices) || !indices.length || new Set(indices).size !== indices.length || indices.some(n => !Number.isInteger(n) || n < 0 || (catalog.tasks[benchmark.settings.suite] && n >= catalog.tasks[benchmark.settings.suite].length)))) issue('error', entry.path, 'Task indices must be unique, nonnegative integers within the selected suite.');
-          if (executes && policy?.type === 'openvla_quic' && !own(entry.state.evaluate, 'checkpoint_from')) {
-            const adapter = policy.settings.quic;
-            if (!adapter || !/^[a-f0-9]{64}$/.test(adapter.adapter_manifest_sha256) || !/^[a-f0-9]{64}$/.test(adapter.adapter_tensor_sha256) || /^0{64}$/.test(adapter.adapter_manifest_sha256) || /^0{64}$/.test(adapter.adapter_tensor_sha256)) issue('error', entry.path, 'QuIC needs a training checkpoint source or an existing adapter path with real SHA256 hashes.');
-            else issue('info', entry.path, 'Existing QuIC adapter selected. Its files and hashes are checked at runtime.');
+          const identity = descriptor?.capabilities?.checkpoint_binding?.adapter_identity;
+          if (executes && identity && !own(entry.state.evaluate, 'checkpoint_from')) {
+            const adapter = get(policy.settings, identity.settings_path);
+            if (!adapter || !adapter[identity.path] || identity.hashes.some(key => !/^[a-f0-9]{64}$/.test(adapter[key]) || /^0{64}$/.test(adapter[key]))) issue('error', entry.path, 'This policy needs a training checkpoint source or an existing adapter path with real SHA256 hashes.');
+            else issue('info', entry.path, 'Existing adapter selected. Its files and hashes are checked at runtime.');
           }
         }
       }
@@ -185,15 +193,14 @@
         depend(sourcePath, 'train');
         const source = byPath.get(sourcePath), trained = source && resolve(source, 'train', catalog);
         if (trained && !trained.unavailable && resolved && !resolved.unavailable) {
-          const method = family(trained, 'train'), expected = {lora: 'openvla_lora_merged', quic: 'openvla_quic'}[method];
-          if (!expected || resolved.components.policy?.type !== expected) issue('error', entry.path, `Checkpoint source method ${method} is incompatible with this evaluation policy.`);
+          const method = family(trained, 'train'), binding = resolved.plugin?.capabilities?.checkpoint_binding;
+          if (!bindingCompatible(trained, resolved)) issue('error', entry.path, `Checkpoint source method ${method} is incompatible with this evaluation policy.`);
           if (!resolved.document.deployment) issue('error', entry.path, 'Checkpoint handoff requires a deployed evaluation policy.');
-          if (method === 'lora' && resolved.components.policy?.settings.unnorm_key !== 'libero_10') issue('error', entry.path, 'Merged training LoRA currently requires LIBERO-10 normalization.');
-          if (method === 'quic' && trained.document.training.normalization?.unnorm_key !== resolved.components.policy?.settings.unnorm_key) issue('error', entry.path, 'QuIC training and evaluation normalization keys must match.');
+          if (binding?.normalization_key && resolved.components.policy?.settings.unnorm_key !== binding.normalization_key) issue('error', entry.path, `This checkpoint binding requires normalization: ${binding.normalization_key}.`);
+          if (binding?.match_training_normalization && trained.document.training.normalization?.unnorm_key !== resolved.components.policy?.settings.unnorm_key) issue('error', entry.path, 'Training and evaluation normalization keys must match.');
         }
       }
       if (task.dependencies.has(key)) issue('error', entry.path, 'A phase cannot depend on itself.');
-      if (phase === 'train' && family(resolved, phase) === 'lora') issue('info', entry.path, 'LoRA training preflight estimates 27 GiB. GPU availability is checked by the CLI.');
       if (phase === 'evaluate' && resolved && !resolved.unavailable) {
         for (const child of entries.filter(other => other.path.startsWith(entry.path ? entry.path + '/' : '') && other.path !== entry.path)) {
           if (!(child.node.execute || []).includes(phase)) continue;
@@ -402,7 +409,7 @@
     if (!object(document)) throw new Error('The root must be a mapping.');
     return guard(document);
   }
-  const api = {PHASES, RESERVED, SAFE, own, object, clone, merge, get, set, flatten, profile, resolve, family, sameDocument,
+  const api = {PHASES, RESERVED, SAFE, own, object, clone, merge, get, set, flatten, profile, resolve, family, bindingCompatible, sameDocument,
     analyze, rewriteReferences, uniqueId, moveNode, renameNode, dumpYaml, parse, guard};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.OVLABBuilder = api;

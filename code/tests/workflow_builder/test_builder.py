@@ -35,7 +35,7 @@ console.log(JSON.stringify(catalog.workflows.map(source=>{
 '''
     result = subprocess.run([NODE, '-e', script], cwd=BUILDER, capture_output=True, text=True, check=True)
     sources = json.loads(result.stdout)
-    assert len(sources) >= 6
+    assert len(sources) == 3
     for index, source in enumerate(sources):
         path = tmp_path / f'workflow-{index}.yaml'
         path.write_text(source['yaml'])
@@ -110,7 +110,7 @@ def test_offline_default_export_uses_its_own_training_checkpoint(page, tmp_path)
     plan = export_plan(page, tmp_path)
     evaluation = plan['nodes'][1]['configuration']['evaluate']
     assert evaluation['checkpoint_from'] == ''
-    assert plan['steps'] == [{'node': '', 'phase': 'train'}, {'node': 'eval-checkpoint', 'phase': 'evaluate'}]
+    assert plan['steps'] == [{'node': '', 'phase': 'train'}, {'node': 'evaluate-checkpoint', 'phase': 'evaluate'}]
 
 
 def test_graphical_build_rename_move_undo_and_export_keep_handoff(page, tmp_path):
@@ -132,7 +132,7 @@ def test_graphical_build_rename_move_undo_and_export_keep_handoff(page, tmp_path
     page.get_by_role('button', name='Redo', exact=True).click()
     assert page.locator('#inspector .inspector-header p').inner_text() == 'models/adaptation'
     plan = export_plan(page, tmp_path)
-    assert [step['node'] for step in plan['steps']] == ['models/adaptation', 'models/adaptation/full']
+    assert [step['node'] for step in plan['steps']] == ['models/adaptation', 'models/adaptation/evaluate-checkpoint']
 
 
 def test_duplicate_parent_execution_has_actionable_warning(page):
@@ -145,7 +145,7 @@ def test_duplicate_parent_execution_has_actionable_warning(page):
 
 
 def test_quic_options_and_invalid_advanced_patch_block_export(page):
-    choose(page, 'eval-checkpoint')
+    choose(page, 'evaluate-checkpoint')
     quantization = page.locator('[data-select-field$=".quantization"]')
     assert quantization.locator('option[value="4bit"]').count() == 0
     page.locator('details[data-section="advanced"] summary').click()
@@ -191,10 +191,10 @@ def test_responsive_views_fit_and_support_keyboard_tabs(page, width):
 
 
 def test_import_file_and_local_draft_restore_without_a_server(page, tmp_path):
-    source = ROOT / 'experiments/workflows/libero10-lora-4bit-smoke.yaml'
+    source = ROOT / 'examples/experiments/openvla-eval.yaml'
     page.locator('#import-file').set_input_files(source)
-    page.wait_for_function("OVLABStudio.getDocument().id === 'libero10-lora-4bit-smoke'")
-    assert document(page)['id'] == 'libero10-lora-4bit-smoke'
+    page.wait_for_function("OVLABStudio.getDocument().id === 'openvla-eval-smoke'")
+    assert document(page)['id'] == 'openvla-eval-smoke'
     edit(page, '[data-field="name"]', 'Local draft')
     page.reload()
     assert document(page)['name'] == 'Local draft'
@@ -202,7 +202,7 @@ def test_import_file_and_local_draft_restore_without_a_server(page, tmp_path):
 
 
 def test_unapplied_local_json_survives_navigation_and_reload(page, tmp_path):
-    choose(page, 'eval-checkpoint')
+    choose(page, 'evaluate-checkpoint')
     page.locator('details[data-section="advanced"] summary').click()
     draft = json.dumps({'evaluate': {'component_patches': {'protocol': {'execution': {'maximum_episode_steps': 5}}}}})
     page.locator('#advanced-config').fill(draft)
@@ -214,7 +214,7 @@ def test_unapplied_local_json_survives_navigation_and_reload(page, tmp_path):
     assert page.locator('#draft-notice').is_visible()
     page.get_by_role('button', name='Open draft', exact=True).click()
     assert page.locator('#advanced-config').input_value() == draft
-    assert page.locator('#inspector .inspector-header p').inner_text() == 'eval-checkpoint'
+    assert page.locator('#inspector .inspector-header p').inner_text() == 'evaluate-checkpoint'
     page.get_by_role('button', name='Apply local configuration', exact=True).click()
     assert not page.locator('#draft-notice').is_visible()
     plan = export_plan(page, tmp_path)
@@ -227,7 +227,7 @@ def test_unapplied_yaml_survives_tabs_reload_and_node_selection(page, tmp_path):
     page.get_by_role('tab', name='YAML', exact=True).click()
     page.locator('#yaml-source').fill(json.dumps(source))
     page.get_by_role('tab', name='Builder', exact=True).click()
-    choose(page, 'eval-checkpoint')
+    choose(page, 'evaluate-checkpoint')
     assert page.locator('#node-id').is_disabled()
     assert document(page) == before
     page.reload()
@@ -256,9 +256,9 @@ def test_one_pointer_click_after_typing_commits_and_activates_the_target(page, t
     assert document(page)['name'] == 'Edited before clicking a phase'
     assert document(page)['execute'] == ['train', 'evaluate']
     page.locator('[data-field="name"]').fill('Edited before selecting a node')
-    card = page.locator('.node-card[data-select="eval-checkpoint"]').bounding_box()
+    card = page.locator('.node-card[data-select="evaluate-checkpoint"]').bounding_box()
     page.mouse.click(card['x'] + card['width']/2, card['y'] + card['height']/2)
-    assert page.locator('#inspector .inspector-header p').inner_text() == 'eval-checkpoint'
+    assert page.locator('#inspector .inspector-header p').inner_text() == 'evaluate-checkpoint'
     assert document(page)['name'] == 'Edited before selecting a node'
     page.locator('#issues [data-fix="remove-evaluate"]').click()
     assert document(page)['execute'] == ['train']
@@ -267,17 +267,17 @@ def test_one_pointer_click_after_typing_commits_and_activates_the_target(page, t
 
 def test_new_evaluation_uses_the_nearest_quic_training_context(page, tmp_path):
     page.locator('details[data-section="advanced"] summary').click()
-    page.locator('#advanced-config').fill(json.dumps({'train': {'profile': 'openvla-libero10-quic-smoke.yaml'}}))
+    page.locator('#advanced-config').fill(json.dumps({'train': document(page)['config']['train']}))
     page.get_by_role('button', name='Apply local configuration', exact=True).click()
     # The existing child now needs a profile; the newly added child gets one
     # from its training context and binds to the root rather than choosing LoRA.
-    choose(page, 'eval-checkpoint')
+    choose(page, 'evaluate-checkpoint')
     page.get_by_role('button', name='Delete node', exact=True).click()
     page.locator('#confirm-dialog').get_by_role('button', name='Delete subtree', exact=True).click()
     page.get_by_role('button', name='Add child node', exact=True).first.click()
     page.locator('[data-template="evaluate"]').click()
     evaluation = document(page)['children'][0]['config']['evaluate']
-    assert evaluation['profile'].endswith('libero10-quic-adapter-rpc-smoke.yaml')
+    assert evaluation['profile'] == 'plugin://openvla-quic/evaluate/default.yaml'
     assert evaluation['checkpoint_from'] == ''
     assert export_plan(page, tmp_path)['steps'][-1]['phase'] == 'evaluate'
 
@@ -298,7 +298,7 @@ def test_escape_does_not_repeat_a_previous_delete_confirmation(page):
 def test_task_shortcuts_and_invalid_component_types_are_recoverable(page, tmp_path):
     page.locator('[data-task-action="first-two"]').click()
     assert len(document(page)['config']['train']['patch']['dataset']['partition']['groups']) == 2
-    choose(page, 'eval-checkpoint')
+    choose(page, 'evaluate-checkpoint')
     page.locator('[data-eval-tasks="0,1"]').click()
     page.locator('details[data-section="advanced"] summary').click()
     config = document(page)['children'][0]['config']
@@ -325,7 +325,7 @@ def test_mobile_new_and_edit_node_controls_are_reachable(page):
 
 def test_cycle_plan_keeps_blocked_phases_and_honest_counts(page):
     source = document(page)
-    source['depends_on'] = [{'node': 'eval-checkpoint', 'phase': 'evaluate'}]
+    source['depends_on'] = [{'node': 'evaluate-checkpoint', 'phase': 'evaluate'}]
     page.get_by_role('tab', name='YAML', exact=True).click()
     page.locator('#yaml-source').fill(json.dumps(source))
     page.get_by_role('button', name='Apply source', exact=True).click()
@@ -339,17 +339,17 @@ def test_cycle_plan_keeps_blocked_phases_and_honest_counts(page):
 def test_inherited_lora_handoff_creates_matching_training_and_evaluation(page, tmp_path):
     source = {'schema_version': 'ovlab.experiment/v1', 'kind': 'workflow', 'id': 'lora-branches',
               'name': 'LoRA branches', 'execution': {'max_workers': 1},
-              'config': {'train': {'profile': 'openvla-lora-libero10-smoke.yaml'}}}
+              'config': {'train': {**document(page)['config']['train'], 'profile': 'plugin://openvla/train/default.yaml'}}}
     page.get_by_role('tab', name='YAML', exact=True).click()
     page.locator('#yaml-source').fill(json.dumps(source))
     page.get_by_role('button', name='Apply source', exact=True).click()
     page.get_by_role('tab', name='Builder', exact=True).click()
     page.get_by_role('button', name='Add child node', exact=True).first.click()
     page.locator('[data-template="handoff"]').click()
-    assert document(page)['children'][0]['id'] == 'lora'
+    assert document(page)['children'][0]['id'] == 'train-evaluate'
     plan = export_plan(page, tmp_path)
-    assert plan['steps'] == [{'node': 'lora', 'phase': 'train'}, {'node': 'lora/full', 'phase': 'evaluate'}]
-    assert plan['nodes'][2]['configuration']['evaluate']['checkpoint_from'] == 'lora'
+    assert plan['steps'] == [{'node': 'train-evaluate', 'phase': 'train'}, {'node': 'train-evaluate/evaluate-checkpoint', 'phase': 'evaluate'}]
+    assert plan['nodes'][2]['configuration']['evaluate']['checkpoint_from'] == 'train-evaluate'
 
 
 def test_replacing_then_undoing_restores_the_unapplied_source_draft(page):
@@ -372,17 +372,24 @@ def test_replacing_then_undoing_restores_the_unapplied_source_draft(page):
 
 
 def test_large_tree_can_be_panned_and_navigated_without_changing_the_workflow(page):
-    page.locator('#preset').select_option('experiments/workflows/libero10-two-task-training-smoke.yaml')
-    page.wait_for_function("OVLABStudio.getDocument().id === 'libero10-two-task-training-smoke'")
     original = document(page)
+    original['execute'] = []
+    evaluation = original['children'][0]
+    original['config']['evaluate']['checkpoint_from'] = 'adaptation'
+    original['children'] = [{'id': 'adaptation', 'execute': ['train'],
+                             'children': [{**evaluation, 'id': f'task-{index}'} for index in range(8)]}]
+    page.get_by_role('tab', name='YAML', exact=True).click()
+    page.locator('#yaml-source').fill(json.dumps(original))
+    page.get_by_role('button', name='Apply source', exact=True).click()
+    page.get_by_role('tab', name='Builder', exact=True).click()
     assert page.locator('#plan-count').inner_text() == '9'
     root = page.locator('#outline [data-select=""]')
     root.focus()
     page.keyboard.press('ArrowRight')
     page.keyboard.press('ArrowRight')
-    assert page.locator('#inspector .inspector-header p').inner_text() == 'lora/full'
+    assert page.locator('#inspector .inspector-header p').inner_text() == 'adaptation/task-0'
     page.keyboard.press('ArrowLeft')
-    assert page.locator('#inspector .inspector-header p').inner_text() == 'lora'
+    assert page.locator('#inspector .inspector-header p').inner_text() == 'adaptation'
     area = page.locator('#canvas-scroll')
     area.evaluate('element => element.scrollTop = 100')
     bounds = area.bounding_box()

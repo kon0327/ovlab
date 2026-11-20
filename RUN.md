@@ -1,89 +1,87 @@
-# Running Evaluations
+# Running experiments
 
-OVLAB separates the portable evaluation experiment from machine-specific run
-settings. A file in `experiments/evaluation/` defines the benchmark, policy, and
-metrics. A local profile provides paths to datasets, checkpoints, and outputs,
-as well as device selection. These profiles serve different purposes.
-
-## Evaluation lifecycle
-
-`ovlab run TARGET` selects a YAML from `experiments/evaluation`. After a run,
-use `ovlab data list runs --detail` and `ovlab run RUN_ID_OR_HASH --verify`. All evaluation
-run examples accept explicit YAML paths as well as short names. `deploy run` now
-starts a persistent model service described in [`DEPLOYMENT.md`](DEPLOYMENT.md).
-
-## Recommended Docker Workflow
-
-For a normal evaluation, use `ovlab run`. Pass the experiment as a positional
-argument; this workflow does not require `configs/local/profile.yaml`. If you
-do not have a local Compose environment file yet, copy the template once and
-set the data paths:
+OVLAB composes model plugins with explicit benchmark, protocol, metric and report
+choices. Start with a tracked verification example:
 
 ```bash
-cp deploy/compose/.env.example deploy/compose/.env
-./ovlab run \
-  experiments/evaluation/libero10-lora-4bit-three-per-task.yaml --plan
-./ovlab run \
-  experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
+ovlab run examples/experiments/mock-smoke.yaml --plan
+ovlab run examples/experiments/openvla-eval.yaml --plan
+ovlab run examples/experiments/openvla-oft-eval.yaml --plan
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml --plan
 ```
 
-`--plan` displays and validates the plan without starting Docker. An evaluation
-starts the policy service and LIBERO runner in separate containers. It
-gets local paths and output locations from `deploy/compose/.env` and the
-container definitions.
+Remove `--plan` to execute a model example. The mock document is a configuration
+verification fixture; production execution currently requires the LIBERO runtime.
+The QuIC pipeline trains an adapter, finalizes its
+checkpoint, evaluates that exact checkpoint and publishes reports. Its short
+limits verify the integration rather than model quality. Runtime preflight still
+checks images, GPU capacity, checkpoint and dataset availability.
 
-The Docker Compose profile (`openvla`, `oft`, or `quic`) is selected from the
-experiment YAML.
+Copy an example into `experiments/` to create your own scenario. Contents of
+`experiments/` and `configs/` are ignored by Git; OVLAB ships only their READMEs.
+Local edits therefore do not become upstream presets. Save explicit references
+in your scenario; OVLAB does not automatically apply files from either directory.
 
-## Host configuration
+## Configuration ownership
 
-`ovlab run` chooses training, evaluation or a workflow from the input YAML. An
-evaluation declaring `deployment` uses its configured Compose topology. Host-only
-worker entry points are internal; they are not separate public run commands.
-Machine paths remain in the Compose environment and optional gitignored local
-profile. Select that profile with:
+| Reference | Owner |
+| --- | --- |
+| `ovlab://metrics/default.yaml` | Builtin OVLAB configuration under `config/`. |
+| `plugin://openvla/policy/default.yaml` | Configuration of a registered model plugin. |
+| `policies/my-model.yaml` | User configuration under `configs/`. |
+| `experiments/my-study.yaml` | User experiment, selected by its explicit path. |
+
+A local policy can extend a plugin default and override only its runtime:
+
+```yaml
+schema_version: "0.1.0"
+kind: policy
+type: openvla_lora_merged
+extends: plugin://openvla/policy/default.yaml
+settings:
+  runtime:
+    quantization: 4bit
+```
+
+Save it as `configs/policies/my-model.yaml`, then explicitly select
+`policies/my-model.yaml` in the experiment's `components.policy` or workflow
+`config.evaluate.patch.components.policy`. Relative `extends` stays inside its
+own configuration origin; explicit URIs cross origins. Mappings merge, lists and
+scalars replace. The final composed documents are validated before execution.
+
+Plugin evaluation defaults contain the model portion of an experiment. Your
+scenario supplies benchmark, metrics, protocol and artifact configuration.
+Training defaults likewise require an explicit dataset. Plugin defaults do not
+silently select a scientific experiment.
+
+## Execution and evidence
+
+`ovlab run TARGET` accepts a training document, an evaluation document, or a
+hierarchical workflow. Workflows can reference plugin training/evaluation defaults
+directly. `execution.max_workers: 1` serializes phases on a single GPU.
+`config.evaluate.checkpoint_from` binds a finalized training output and adds the
+training dependency; `""` refers to root training.
+
+Evaluation declares `deployment.profile` and `deployment.renderer`, starts policy
+and benchmark services in separate containers, and cleans up its private Compose
+project. Persistent model services use `ovlab deploy`; see
+[DEPLOYMENT.md](DEPLOYMENT.md). Machine paths belong in `deploy/compose/.env` or an
+ignored local profile selected by `OVLAB_LOCAL_PROFILE`.
 
 ```bash
-export OVLAB_LOCAL_PROFILE=/absolute/path/to/profile.yaml
+ovlab data list runs --detail
+ovlab run EXPERIMENT_ID_OR_HASH --verify
+ovlab report EXPERIMENT_ID_OR_HASH
 ```
 
-Runtime options belong in YAML: `deployment.renderer`, `deployment.offline`,
-policy `settings.runtime.quantization`, and workflow `execution.max_workers`.
+Canonical evidence lives under `ovlab-data/runs/`; reports live under
+`ovlab-data/exports/`. Resolved configuration bundles retain their source identities
+and are mounted read-only. Configuration changes do not modify earlier evidence.
+See [the workflow contract](docs/EXPERIMENT_WORKFLOW.md),
+[plugin development](docs/POLICY_PLUGINS.md), and [dataset operations](DATASETS.md).
 
-## Selecting a Configuration
+## Optional Weights & Biases mirror
 
-`ovlab run` accepts both explicit paths and short YAML names:
-
-```bash
-./ovlab run experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
-./ovlab run libero10-lora-4bit-three-per-task
-```
-
-After a run, list and inspect the results with:
-
-```bash
-./ovlab data list --kind runs
-./ovlab run RUN_ID_OR_HASH --verify
-```
-
-For details about containers and their configuration, see
-[`deploy/README.md`](deploy/README.md) and the
-[`OVLAB CLI guide`](code/apps/benchctl/CLI_README.md).
-
-## Weights & Biases tracking
-
-Set `OVLAB_WANDB_PROJECT` (or `WANDB_PROJECT`) to mirror completed evaluation phases to W&B. The W&B SDK installs automatically as a dependency of
-`ovlab-benchctl` through the [host CLI environment](ENVIRONMENT.md);
-authenticate with `wandb login` or `WANDB_API_KEY`.
-`OVLAB_WANDB_ENTITY` is optional, and standard
-W&B settings such as `WANDB_MODE=offline` apply.
-
-```bash
-OVLAB_WANDB_PROJECT=ovlab ./ovlab run experiments/evaluation/libero-mock-smoke.yaml
-```
-
-The mirror records numeric episode metrics, per-task metrics, averages across
-tasks, the resolved plan and final manifest. It runs on the host after the
-isolated evaluation completes. The `wandb` field in the
-CLI result contains the sync status and URL; W&B errors leave the canonical
-evaluation result unchanged.
+Set `OVLAB_WANDB_PROJECT` (or `WANDB_PROJECT`) and optionally `OVLAB_WANDB_ENTITY`.
+Authenticate with `wandb login` or `WANDB_API_KEY`. The host mirrors completed
+phases after isolated execution; W&B failures do not change canonical evidence.

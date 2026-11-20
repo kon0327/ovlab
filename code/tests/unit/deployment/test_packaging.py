@@ -7,6 +7,9 @@ from pathlib import Path
 import re
 import runpy
 import subprocess
+import shutil
+
+import pytest
 
 from ovlab_benchctl.application import OvlabApplication
 from ovlab_benchctl.versioning import repository_revision
@@ -14,30 +17,48 @@ from ovlab_benchctl.versioning import repository_revision
 
 ROOT = Path(__file__).resolve().parents[4]
 DOCKER = ROOT / "deploy/docker"
-PLUGIN = ROOT / "plugins/openvla"
+PROJECTS = tuple(ROOT / "plugins" / name for name in ("openvla", "openvla-oft", "openvla-quic"))
 COMPOSE = (ROOT / "deploy/compose/compose.yaml").read_text(encoding="utf-8")
 from ovlab_benchctl.deployment import ComposeDeployment
 
 
-def _evaluation_services(profile="openvla", renderer="egl"):
-    config = {"openvla": "libero10-lora-merged-rpc-smoke", "oft": "libero10-openvla-oft-rpc-smoke", "quic": "libero10-quic-adapter-rpc-smoke"}[profile]
-    deployment = ComposeDeployment(ROOT)
-    plan = deployment.plan(config, renderer=renderer, env_file="deploy/compose/.env.example")
+@pytest.fixture(scope="module")
+def deployment_workspace(tmp_path_factory):
+    from helpers.evaluation_fixtures import write_evaluation_fixtures
+    root = tmp_path_factory.mktemp("deployment-packaging")
+    shutil.copytree(ROOT / "config", root / "config")
+    shutil.copytree(ROOT / "examples/experiments", root / "examples/experiments")
+    shutil.copytree(ROOT / "deploy/compose", root / "deploy/compose")
+    (root / "configs/plugins").mkdir(parents=True)
+    registry = json.loads((ROOT / "plugins/registry.json").read_text())
+    for entry in registry["plugins"].values():
+        entry["source"]["path"] = str(ROOT / entry["source"]["path"])
+    (root / "configs/plugins/registry.json").write_text(json.dumps(registry))
+    write_evaluation_fixtures(root, root / "configs/.packaging")
+    return root
+
+
+def _evaluation_services(root, profile="openvla", renderer="egl"):
+    configuration = {"openvla": "openvla", "oft": "oft", "quic": "quic"}[profile]
+    deployment = ComposeDeployment(root, environment={})
+    plan = deployment.plan(f"configs/.packaging/evaluation/{configuration}.yaml", renderer=renderer,
+                           env_file="deploy/compose/.env.example")
     return deployment, plan, deployment.service_spec(plan)["services"]
 
 
 def _dockerfile(name: str) -> str:
-    path = DOCKER / name
-    return (path if path.is_file() else PLUGIN / "docker" / name).read_text(encoding="utf-8")
+    paths = [DOCKER / name, *(project / "docker" / name for project in PROJECTS)]
+    return next(path for path in paths if path.is_file()).read_text(encoding="utf-8")
 
 
 def _lock(name):
-    path = ROOT / "deploy/locks" / name
-    return path if path.is_file() else PLUGIN / "locks" / name
+    paths = [ROOT / "deploy/locks" / name, *(project / "locks" / name for project in PROJECTS)]
+    return next(path for path in paths if path.is_file())
 
 
 def test_configuration_secret_layers_use_bundle_identity_in_their_cache_key():
-    recipes = [*DOCKER.glob("Dockerfile.*"), *PLUGIN.joinpath("docker").glob("Dockerfile.*"),
+    recipes = [*DOCKER.glob("Dockerfile.*"),
+               *(path for project in PROJECTS for path in project.joinpath("docker").glob("Dockerfile.*")),
                ROOT / "examples/policy-plugin/Dockerfile"]
     for path in recipes:
         text = path.read_text()
@@ -125,10 +146,10 @@ def test_oft_quantization_stack_pins_the_dispatch_compatible_accelerate_version(
         assert "bitsandbytes==0.43.1" in document
 
 
-def test_compose_is_socket_only_offline_and_least_privilege():
+def test_compose_is_socket_only_offline_and_least_privilege(deployment_workspace):
     assert not any(value in COMPOSE for value in ("ports:", "privileged:", "/var/run/docker.sock"))
     for profile in ("openvla", "oft", "quic"):
-        _, _, services = _evaluation_services(profile)
+        _, _, services = _evaluation_services(deployment_workspace, profile)
         policy, benchmark = services.values()
         for service in services.values():
             assert service["network_mode"] == "none"
@@ -146,9 +167,9 @@ def test_compose_is_socket_only_offline_and_least_privilege():
         assert any(mount.get("target") == "/datasets" and mount["read_only"] for mount in benchmark["volumes"] if isinstance(mount, dict))
 
 
-def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports():
+def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports(deployment_workspace):
     for profile in ("openvla", "oft", "quic"):
-        _, _, services = _evaluation_services(profile)
+        _, _, services = _evaluation_services(deployment_workspace, profile)
         benchmark = list(services.values())[1]
         mounts = {m["target"]: m for m in benchmark["volumes"] if isinstance(m, dict)}
         assert mounts["/var/lib/ovlab/runs"]["read_only"] is False
@@ -305,9 +326,9 @@ def test_benchmark_renderer_is_selected_at_runtime_and_libero_paths_are_portable
     assert "/home/" not in config
 
 
-def test_glfw_overlay_requires_a_display_and_removes_egl_device_configuration():
+def test_glfw_overlay_requires_a_display_and_removes_egl_device_configuration(deployment_workspace):
     for profile in ("openvla", "oft", "quic"):
-        _, plan, services = _evaluation_services(profile, "glfw")
+        _, plan, services = _evaluation_services(deployment_workspace, profile, "glfw")
         benchmark = services[plan.benchmark_service]
         assert benchmark["environment"]["MUJOCO_GL"] == "glfw"
         assert "MUJOCO_EGL_DEVICE_ID" not in benchmark["environment"]
@@ -316,37 +337,41 @@ def test_glfw_overlay_requires_a_display_and_removes_egl_device_configuration():
         assert "ports" not in benchmark and "privileged" not in benchmark
 
 
-def test_source_manifest_is_deterministic_and_records_dirty_state():
-    command = ["python", "deploy/scripts/source_manifest.py", "--root", "."]
-    first = subprocess.run(command, cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout
-    second = subprocess.run(command, cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout
-    assert first == second
-    document = json.loads(first)
-    assert re.fullmatch(r"[0-9a-f]{40}", document["repository_revision"])
-    assert re.fullmatch(r"[0-9a-f]{64}", document["source_content_sha256"])
-    assert document["submodules"] == []
-    assert {row["id"] for row in document["registered_sources"]} == {
-        "libero", "plugin-openvla", "openvla", "openvla-oft", "openvla-quic", "quic-peft-vla",
-    }
-    status = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd=ROOT,
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-    ).stdout
+def test_source_manifest_is_deterministic_and_records_dirty_state(tmp_path):
+    from ovlab_benchctl.policy_plugins import registry_document
     source_manifest = runpy.run_path(str(ROOT / "deploy/scripts/source_manifest.py"))
-    included_status = tuple(
-        line for line in status.splitlines()
-        if source_manifest["_included_status"](line)
-    )
-    assert document["dirty"] is bool(included_status)
-    assert not any(row["path"].startswith("configs/") for row in document["files"])
-    assert source_manifest["_included"]("code/apps/benchctl/pyproject.toml") is True
-    assert source_manifest["_included"]("experiments/evaluation/new.yaml") is False
-    assert source_manifest["_included"]("RUN.md") is False
-    assert source_manifest["_included"]("code/tests/unit/example.py") is False
-    assert source_manifest["_included"]("code/packages/ovlab-core/README.md") is True
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code/runtime.py").write_text("VALUE = 1\n")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/default.yaml").write_text("name: builtin\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs/private.yaml").write_text("name: local-user-config\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], cwd=tmp_path, check=True)
+    registry = registry_document(ROOT)
+    rows = [{"id": name, "kind": source["kind"], "dirty": False, "path": "/host/private"}
+            for name, source in registry["sources"].items()]
+    first = source_manifest["build_manifest"](tmp_path, registry=registry, source_rows=rows)
+    second = source_manifest["build_manifest"](tmp_path, registry=registry, source_rows=rows)
+    assert first == second
+    assert re.fullmatch(r"[0-9a-f]{40}", first["repository_revision"])
+    assert re.fullmatch(r"[0-9a-f]{64}", first["source_content_sha256"])
+    assert first["submodules"] == []
+    assert {row["id"] for row in first["registered_sources"]} == set(registry["sources"])
+    assert {"plugin-openvla", "plugin-openvla-oft", "plugin-openvla-quic", "openvla-support"} <= set(registry["sources"])
+    assert all("path" not in row for row in first["registered_sources"])
+    assert not first["dirty"]
+    assert "config/default.yaml" in {row["path"] for row in first["files"]}
+    assert not any(row["path"].startswith("configs/") for row in first["files"])
+    (tmp_path / "code/runtime.py").write_text("VALUE = 2\n")
+    dirty = source_manifest["build_manifest"](tmp_path, registry=registry, source_rows=rows)
+    assert dirty["dirty"]
+    assert dirty["source_content_sha256"] != first["source_content_sha256"]
+    for path in ("code/apps/benchctl/pyproject.toml", "config/default.yaml", "code/packages/ovlab-core/README.md"):
+        assert source_manifest["_included"](path)
+    for path in ("experiments/local.yaml", "configs/private.yaml", "RUN.md", "code/tests/unit/example.py"):
+        assert not source_manifest["_included"](path)
 
 
 def test_production_images_require_runtime_configuration_bundle():
@@ -413,7 +438,7 @@ def test_dirty_submodule_manifest_distinguishes_local_source_bytes_and_deletions
     assert changes(tmp_path) == [{"path": "adapter.py", "deleted": True}]
 
 
-def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount():
+def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount(deployment_workspace):
     policy = _dockerfile("Dockerfile.openvla-quic")
     training = _dockerfile("Dockerfile.training-openvla-quic")
     lock = _lock("quic-openvla.requirements.txt").read_text()
@@ -431,7 +456,7 @@ def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount():
     assert not any(name in lock.lower() for name in ("robosuite", "mujoco", "libero"))
     installer = (DOCKER / "install-ovlab-packages.sh").read_text()
     assert "quic-petf-vla" not in installer
-    deployment, plan, services = _evaluation_services("quic")
+    deployment, plan, services = _evaluation_services(deployment_workspace, "quic")
     plugin = deployment._plugin(plan)
     mounts = plugin.implementation.runtime_mounts(deployment._policy_document(plan), ROOT, {})
     spec = deployment.service_spec(plan, mounts)
@@ -476,7 +501,7 @@ def test_test_provider_is_excluded_from_every_production_dockerfile():
 
 
 def test_image_metadata_has_no_stale_institutional_namespace():
-    dockerfiles = tuple(path for path in DOCKER.glob("Dockerfile.*") if path.is_file())
+    dockerfiles = (*DOCKER.glob("Dockerfile.*"), *(path for project in PROJECTS for path in (project / "docker").glob("Dockerfile.*")))
     assert dockerfiles
     for path in dockerfiles:
         assert "cz.cvut.ovlab" not in path.read_text(encoding="utf-8")

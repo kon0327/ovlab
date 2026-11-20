@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovlab-openvla-oft-plugin"
+version = "0.2.0"
+description = "openvla-oft model integration for OVLAB"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["ovlab-openvla-support==0.2.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.entry-points."ovlab.plugin_projects"]
+"openvla-oft" = "ovlab_openvla_oft_project:project_root"

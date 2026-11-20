@@ -21,9 +21,10 @@ ROOT = Path(__file__).resolve().parents[4]
 def _experiment(tmp_path: Path, selector: str) -> Path:
     root = tmp_path / "repository"
     shutil.copytree(ROOT / "configs", root / "configs")
+    shutil.copytree(ROOT / "config", root / "config")
     shutil.copytree(ROOT / "experiments", root / "experiments")
     shutil.copytree(ROOT / "plugins", root / "plugins", ignore=shutil.ignore_patterns('.cache', '__pycache__', '*.egg-info'))
-    registry = root / "plugins/openvla/configs/resources/registry.yaml"
+    registry = root / "plugins/openvla/configs/registry/default.yaml"
     content = registry.read_text(encoding="utf-8")
     start = content.index("  openvla-7b:\n")
     end = content.index("  openvla-7b-finetuned-libero-10:\n")
@@ -36,7 +37,7 @@ def _plan(root: Path, tmp_path: Path, *, offline: bool):
     env_file = tmp_path / "empty.env"
     env_file.write_text("", encoding="utf-8")
     return SimpleNamespace(
-        experiment="experiments/evaluation/libero-vanilla-smoke.yaml",
+        experiment="configs/.tests/evaluation/vanilla.yaml",
         local_profile=None,
         offline=offline,
         env_file=str(env_file),

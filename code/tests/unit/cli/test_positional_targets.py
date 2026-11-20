@@ -111,7 +111,7 @@ def test_data_targets_require_a_type_before_preview(monkeypatch, target, field, 
 
 
 def test_experiment_positional_plan_and_named_alias_are_equivalent():
-    spec = "experiments/workflows/libero-model-tree.json"
+    spec = "examples/experiments/plugin-pipeline-smoke.yaml"
     def invoke(*arguments):
         result = subprocess.run([str(ROOT / "ovlab"), "experiment", "plan", *arguments, "--json"],
                                 cwd=ROOT, text=True, capture_output=True, check=True)
@@ -128,7 +128,7 @@ def test_experiment_positional_plan_and_named_alias_are_equivalent():
 def test_experiment_cli_selects_execution_mode(action, options, expected):
     result = subprocess.run(
         [str(ROOT / "ovlab"), "experiment", action,
-         "experiments/workflows/libero-model-tree.yaml", *options, "--json"],
+         "examples/experiments/plugin-pipeline-smoke.yaml", *options, "--json"],
         cwd=ROOT, text=True, capture_output=True, check=True,
     )
     assert json.loads(result.stdout)["result"]["execution"] == expected

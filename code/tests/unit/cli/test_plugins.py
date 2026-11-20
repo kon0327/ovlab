@@ -94,8 +94,11 @@ def external_plugin(tmp_path, monkeypatch):
         if name == "example_policy" or name.startswith("example_policy."):
             monkeypatch.delitem(sys.modules, name)
     root = tmp_path / 'ovlab'
-    shutil.copytree(ROOT / 'configs', root / 'configs')
-    shutil.copytree(ROOT / 'experiments/evaluation', root / 'experiments/evaluation')
+    shutil.copytree(ROOT / 'config', root / 'config')
+    shutil.copytree(ROOT / 'examples/experiments', root / 'examples/experiments')
+    (root / 'experiments/evaluation').mkdir(parents=True)
+    for category in ('resources', 'policies', 'protocols', 'local', 'deploy'):
+        (root / 'configs' / category).mkdir(parents=True, exist_ok=True)
     shutil.copytree(ROOT / 'examples/policy-plugin', root / 'examples/policy-plugin')
     shutil.copytree(ROOT / 'deploy/compose', root / 'deploy/compose')
     shutil.copytree(ROOT / 'deploy/scripts', root / 'deploy/scripts')
@@ -110,24 +113,23 @@ def external_plugin(tmp_path, monkeypatch):
                 'plugins': manifest['plugins'], 'builds': manifest['builds']}
     registry['plugins']['example_policy']['sources'] = ['example-policy']
     registry['builds']['policy-example'].update(dockerfile='external/example-policy/Dockerfile', sources=['example-policy'])
-    shutil.copyfile(ROOT / 'plugins/openvla/configs/resources/registry.yaml', root / 'configs/resources/registry.yaml')
-    for path in (root / 'experiments/evaluation').glob('*.yaml'):
-        path.write_text(path.read_text().replace('plugin://openvla/resources/registry.yaml', 'resources/registry.yaml'))
+    shutil.copyfile(ROOT / 'examples/policy-plugin/configs/resources.yaml', root / 'configs/resources/registry.yaml')
     write_registry(root, registry)
     monkeypatch.delenv('OVLAB_PLUGIN_REGISTRY', raising=False)
     policy = {'schema_version': '0.1.0', 'kind': 'policy', 'type': 'example_policy', 'settings': {
-        'checkpoint_id': 'openvla-7b', 'input': {}, 'runtime': {'quantization': 'none'},
-        'action': {'action_interface': 'interfaces/actions/mock-delta-gripper-v1.yaml'}, 'raw_output': {'enabled': False}}}
+        'checkpoint_id': 'example-constant', 'input': {}, 'runtime': {'quantization': 'none'},
+        'action': {'action_interface': 'ovlab://interfaces/actions/mock-delta-gripper-v1.yaml'}, 'raw_output': {'enabled': False}}}
     path = root / 'configs/policies/example.yaml'
     path.write_text(dumps(policy))
-    experiment = load(root / 'experiments/evaluation/mock-e2e-smoke.yaml')
+    experiment = load(root / 'examples/experiments/mock-smoke.yaml')
     experiment['components']['policy'] = 'policies/example.yaml'
     experiment['components']['protocol'] = 'protocols/example.yaml'
+    experiment['resources']['registry'] = 'resources/registry.yaml'
     (root / 'experiments/evaluation/example-plugin.yaml').write_text(dumps(experiment))
-    protocol = load(root / 'configs/protocols/smoke-v1.yaml')
+    protocol = load(root / 'config/protocols/smoke.yaml')
     protocol['recording']['raw_policy_output'] = False
     (root / 'configs/protocols/example.yaml').write_text(dumps(protocol))
-    profile = load(root / 'configs/local/profile.example.yaml')
+    profile = load(root / 'config/local/example.yaml')
     profile['paths'] = {key: str(tmp_path / key) for key in profile['paths']}
     profile['resources'] = {'checkpoints': {}}
     (root / 'configs/local/example.yaml').write_text(dumps(profile))
@@ -173,9 +175,9 @@ def test_external_plugin_resolves_predicts_and_plans_deployment_and_evaluation(e
         assert document['plugins']['example_policy']['entrypoint'] == 'example_policy.plugin:plugin'
         assert len(document['source_identities']['example-policy']['content_sha256']) == 64
     assert not config.exists()
-    evaluation = load(root / 'experiments/evaluation/libero10-vanilla-rpc-smoke.yaml')
+    evaluation = load(root / 'experiments/evaluation/example-plugin.yaml')
     evaluation['components']['policy'] = 'policies/example.yaml'
-    evaluation['deployment']['profile'] = 'example'
+    evaluation['deployment'] = {'profile': 'example', 'renderer': 'egl'}
     (root / 'experiments/evaluation/example-compose.yaml').write_text(dumps(evaluation))
     compose = ComposeDeployment(root, environment={})
     evaluation_plan = compose.plan('example-compose', env_file='deploy/compose/.env.example')

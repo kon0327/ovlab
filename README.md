@@ -15,8 +15,7 @@ OVLAB follows a **Define experiment → Plan → Run → Report** workflow: a YA
 experiment tree can contain models, tasks and ablations at any depth. Each node
 can run independently and produces immutable canonical evidence plus a
 hierarchical report. See the [experiment workflow guide](docs/EXPERIMENT_WORKFLOW.md)
-and example [YAML](experiments/workflows/libero-model-tree.yaml) or
-[JSON](experiments/workflows/libero-model-tree.json).
+and example [pipeline smoke](examples/experiments/plugin-pipeline-smoke.yaml).
 
 For visual authoring, run `ovlab editor` to open the static
 [Workflow Studio](code/apps/workflow-builder/index.html) in a browser. It offers
@@ -40,8 +39,11 @@ the complete adapter connection.
 ## Repository layout
 
 - `code/`: generic core packages, the policy SDK, benchmark adapters, metrics, applications, and tests.
-- `plugins/`: independent plugin projects; `plugins/openvla/` owns the reference model integration and its runtime dependencies.
-- `configs/`: shared interfaces, benchmark/metric/protocol settings and explicit local overrides of plugin defaults.
+- `plugins/`: independent OpenVLA, OpenVLA-OFT and OpenVLA-QuIC projects, with reusable integration code under `_shared/`.
+- `config/`: tracked OVLAB interfaces, benchmark, metric, protocol and artifact defaults, addressed with `ovlab://`.
+- `configs/`: ignored user extensions of plugin or OVLAB defaults.
+- `experiments/`: ignored user experiment specifications.
+- `examples/experiments/`: the small maintained verification suite.
 - `deploy/`: reserved for Docker, Compose, and deployment scripts.
 - `external/`: ignored source workspace populated from registered Git commits or local projects.
 - `references/`: tracked historical source artifacts and their provenance.
@@ -75,7 +77,7 @@ environment, install it once into `~/.local/bin`:
 ```bash
 bash ./install-ovlab-cli.sh
 ovlab --help
-ovlab run experiments/workflows/libero-model-tree.json --plan
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml --plan
 ```
 
 The installer prints a PATH instruction if `~/.local/bin` is not already on
@@ -114,17 +116,16 @@ environment when available:
 
 ```bash
 ./ovlab --help
-./ovlab run experiments/workflows/libero-model-tree.yaml --plan
-./ovlab run experiments/workflows/libero-model-tree.yaml
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
-./ovlab run experiments/evaluation/libero10-lora-4bit-three-per-task.yaml
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml --plan
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml --verify
+./ovlab run examples/experiments/openvla-eval.yaml
 ./ovlab run EXPERIMENT_ID_OR_HASH --verify
 ./ovlab doctor
 ./ovlab data list runs
 ./ovlab report EXPERIMENT_ID_OR_HASH
 ./ovlab checkpoint list
-./ovlab deploy run openvla-libero10 --dry-run
+./ovlab deploy run plugin://openvla/deploy/default.yaml --dry-run
 ```
 
 `ovlab run EXPERIMENT` is the single execution entry point. The resolver reads
@@ -143,7 +144,7 @@ renderer in the evaluation deployment, and `execution.max_workers` at the workfl
 root. Configuration mappings inherit from parent to child; sequences and scalar
 values replace inherited values. See the [experiment guide](docs/EXPERIMENT_WORKFLOW.md).
 
-Plugin defaults are addressed as `plugin://openvla/policies/openvla-vanilla/base.yaml`.
+Plugin defaults are addressed as `plugin://openvla/policy/default.yaml`.
 A local YAML can `extends` a plugin URI and override just the checkpoint,
 quantization or execution settings; use the local file explicitly as the
 experiment component. Plugin checkpoint catalogs are declared in the manifest

@@ -3,7 +3,7 @@
 **Verze:** 1.0, 2026-10-01  
 **Účel:** pracovní technická specifikace pro disertaci a implementaci.  
 **Status:** matematické jádro vychází z publikovaného QuIC; integrační kroky jsou návrh, nikoli zpráva o dokončené implementaci.  
-**Související dokument:** [QuIC-WC.md](QuIC-WC.md).
+**QuIC-WC:** navrhovaná výzkumná větev bez běhové implementace v OVLABu.
 
 ## 1. Vymezení metody
 

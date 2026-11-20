@@ -29,7 +29,7 @@ from ovlab_openvla_common import (
     OpenVlaMethodFamily,
 )
 from ovlab_policy_sdk import PolicyAdapter
-from ovlab_openvla_project import PLUGIN_VERSION
+from ovlab_openvla_common.version import PLUGIN_VERSION
 
 from .errors import OpenVlaActionDecodeError, OpenVlaInferenceError, OpenVlaPreprocessingError
 from .runtime import HuggingFaceOpenVlaRuntime, OpenVlaRuntime

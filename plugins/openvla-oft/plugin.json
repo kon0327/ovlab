@@ -1,0 +1,172 @@
+{
+  "schema_version": "ovlab.plugin/v1",
+  "api_version": "1",
+  "kind": "policy",
+  "version": "0.2.0",
+  "id": "openvla-oft",
+  "description": "OpenVLA-OFT policy integration for OVLAB.",
+  "sources": {
+    "openvla-oft": {
+      "kind": "git",
+      "url": "https://github.com/moojink/openvla-oft.git",
+      "commit": "e4287e94541f459edc4feabc4e181f537cd569a8",
+      "path": "external/openvla-oft"
+    },
+    "openvla-support": {
+      "kind": "local",
+      "path": "../_shared/openvla-support"
+    }
+  },
+  "plugins": {
+    "openvla_oft": {
+      "config_type": "openvla_oft",
+      "id": "openvla-oft",
+      "family": "openvla_oft",
+      "runtime_status": "implemented",
+      "entrypoint": "ovlab_openvla_oft.plugin:plugin",
+      "sources": [
+        "openvla-oft",
+        "openvla-support"
+      ],
+      "source_repositories": [
+        "external/openvla-oft"
+      ],
+      "deployment": {
+        "profile": "oft",
+        "role": "policy-openvla-oft",
+        "image": "ovlab-policy-openvla-oft:local",
+        "image_env": "OVLAB_OFT_IMAGE",
+        "policy_service": "policy-openvla-oft",
+        "benchmark_service": "benchmark-oft",
+        "quantization": [
+          "none",
+          "8bit",
+          "4bit"
+        ],
+        "observation_profile": "native_oft"
+      },
+      "artifact_forms": [
+        "merged_backbone_with_auxiliary_components"
+      ],
+      "capabilities": {
+        "observation": {
+          "images": {
+            "encoding": "raw",
+            "color_space": "RGB",
+            "dtype": "uint8",
+            "roles": [
+              "primary",
+              "wrist"
+            ]
+          },
+          "proprioception": {
+            "required": true,
+            "canonical_name": "robot.proprioception",
+            "dimension": 8
+          },
+          "instruction": {
+            "required": true,
+            "dynamic": true
+          }
+        },
+        "action": {
+          "dimension": 7,
+          "representation": "delta_pose",
+          "rotation_representation": "axis_angle",
+          "gripper_convention": "closed_positive",
+          "codecs": [
+            "openvla-to-libero-v1"
+          ],
+          "prediction_horizon": {
+            "minimum": 8,
+            "maximum": 8,
+            "configurable": false
+          }
+        },
+        "inference": {
+          "quantization": {
+            "none": {
+              "backend": null,
+              "weight_dtype": "bfloat16",
+              "training_supported": true
+            },
+            "8bit": {
+              "backend": "bitsandbytes",
+              "format": "llm_int8",
+              "bits": 8,
+              "compute_dtype": "bfloat16",
+              "training_supported": false
+            },
+            "4bit": {
+              "backend": "bitsandbytes",
+              "format": "nf4",
+              "bits": 4,
+              "compute_dtype": "bfloat16",
+              "storage_dtype": "float16",
+              "double_quantization": true,
+              "training_supported": false
+            }
+          },
+          "policy_configs": {
+            "none": "plugin://openvla-oft/policy/default.yaml"
+          }
+        },
+        "checkpoints": {
+          "expected_loaders": [
+            "ovlab-openvla-oft"
+          ],
+          "artifact_forms": [
+            "merged_backbone_with_auxiliary_components"
+          ],
+          "requires_base_model": false,
+          "adaptation_suite": "LIBERO-10"
+        },
+        "training": {
+          "supported": false,
+          "implementations": [],
+          "methods": [],
+          "quantization": [],
+          "status": "unavailable"
+        }
+      },
+      "control_sources": [
+        "openvla-support"
+      ]
+    }
+  },
+  "builds": {
+    "policy-openvla-oft": {
+      "dockerfile": "docker/Dockerfile.openvla-oft",
+      "image": "ovlab-policy-openvla-oft:local",
+      "sources": [
+        "openvla-oft",
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/openvla-oft.pylock.toml",
+        "locks/openvla-oft.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    }
+  },
+  "configs": {
+    "root": "configs",
+    "checkpoints": [
+      "registry/default.yaml"
+    ],
+    "templates": {
+      "evaluate": [
+        "evaluate/default.yaml"
+      ]
+    }
+  },
+  "capabilities": {
+    "policy": {
+      "supported": true
+    },
+    "training": {
+      "supported": false
+    }
+  }
+}

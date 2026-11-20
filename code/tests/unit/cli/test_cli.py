@@ -25,8 +25,7 @@ from ovlab_runner import ReportingRendererError
 
 REPOSITORY = Path(__file__).resolve().parents[4]
 OVLAB = REPOSITORY / "ovlab"
-QUIC_PEFT = "configs/policies/openvla-quic/quic-peft-bones.yaml"
-QUIC_WC = "configs/policies/openvla-quic/quic-wc-bones.yaml"
+QUIC_POLICY = "configs/.tests/evaluation/quic.yaml"
 
 
 def test_unified_run_help_shows_one_target_and_only_modes():
@@ -40,9 +39,9 @@ def test_unified_run_help_shows_one_target_and_only_modes():
 
 
 @pytest.mark.parametrize("source,phase", [
-    ("experiments/training/openvla-libero10-quic-smoke.yaml", "train"),
-    ("experiments/evaluation/libero10-lora-4bit-three-per-task.yaml", "evaluate"),
-    ("experiments/workflows/libero10-two-task-training-smoke.yaml", "train"),
+    ("examples/experiments/plugin-pipeline-smoke.yaml", "train"),
+    ("configs/.tests/evaluation/openvla.yaml", "evaluate"),
+    ("examples/experiments/plugin-pipeline-smoke.yaml", "train"),
 ])
 def test_unified_plan_resolves_all_source_kinds_without_side_effects(source, phase):
     result = _run("run", source, "--plan", "--json")
@@ -55,7 +54,7 @@ def test_unified_plan_resolves_all_source_kinds_without_side_effects(source, pha
 
 @pytest.mark.parametrize("mode", ["--plan", "--verify"])
 def test_unified_config_modes_never_start_a_workload(mode):
-    result = _run("run", "experiments/workflows/libero10-two-task-training-smoke.yaml", mode, "--json")
+    result = _run("run", "examples/experiments/plugin-pipeline-smoke.yaml", mode, "--json")
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["result"]["side_effects_performed"] is False
 
@@ -86,7 +85,7 @@ def _run(*args, environment=None):
     ("--help",),
     ("--version",),
     ("policy", "list", "--json"),
-    ("config", "validate", QUIC_PEFT, "--mode", "descriptor", "--json"),
+    ("plugin", "list", "--json"),
 ])
 def test_lightweight_commands_do_not_import_runtime_packages(arguments):
     invocation = "code=0; _parser().format_help()" if arguments == ("--help",) else f"code=main({list(arguments)!r})"
@@ -187,14 +186,14 @@ def test_run_execution_scopes_sigint_and_sigterm_handlers(monkeypatch):
     )
 
     result, json_mode, render = _dispatch(
-        _parser().parse_args(["run", "experiments/evaluation/mock-e2e-smoke.yaml"])
+        _parser().parse_args(["run", "examples/experiments/mock-smoke.yaml"])
     )
 
     assert result == {"status": "completed"}
     assert json_mode is False and render is None
     assert events == [
         ("install",),
-        ("run", "experiments/evaluation/mock-e2e-smoke.yaml"),
+        ("run", "examples/experiments/mock-smoke.yaml"),
         ("restore", {"previous": "handlers"}),
     ]
 
@@ -205,9 +204,9 @@ def test_private_native_worker_resolves_bare_target_and_local_profile(monkeypatc
             return {"config": str(config), "output_root": output_root, "local_profile": local_profile}
 
     monkeypatch.setattr(cli_module, "_application", lambda: Application())
-    args = _parser().parse_args(["_native-run", "mock-e2e-smoke", "--profile", "local.yaml", "--dry-run"])
+    args = _parser().parse_args(["_native-run", "mock-smoke", "--profile", "local.yaml", "--dry-run"])
     result, _, _ = _dispatch(args)
-    assert result["config"] == str(REPOSITORY / "experiments/evaluation/mock-e2e-smoke.yaml")
+    assert result["config"] == str(REPOSITORY / "examples/experiments/mock-smoke.yaml")
     assert result["local_profile"] == "local.yaml"
 
 
@@ -331,18 +330,18 @@ def test_policy_list_uses_compact_rows_and_detail_retains_every_field():
     document = json.loads(detailed.stdout)
     assert detailed.returncode == 0 and detailed.stderr == ""
     assert {row["id"] for row in document} == {
-        "vanilla", "lora", "openvla-oft", "quic-peft", "quic-wc",
+        "vanilla", "lora", "openvla-oft", "quic-peft",
     }
 
 
 def test_compact_validation_and_empty_registry_outputs_are_operator_friendly(tmp_path):
     validated = _run(
-        "config", "validate", QUIC_PEFT,
+        "config", "validate", "ovlab://policies/mock.yaml",
         "--mode", "descriptor",
     )
     assert validated.returncode == 0 and validated.stderr == ""
     assert "valid" in validated.stdout and "yes" in validated.stdout
-    assert "scientific hash" in validated.stdout
+    assert "policy" in validated.stdout and "descriptor" in validated.stdout
 
     environment = {
         "OVLAB_DATASET_RUNTIME": "host",
@@ -609,13 +608,12 @@ def test_policy_list_reports_current_profiles_sources_and_runtime_status():
     payload = json.loads(result.stdout)
     assert payload["status"] == "success"
     methods = {item["id"]: item for item in payload["result"]}
-    assert set(methods) == {"vanilla", "lora", "openvla-oft", "quic-peft", "quic-wc"}
+    assert set(methods) == {"vanilla", "lora", "openvla-oft", "quic-peft"}
     assert methods["quic-peft"]["supported_quic_profiles"] == [*PROFILES, "custom"]
     assert methods["quic-peft"]["config_type"] == "openvla_quic"
     assert methods["quic-peft"]["runtime_status"] == "experimental"
     assert methods["quic-peft"]["source_repositories"] == ["external/openvla-quic", "external/quic-peft-vla"]
-    assert methods["quic-wc"]["runtime_status"] == "unavailable"
-    assert all("supported_quic_profiles" not in methods[name] for name in ("vanilla", "lora", "openvla-oft", "quic-wc"))
+    assert all("supported_quic_profiles" not in methods[name] for name in ("vanilla", "lora", "openvla-oft"))
     assert all("quic_profile" not in item for item in methods.values())
     human = _run("policy", "list")
     assert human.returncode == 0
@@ -623,38 +621,16 @@ def test_policy_list_reports_current_profiles_sources_and_runtime_status():
     assert "QP0" not in human.stdout
 
 
-@pytest.mark.parametrize("config", [QUIC_PEFT, QUIC_WC])
-def test_quic_descriptor_validation_and_description_are_inspection_only(config):
-    validated = _run("config", "validate", config, "--mode", "descriptor", "--json")
-    assert validated.returncode == 0 and validated.stderr == ""
-    described = _run("policy", "describe", config, "--json")
-    result = json.loads(described.stdout)["result"]
-    assert result["readiness"]["runtime_ready"] is False
-    assert result["profile"] == {
-        "active_transformation": False,
-        "definition_availability": "not_applicable",
-        "definition_hash": None,
-        "definition_version": None,
-        "id": "QP0",
-    }
+def test_quic_default_requires_checkpoint_binding_or_explicit_adapter():
+    result = _run("config", "validate", "plugin://openvla-quic/policy/default.yaml", "--json")
+    assert result.returncode == ExitCode.CONFIGURATION
+    assert "adapter" in json.loads(result.stdout)["errors"][0]["message"]
 
 
-@pytest.mark.parametrize(
-    ("config", "error_type"),
-    [
-        (QUIC_PEFT, "QuICPEFTIntegrationIncompleteError"),
-        (QUIC_WC, "QuICWCImplementationIncompleteError"),
-    ],
-)
-def test_quic_runtime_and_dry_run_fail_with_typed_exit_code(config, error_type):
-    result = _run("config", "validate", config, "--mode", "runtime", "--json")
-    assert result.returncode == 4 and result.stderr == ""
-    error = json.loads(result.stdout)["errors"][0]
-    assert error["type"] == error_type
-    assert error["context"]["variant"] in {"quic-peft", "quic-wc"}
-    dry = _run("_native-run", config, "--dry-run", "--json")
-    assert dry.returncode == 4
-    assert json.loads(dry.stdout)["errors"][0]["type"] == error_type
+def test_complete_quic_policy_can_be_validated_without_model_initialization():
+    result = _run("config", "validate", ".tests/components/quic-policy.yaml", "--json")
+    assert result.returncode == 0 and result.stderr == ""
+    assert json.loads(result.stdout)["result"]["valid"] is True
 
 
 def test_json_success_and_failure_are_single_documents_with_stderr_purity():
@@ -721,13 +697,13 @@ def test_dry_run_is_deterministic_and_has_no_filesystem_side_effects(tmp_path):
         'devices:\n  primary_gpu: cuda:0\n', encoding="utf-8",
     )
     env = {"OVLAB_LOCAL_PROFILE": str(profile)}
-    first = _run("_native-run", "experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
-    second = _run("_native-run", "experiments/evaluation/mock-e2e-smoke.yaml", "--dry-run", "--json", environment=env)
+    first = _run("_native-run", "examples/experiments/mock-smoke.yaml", "--dry-run", "--json", environment=env)
+    second = _run("_native-run", "examples/experiments/mock-smoke.yaml", "--dry-run", "--json", environment=env)
     assert first.returncode == second.returncode == 0
     assert first.stdout == second.stdout
     assert json.loads(first.stdout)["result"]["side_effects_performed"] is False
     assert not runs.exists()
-    real = _run("_native-run", "experiments/evaluation/mock-e2e-smoke.yaml", "--json", environment=env)
+    real = _run("_native-run", "examples/experiments/mock-smoke.yaml", "--json", environment=env)
     assert real.returncode == 3
     assert "production CLI run currently requires LIBERO" in json.loads(real.stdout)["errors"][0]["message"]
     assert not runs.exists()
@@ -750,7 +726,7 @@ def test_run_profile_option_overrides_local_profile_environment(tmp_path):
     configured = local_profile("configured")
     selected = local_profile("selected")
     result = _run(
-        "_native-run", "mock-e2e-smoke", "--profile", str(selected), "--dry-run", "--json",
+        "_native-run", "mock-smoke", "--profile", str(selected), "--dry-run", "--json",
         environment={"OVLAB_LOCAL_PROFILE": str(configured)},
     )
     assert result.returncode == 0, result.stderr
@@ -762,7 +738,7 @@ def test_run_profile_option_overrides_local_profile_environment(tmp_path):
 def test_resolved_json_is_deterministic_and_not_wrapped_as_python_repr():
     environment = {"OVLAB_LOCAL_PROFILE": str(REPOSITORY / "configs/local/gate-b-showrack.yaml")}
     arguments = (
-        "config", "resolve", "experiments/evaluation/mock-e2e-smoke.yaml",
+        "config", "resolve", "examples/experiments/mock-smoke.yaml",
         "--mode", "runtime", "--format", "json",
     )
     first = _run(*arguments, environment=environment)
@@ -777,8 +753,8 @@ def test_resolved_json_is_deterministic_and_not_wrapped_as_python_repr():
 def test_output_root_does_not_change_scientific_hash(tmp_path):
     environment = {"OVLAB_LOCAL_PROFILE": str(REPOSITORY / "configs/local/gate-b-showrack.yaml")}
     app = OvlabApplication(REPOSITORY, environment={**os.environ, **environment})
-    first = app.execution_plan("experiments/evaluation/mock-e2e-smoke.yaml", output_root=tmp_path / "one")
-    second = app.execution_plan("experiments/evaluation/mock-e2e-smoke.yaml", output_root=tmp_path / "two")
+    first = app.execution_plan("examples/experiments/mock-smoke.yaml", output_root=tmp_path / "one")
+    second = app.execution_plan("examples/experiments/mock-smoke.yaml", output_root=tmp_path / "two")
     assert first["scientific_config_hash"] == second["scientific_config_hash"]
     assert first["output_root"] != second["output_root"]
 
@@ -790,13 +766,13 @@ def test_container_image_tag_does_not_change_scientific_hash():
         "OVLAB_LOCAL_PROFILE": profile,
         "OVLAB_BENCHMARK_IMAGE": "registry.example/ovlab-benchmark:first",
         "OVLAB_IMAGE_REFERENCE": "registry.example/ovlab-benchmark:first",
-    }).execution_plan("experiments/evaluation/mock-e2e-smoke.yaml")
+    }).execution_plan("examples/experiments/mock-smoke.yaml")
     second = OvlabApplication(REPOSITORY, environment={
         **os.environ,
         "OVLAB_LOCAL_PROFILE": profile,
         "OVLAB_BENCHMARK_IMAGE": "registry.example/ovlab-benchmark:second",
         "OVLAB_IMAGE_REFERENCE": "registry.example/ovlab-benchmark:second",
-    }).execution_plan("experiments/evaluation/mock-e2e-smoke.yaml")
+    }).execution_plan("examples/experiments/mock-smoke.yaml")
     assert first["scientific_config_hash"] == second["scientific_config_hash"]
 
 
@@ -821,7 +797,7 @@ def test_gate_i_cli_human_and_json_inspection_stay_dependency_light(tmp_path):
     assert payload["result"]["source_revision"] == "a7c9ae18499b6eea8a32f78a9302327b752b1b5f"
 
     validated = _run(
-        "train", "validate", "--profile", "experiments/training/openvla-libero10-lora-smoke.yaml", "--json",
+        "train", "validate", "--profile", "configs/.tests/train/lora.yaml", "--json",
         environment=environment,
     )
     result = json.loads(validated.stdout)["result"]
@@ -849,7 +825,7 @@ def test_gate_i_plan_missing_dataset_is_typed_and_never_downloads(tmp_path):
         "OVLAB_AVAILABLE_VRAM_GIB": "32",
     }
     result = _run(
-        "train", "plan", "--profile", "experiments/training/openvla-libero10-lora-smoke.yaml", "--json",
+        "train", "plan", "--profile", "configs/.tests/train/lora.yaml", "--json",
         environment=environment,
     )
     assert result.returncode == ExitCode.POLICY_UNAVAILABLE

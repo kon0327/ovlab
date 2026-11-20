@@ -109,7 +109,10 @@ ovlab/
 │   ├── policies/      concrete OpenVLA-family policy adapters and services
 │   ├── apps/          CLI composition root and experiment runner
 │   └── tests/         unit, contract, integration and marked real tests
-├── configs/           portable experiment and component configuration
+├── config/            tracked OVLAB component defaults (ovlab://)
+├── configs/           ignored user component extensions
+├── experiments/       ignored user experiment specifications
+├── examples/          maintained verification scenarios and integration example
 ├── deploy/            Dockerfiles, Compose topology, locks and environments
 ├── external/          pinned upstream sources and the OpenVLA-QuIC fork
 └── ovlab              launcher for the host CLI
@@ -729,6 +732,6 @@ repair source evidence while rendering.
 | Metrics | `code/packages/ovlab-metrics/src/ovlab_metrics/` |
 | Reporting and exports | `code/apps/runner/src/ovlab_runner/derived.py`, `exports.py` |
 | Runtime topology | `deploy/compose/compose.yaml` |
-| Portable experiments | `experiments/evaluation/` |
-| Resource identities | `configs/resources/registry.yaml` |
+| Portable experiments | `examples/experiments/` and ignored user `experiments/` |
+| Resource identities | Plugin-owned `configs/registry/default.yaml` and explicit user catalogs |
 | External source pins | Versioned policy/source/build registry (`ovlab.plugins/v1`) |

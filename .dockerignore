@@ -10,13 +10,15 @@
 !code/packages/
 !code/packages/**
 
+!config/
+!config/**
+# User configurations enter images only through an explicitly resolved bundle.
 !configs/
-!configs/**
-!experiments/
-!experiments/**
-experiments/**/.generated/
-configs/local/*
-!configs/local/profile.example.yaml
+configs/**
+!configs/README.md
+!examples/
+!examples/experiments/
+!examples/experiments/**
 
 !deploy/
 !deploy/config/

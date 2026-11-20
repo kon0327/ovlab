@@ -97,8 +97,6 @@ class ConfigBundleBuilder:
         self.repository_root = Path(repository_root).resolve()
         self.config_root = (self.repository_root / "configs").resolve()
         self.references = ConfigReferences(self.repository_root, self.config_root)
-        if not self.config_root.is_dir():
-            raise ValueError(f"config root does not exist: {self.config_root}")
 
     @with_registry
     def _source(self, reference: str) -> Path:
@@ -137,7 +135,7 @@ class ConfigBundleBuilder:
             parent_path = self.references.parent(path, parent)
             parent_document = self._extends_closure(
                 self._relative(parent_path), expected_kind, selected, (*stack, path),
-                validate_document=validate_document,
+                validate_document=False,
             )
             if "type" in document and document["type"] != parent_document.get("type"):
                 raise ValueError(f"{relative}.type must match its parent")
@@ -213,9 +211,11 @@ class ConfigBundleBuilder:
         # A selected catalog may contain artifact metadata validated by another
         # registered project. Its lightweight control code belongs in the worker.
         resource_doc = self.load_component(experiment_document["resources"]["registry"], "resource_registry")
-        artifact_forms = {entry.get("artifact", {}).get("form") for entry in resource_doc["checkpoints"].values()}
-        project_ids.update(descriptor["project"] for descriptor in registry_snapshot["plugins"].values()
-                           if descriptor.get("project") and artifact_forms.intersection(descriptor.get("artifact_forms", [])))
+        from .policy_plugins import checkpoint_validator
+        for entry in resource_doc["checkpoints"].values():
+            owner = checkpoint_validator(entry, self.repository_root, registry=registry_snapshot)
+            if owner is not None and owner.descriptor.get("project"):
+                project_ids.add(owner.descriptor["project"])
         for project_id in sorted(project_ids):
             project_root = Path(plugin_project_root(project_id, self.repository_root)).resolve()
             candidates = [project_root / name for name in ("plugin.json", "pyproject.toml")]
@@ -237,6 +237,33 @@ class ConfigBundleBuilder:
                 selected.add(relative)
                 extra_sources[relative] = source
 
+        # Plugin-side shared control packages are explicit source dependencies.
+        # Freeze their Python code alongside the owning project so workers never
+        # need the host checkout or a network fetch to validate configuration.
+        from .plugin_projects import control_source_root
+        control_sources = set()
+        for descriptor in registry_snapshot["plugins"].values():
+            if descriptor.get("project") in project_ids or descriptor is plugin:
+                control_sources.update(descriptor.get("control_sources", []))
+        for source_id in sorted(control_sources):
+            source_root = Path(control_source_root(source_id, self.repository_root, registry_snapshot)).resolve()
+            candidates = [source_root / "pyproject.toml"]
+            if (source_root / "src").is_dir():
+                candidates.extend((source_root / "src").rglob("*"))
+            for path in source_root.iterdir():
+                if path.is_file() and path.suffix == ".py":
+                    candidates.append(path)
+                elif path.is_dir() and (path / "__init__.py").is_file():
+                    candidates.extend(path.rglob("*"))
+            for source in candidates:
+                if source.is_symlink():
+                    raise ValueError(f"plugin control source cannot be a symlink: {source}")
+                if not source.is_file() or "__pycache__" in source.parts or source.suffix in {".pyc", ".pyo"}:
+                    continue
+                relative = f"plugins/sources/{source_id}/{source.relative_to(source_root).as_posix()}"
+                selected.add(relative)
+                extra_sources[relative] = source
+
         from .plugin_identity import registered_source_identities
         registry_snapshot["source_identities"] = registered_source_identities(
             self.repository_root,
@@ -245,6 +272,9 @@ class ConfigBundleBuilder:
                                for name in descriptor.get("sources", []))),
             registry=registry_snapshot,
         )
+        for source_id in control_sources:
+            if registry_snapshot["sources"][source_id]["kind"] == "local":
+                registry_snapshot["sources"][source_id]["path"] = f"configs/plugins/sources/{source_id}"
         gpu = experiment_document.get("runtime", {}).get("gpu", "all" if plugin.get("deployment", {}).get("gpu", True) else None)
         runtime_profile = "plugins/runtime-profile.yaml"
         selected.add(runtime_profile)

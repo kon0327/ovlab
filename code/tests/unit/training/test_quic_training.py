@@ -6,6 +6,7 @@ import struct
 
 import pytest
 
+from helpers.training_profiles import training_document
 from ovlab_benchctl.training_composition import load_training_profile
 from ovlab_benchctl.training_errors import CheckpointBundleError, TrainingProfileError
 from ovlab_benchctl.training_profiles import TrainingProfile, TrainingPlanner
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def profile():
-    value = deepcopy(load_training_profile(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml").document)
+    value = training_document("quic")
     value["trainer"]["implementation"] = "openvla-quic"
     value["dataset"]["partition"] = {"seed": 42, "validation_fraction": .2, "action_normalization": "host"}
     value["training"].update(validation_batches=2, normalization={"unnorm_key": "libero_10"})
@@ -60,7 +61,7 @@ def test_invalid_quic_contract_fails_before_runtime_import(mutate, match):
 
 
 def staged(tmp_path, *, fitted=False, names=("linear",), convolution=False):
-    scientific = {"training": profile()["training"], "dataset": {"dataset_id": "dataset-fixture"},
+    scientific = {"trainer": {"id": "openvla-quic"}, "training": profile()["training"], "dataset": {"dataset_id": "dataset-fixture"},
         "base_checkpoint": {"resource_id": "base", "revision": "a" * 40, "aggregate_sha256": "b" * 64},
         "output": {"output_kind": "adapter"}}
     if fitted:

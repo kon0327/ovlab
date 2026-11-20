@@ -1,7 +1,6 @@
 from dataclasses import replace
 import hashlib
 import importlib
-import importlib.util
 from pathlib import Path
 import sys
 
@@ -306,11 +305,9 @@ def test_scientific_hash_is_sensitive_to_source_and_manifest_identity():
     assert changed_archive.scientific_hash != changed_manifest.scientific_hash
 
 
-def test_cpu_characterization_is_explicitly_deferred_without_mutating_dependencies():
+def test_historical_intake_records_deferred_cpu_characterization():
     provenance = load(PROVENANCE_PATH)
-    assert importlib.util.find_spec("torch") is None
-    assert importlib.util.find_spec("peft") is None
-    assert importlib.util.find_spec("transformers") is None
+    # Installed packages today do not rewrite the original intake evidence.
     assert provenance["validation"]["cpu_characterization"] == (
         "deferred_missing_torch_peft_transformers_in_ovlab_tester"
     )

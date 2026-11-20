@@ -15,11 +15,11 @@ def test_user_launcher_runs_from_other_directory_and_preserves_local_specs(tmp_p
     subprocess.run(installer, env=env, check=True, capture_output=True, text=True)
     subprocess.run(installer, env=env, check=True, capture_output=True, text=True)
     env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
-    reference = "experiments/workflows/libero-model-tree.json"
+    reference = "examples/experiments/plugin-pipeline-smoke.yaml"
     command = ["ovlab", "experiment", "plan", "--spec", reference, "--json"]
     completed = subprocess.run(command, cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
     result = json.loads(completed.stdout)["result"]
-    assert result["id"] == "libero-model-tree"
+    assert result["id"] == "plugin-pipeline-smoke"
     assert Path(result["spec"]) == ROOT / reference
 
     local_spec = tmp_path / "local.json"

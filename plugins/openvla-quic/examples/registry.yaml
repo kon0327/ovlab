@@ -1,0 +1,7 @@
+# Copy to configs/registry/my-checkpoints.yaml and add your checkpoint entries.
+# Each remote entry needs repo_id, revision and its verified file inventory.
+# Select this catalog explicitly through your experiment resources.registry.
+schema_version: "0.1.0"
+kind: "resource_registry"
+extends: "plugin://openvla-quic/registry/default.yaml"
+checkpoints: {}

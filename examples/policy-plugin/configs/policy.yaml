@@ -7,6 +7,6 @@ settings:
   runtime:
     quantization: none
   action:
-    action_interface: interfaces/actions/libero-osc-pose-v1.yaml
+    action_interface: ovlab://interfaces/actions/libero-osc-pose-v1.yaml
   raw_output:
     enabled: false

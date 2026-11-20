@@ -328,14 +328,12 @@ def validate_registry(doc, path):
             character not in "0123456789abcdef" for character in entry["expected_sha256"]
         ):
             raise ConfigSchemaError(f"{entry_path}.expected_sha256 must be a SHA-256 digest")
-        from .policy_plugins import registered_plugins, call_plugin
+        from .policy_plugins import checkpoint_validator, call_plugin
         exact_type(entry["method"], dict, f"{entry_path}.method")
         exact_type(entry["artifact"], dict, f"{entry_path}.artifact")
-        family = entry["method"].get("family")
-        for plugin in registered_plugins():
-            if (entry["artifact"].get("form") in plugin.descriptor.get("artifact_forms", []) or plugin.descriptor["family"] == family) and plugin.descriptor.get("entrypoint"):
-                call_plugin(plugin, "validate_checkpoint", entry, entry_path)
-                break
+        plugin = checkpoint_validator(entry)
+        if plugin is not None:
+            call_plugin(plugin, "validate_checkpoint", entry, entry_path)
     for resource_id, entry in doc["repositories"].items():
         mapping(entry, f"{path}.repositories.{resource_id}", required=("path",))
         exact_type(entry["path"], str, f"{path}.repositories.{resource_id}.path")

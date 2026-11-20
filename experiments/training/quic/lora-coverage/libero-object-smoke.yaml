@@ -1,4 +1,0 @@
-# Local training profile; override plugin defaults below.
-kind: "training"
-id: "openvla-quic-lora-coverage-libero-object-smoke"
-extends: plugin://openvla/training/quic/lora-coverage/libero-object-smoke.yaml

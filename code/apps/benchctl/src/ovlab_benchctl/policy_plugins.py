@@ -162,6 +162,10 @@ def registry_document(repository_root=None, *, document=None, offline=None):
             raise ConfigSchemaError(f"plugin {config_type} requires module:object entrypoint")
         if not isinstance(plugin.get("sources", []), list) or any(not isinstance(v, str) for v in plugin.get("sources", [])) or set(plugin.get("sources", [])) - document["sources"].keys():
             raise ConfigSchemaError(f"plugin {config_type} references unknown sources")
+        controls = plugin.get("control_sources", [])
+        if (not isinstance(controls, list) or any(not isinstance(value, str) or not value for value in controls)
+                or set(controls) - set(plugin.get("sources", []))):
+            raise ConfigSchemaError(f"plugin {config_type}.control_sources must select declared sources")
         for key in ("document_kinds", "artifact_forms"):
             if not isinstance(plugin.get(key, []), list) or any(not isinstance(v, str) or not v for v in plugin.get(key, [])):
                 raise ConfigSchemaError(f"plugin {config_type}.{key} must be a list of strings")
@@ -236,7 +240,10 @@ class LoadedPolicyPlugin:
                 continue
             source = self.registry["sources"][name]
             path = self.repository_root / "external" / name
-            if source["kind"] == "local":
+            if name in self.descriptor.get("control_sources", []):
+                from .plugin_projects import control_source_root
+                path = control_source_root(name, self.repository_root, self.registry)
+            elif source["kind"] == "local":
                 original = Path(source["path"]).expanduser()
                 if not original.is_absolute(): original = self.repository_root / original
                 if original.is_dir(): path = original
@@ -322,7 +329,7 @@ def plugin_config_roots(repository_root=None):
     roots = {}
     for name, project in registry.get("projects", {}).items():
         frozen = root / "configs/plugins/configs" / name
-        if frozen.is_dir():
+        if (root / "configs/.ovlab-bundle.json").is_file() and frozen.is_dir():
             roots[name] = frozen.resolve()
         else:
             from .plugin_projects import project_root
@@ -375,6 +382,19 @@ def plugin_for_type(config_type, repository_root=None):
         if plugin.descriptor["config_type"] == config_type:
             return plugin
     raise ConfigSchemaError(f"unknown policy type {config_type!r}; register its plugin first")
+
+
+def checkpoint_validator(entry, repository_root=None, *, registry=None):
+    """Select one declared validator, preferring the checkpoint's method owner."""
+    root = _root(repository_root)
+    registry = registry_document(root) if registry is None else registry
+    candidates = [descriptor for descriptor in registry["plugins"].values() if descriptor.get("entrypoint")]
+    family = entry.get("method", {}).get("family")
+    form = entry.get("artifact", {}).get("form")
+    matches = [descriptor for descriptor in candidates if family and descriptor["family"] == family]
+    if not matches:
+        matches = [descriptor for descriptor in candidates if form in descriptor.get("artifact_forms", [])]
+    return LoadedPolicyPlugin(deepcopy(matches[0]), root, registry) if matches else None
 
 
 def plugin_for_profile(profile, repository_root=None):

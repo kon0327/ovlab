@@ -1,4 +1,0 @@
-# Compatibility reference; defaults are owned by the OpenVLA plugin.
-schema_version: "0.1.0"
-kind: "quic_policy_descriptor"
-extends: plugin://openvla/policies/openvla-quic/quic-wc-bones.yaml

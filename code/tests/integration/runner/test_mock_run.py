@@ -1,6 +1,7 @@
 """Gate A: dependency-light end-to-end execution and offline reproducibility."""
 
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ import pytest
 from helpers.runner_fixtures import TrackingBenchmark, TrackingPolicy, runner_plan
 from helpers.contexts import make_run_context
 from ovlab_benchctl import ConfigResolver, load
+from ovlab_benchctl.strict_yaml import dumps
 from ovlab_core.contracts import EpisodeTerminalStatus, PolicyObservation, TaskContext, TaskId
 from ovlab_metrics import (
     EpisodeMetricPlugin, MetricEvaluator, MetricRegistry, MetricStatus, TaskMetricPlugin,
@@ -200,12 +202,23 @@ def test_filesystem_run_round_trip_includes_trace_metrics_and_final_manifest(tmp
 
 
 def test_gate_a_configured_run_is_immutable_offline_reproducible_and_deterministic(tmp_path) -> None:
-    resolved = ConfigResolver(CONFIGS, repository_root=REPOSITORY).resolve(
-        "experiments/evaluation/mock-e2e-smoke.yaml", local_profile=_profile(tmp_path)
-    )
-    repeated_resolution = ConfigResolver(CONFIGS, repository_root=REPOSITORY).resolve(
-        "experiments/evaluation/mock-e2e-smoke.yaml", local_profile=_profile(tmp_path)
-    )
+    # Own the multi-episode fixture explicitly rather than tying reproducibility
+    # assertions to the public smoke example's deliberately smaller limits.
+    repository = tmp_path / "repository"
+    shutil.copytree(REPOSITORY / "config", repository / "config")
+    (repository / "configs").mkdir()
+    (repository / "experiments").mkdir()
+    benchmark = load(repository / "config/benchmarks/mock.yaml")
+    benchmark["settings"]["maximum_episode_steps"] = 3
+    (repository / "config/benchmarks/mock.yaml").write_text(dumps(benchmark))
+    protocol = load(repository / "config/protocols/smoke.yaml")
+    protocol["execution"].update(rollouts_per_task=2, maximum_episode_steps=3)
+    protocol["recording"].update(proprioception=True, raw_policy_output=True)
+    (repository / "config/protocols/smoke.yaml").write_text(dumps(protocol))
+    shutil.copyfile(REPOSITORY / "examples/experiments/mock-smoke.yaml", repository / "experiments/mock.yaml")
+    resolver = ConfigResolver(repository / "configs", repository_root=repository)
+    resolved = resolver.resolve("experiments/mock.yaml", local_profile=_profile(tmp_path))
+    repeated_resolution = resolver.resolve("experiments/mock.yaml", local_profile=_profile(tmp_path))
     assert resolved.scientific_config_hash == repeated_resolution.scientific_config_hash
     assert resolved.execution_config_hash == repeated_resolution.execution_config_hash
 

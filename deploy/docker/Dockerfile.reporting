@@ -47,6 +47,7 @@ COPY deploy/locks/reporting.requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 COPY code /opt/ovlab/code
+COPY config /opt/ovlab/config
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 ARG OVLAB_CONFIG_BUNDLE_SHA256=none

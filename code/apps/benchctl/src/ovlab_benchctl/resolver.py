@@ -66,7 +66,6 @@ class ConfigResolver:
         self.config_root = Path(config_root).resolve()
         self.repository_root = Path(repository_root).resolve() if repository_root else self.config_root.parent.resolve()
         self.references = ConfigReferences(self.repository_root, self.config_root)
-        if not self.config_root.is_dir(): raise ConfigReferenceError(f"config root does not exist: {self.config_root}")
 
     @staticmethod
     def _inside(path: Path, root: Path, label: str) -> Path:
@@ -80,7 +79,7 @@ class ConfigResolver:
             raise ConfigReferenceError(f"{label} must be a non-empty configuration reference")
         return self.references.source(reference)
 
-    def _load_composed(self, path: Path, expected_kind: str, stack=()) -> dict[str, Any]:
+    def _load_composed(self, path: Path, expected_kind: str, stack=(), *, validate_document=True) -> dict[str, Any]:
         path = Path(path).resolve()
         self.references.origin(path)
         if path in stack:
@@ -99,18 +98,19 @@ class ConfigResolver:
             if not isinstance(reference, str) or not reference:
                 raise ConfigSchemaError(f"{path}.extends must be a non-empty relative path")
             parent_path = self.references.parent(path, reference)
-            parent = self._load_composed(parent_path, expected_kind, stack + (path,))
+            parent = self._load_composed(parent_path, expected_kind, stack + (path,), validate_document=False)
             if "type" in raw and raw["type"] != parent.get("type"):
                 raise ConfigSchemaError(f"{path}.type must match its parent")
             resolved = _merge(parent, raw)
-        validate(resolved, str(path), expected_kind, repository_root=self.repository_root)
+        if validate_document:
+            validate(resolved, str(path), expected_kind, repository_root=self.repository_root)
         return resolved
 
     @with_registry
     def load_component(self, reference: str, expected_kind: str) -> dict[str, Any]:
         """Load, inherit, and validate one root-relative component document."""
-        if expected_kind == "experiment" and reference.startswith("experiments/"):
-            root = self.repository_root / "experiments"
+        if expected_kind == "experiment" and reference.startswith(("experiments/", "examples/")):
+            root = self.repository_root / reference.split("/", 1)[0]
             return self._load_composed(self._inside(self.repository_root / reference, root, "experiment"), expected_kind)
         return self._load_composed(self._root_reference(reference, "component"), expected_kind)
 
@@ -137,7 +137,7 @@ class ConfigResolver:
         execution_profile: str | Path | None = None,
         environment=None,
     ) -> ResolvedExperimentConfig:
-        experiment_path = (self.references.source(str(experiment)) if str(experiment).startswith("plugin:")
+        experiment_path = (self.references.source(str(experiment)) if str(experiment).startswith(("plugin:", "ovlab:"))
                            else Path(experiment))
         if not experiment_path.is_absolute(): experiment_path = self.repository_root / experiment_path
         self.references.origin(experiment_path)
@@ -156,7 +156,8 @@ class ConfigResolver:
         action_doc = self._load_composed(action_path, "action_interface")
         registry_path = self._root_reference(experiment_doc["resources"]["registry"], "resources.registry")
         registry = self._load_composed(registry_path, "resource_registry")
-        profile_path = Path(local_profile)
+        profile_path = (self.references.source(str(local_profile))
+                        if str(local_profile).startswith(("ovlab:", "plugin:")) else Path(local_profile))
         if not profile_path.is_absolute(): profile_path = self.repository_root / profile_path
         profile = load(profile_path.resolve()); validate(profile, str(profile_path), "local_profile")
 
@@ -235,14 +236,16 @@ class ConfigResolver:
         if components["benchmark"]["type"] == "libero":
             configured_renderer = experiment_doc.get("deployment", {}).get("renderer", "egl")
             reference = execution_profile or {
-                "egl": "profiles/libero-bench-egl.yaml",
-                "glfw": "profiles/libero-playground-glfw.yaml",
+                "egl": "ovlab://profiles/egl.yaml",
+                "glfw": "ovlab://profiles/glfw.yaml",
             }[configured_renderer]
-            execution_profile_path = Path(reference)
-            if execution_profile_path.is_absolute():
-                execution_profile_path = self._inside(execution_profile_path, self.config_root, "execution_profile")
+            if str(reference).startswith(("ovlab:", "plugin:")):
+                execution_profile_path = self._root_reference(str(reference), "execution_profile")
+            elif Path(reference).is_absolute():
+                execution_profile_path = Path(reference)
+                self.references.origin(execution_profile_path)
             else:
-                execution_profile_path = self._root_reference(str(execution_profile_path).removeprefix("configs/"), "execution_profile")
+                execution_profile_path = self._root_reference(str(reference).removeprefix("configs/"), "execution_profile")
             execution_profile_doc = self._load_composed(execution_profile_path, "execution_profile")
             renderer_doc = execution_profile_doc["execution"]["libero"]["renderer"]
             device_id = renderer_doc.get("device_id")

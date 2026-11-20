@@ -1,0 +1,8 @@
+# Copy to configs/policy/my-model.yaml. Select a supported inference precision here.
+# For an adapter checkpoint, also supply its real path and verified identity; never use dummy hashes.
+schema_version: "0.1.0"
+kind: "policy"
+extends: "plugin://openvla-oft/policy/default.yaml"
+settings:
+  runtime:
+    quantization: "none"

@@ -9,9 +9,9 @@ All three domains accept a YAML name or explicit path as `run TARGET` and suppor
 
 | Domain | Default configuration directory | Inspect/verify target |
 | --- | --- | --- |
-| `train` | `experiments/training/` | Training run path, ID, or hash |
-| `eval` | `experiments/evaluation/` | Evaluation run path, ID, or hash |
-| `deploy` | `configs/deploy/` | Deployment ID or deployment YAML name/path |
+| `train` | `plugin://MODEL/train/default.yaml` or a user profile | Training run path, ID, or hash |
+| `eval` | `examples/experiments/` or a user scenario | Evaluation run path, ID, or hash |
+| `deploy` | `plugin://MODEL/deploy/default.yaml` or `configs/deploy/` | Deployment ID or deployment YAML name/path |
 
 Policy types, source commits and image recipes are supplied by the
 [plugin registry](docs/POLICY_PLUGINS.md). A new registered policy uses the same
@@ -20,12 +20,12 @@ commands below; its plugin owns model validation and adapter construction.
 ## Starting and managing a service
 
 ```bash
-./ovlab deploy run openvla-libero10 --dry-run
-./ovlab deploy run openvla-libero10
+./ovlab deploy run plugin://openvla/deploy/default.yaml --dry-run
+./ovlab deploy run plugin://openvla/deploy/default.yaml
 ./ovlab deploy inspect openvla-libero10
-./ovlab deploy verify openvla-libero10
-./ovlab deploy stop openvla-libero10 --dry-run
-./ovlab deploy stop openvla-libero10
+./ovlab deploy verify openvla
+./ovlab deploy stop openvla --dry-run
+./ovlab deploy stop openvla
 ```
 
 `run` builds only the image required by the policy, resolves and verifies its
@@ -43,16 +43,16 @@ training. `run --dry-run` performs no build, download, Docker call, or directory
 
 ## Deployment YAML
 
-Example: [`configs/deploy/openvla-libero10.yaml`](configs/deploy/openvla-libero10.yaml).
+Example: [`plugins/openvla/configs/deploy/default.yaml`](plugins/openvla/configs/deploy/default.yaml).
 
 ```yaml
 schema_version: ovlab.deployment/v1
 kind: deployment
-id: openvla-libero10
+id: my-openvla
 components:
-  policy: policies/openvla-lora/merged-libero10.yaml
+  policy: plugin://openvla/policy/lora.yaml
 resources:
-  registry: resources/registry.yaml
+  registry: plugin://openvla/registry/default.yaml
 build: true
 runtime:
   quantization: 4bit
@@ -68,7 +68,7 @@ input:
   width: 224
 ```
 
-The policy and registry references are relative to `configs/`. They determine the
+Policy and registry references explicitly select `plugin://`, `ovlab://`, or a user configuration under `configs/`. They determine the
 model, processor, action contract, cameras, and normalization. No benchmark or
 protocol config is required. The policy owner validates its model-specific input
 contract; `input.height` and `input.width` default to 224.
@@ -89,9 +89,9 @@ Optional settings:
 CLI overrides affect one deployment:
 
 ```bash
-./ovlab deploy run openvla-libero10 --quantization 8bit --port 8123
-./ovlab deploy run openvla-libero10 --offline
-./ovlab deploy run openvla-libero10 --profile configs/local/profile.yaml
+./ovlab deploy run plugin://openvla/deploy/default.yaml --quantization 8bit --port 8123
+./ovlab deploy run plugin://openvla/deploy/default.yaml --offline
+./ovlab deploy run plugin://openvla/deploy/default.yaml --profile configs/local/profile.yaml
 ```
 
 `--profile` selects optional machine-local checkpoint overrides; otherwise

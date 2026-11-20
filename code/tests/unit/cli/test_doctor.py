@@ -13,7 +13,7 @@ from ovlab_benchctl.image_metadata import IMAGE_CONTRACT_LABEL
 
 
 ROOT = Path(__file__).resolve().parents[4]
-EXPERIMENT = "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
+EXPERIMENT = "configs/.tests/evaluation/openvla.yaml"
 
 
 def _docker(command, **kwargs):

@@ -1,5 +1,6 @@
 include plugin.json
 recursive-include configs *.yaml *.json
+recursive-include examples *.yaml
 recursive-include docker Dockerfile.*
 recursive-include locks *.in *.toml *.txt
 recursive-include scripts *.sh *.py

@@ -1,37 +1,33 @@
-"""Resolve convenient profile names within OVLAB's configuration tree."""
-
+"""Resolve explicit configuration origins or convenient user profile names."""
 from __future__ import annotations
-
 from pathlib import Path
 
 
 def resolve_config_path(reference: str | Path, repository_root: Path, section: str) -> Path:
-    """Resolve explicit paths first, then bare YAML names in a config section."""
-    from .policy_plugins import plugin_config_alias, plugin_config_path
-    if str(reference).startswith("plugin:"):
-        return plugin_config_path(str(reference), repository_root)
-    path = Path(reference).expanduser()
+    from .config_references import ConfigReferences
     root = repository_root.expanduser().resolve()
+    if str(reference).startswith(("plugin:", "ovlab:")):
+        return ConfigReferences(root).source(str(reference))
+    path = Path(reference).expanduser()
     if path.is_absolute():
         return path.resolve()
-
     direct = (root / path).resolve()
-    if direct.is_file():
+    if direct.is_file() or (path.parts and path.parts[0] in {"configs", "config", "experiments", "examples"}):
         return direct
-
-    # Paths explicitly rooted at configs/ retain their repository-relative meaning.
-    if path.parts and path.parts[0] == "configs":
-        return direct
-    names = [path]
-    if not path.suffix:
-        names.append(path.with_suffix(".yaml"))
-    for name in names:
-        base = root / section if section.startswith("experiments/") and (root / "experiments").is_dir() else root / "configs" / section
-        candidate = (base / name).resolve()
-        if candidate.is_relative_to(base.resolve()) and candidate.is_file():
-            return candidate
-    for candidate in names:
-        alias = plugin_config_alias(f"{section}/{candidate.as_posix()}", root)
-        if alias:
-            return plugin_config_path(alias, root)
+    names = [path] if path.suffix else [path, path.with_suffix(".yaml")]
+    base = root / section if section.startswith(("experiments/", "examples/")) else root / "configs" / section
+    bases = [base]
+    if section.startswith("experiments/"):
+        bases.append(root / "examples/experiments")
+    candidates = set()
+    for owner in bases:
+        for name in names:
+            candidate = (owner / name).resolve()
+            if candidate.is_relative_to(owner.resolve()) and candidate.is_file():
+                candidates.add(candidate)
+    if len(candidates) > 1:
+        from .errors import ConfigReferenceError
+        raise ConfigReferenceError(f"ambiguous configuration name {reference!r}; select an explicit path")
+    if candidates:
+        return candidates.pop()
     return direct

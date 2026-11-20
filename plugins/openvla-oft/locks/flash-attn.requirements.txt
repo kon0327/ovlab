@@ -1,0 +1,3 @@
+# Generated from flash-attn.pylock.toml; do not edit.
+# Torch, TorchVision, Triton and CUDA libraries are supplied by the pinned base image.
+flash-attn==2.5.5 --hash=sha256:751cee17711d006fe7341cdd78584af86a6239afcfe43b9ed11c84db93126267

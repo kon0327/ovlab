@@ -61,8 +61,8 @@ def _profile() -> Path:
 
 def _resolve():
     return ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
-        "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml",
-        local_profile=_profile(), execution_profile="profiles/libero-bench-egl.yaml",
+        os.environ["OVLAB_MANUAL_EVALUATION_CONFIG"],
+        local_profile=_profile(), execution_profile="ovlab://profiles/egl.yaml",
     )
 
 
@@ -149,7 +149,7 @@ def _service(socket_path, log_path):
         [
             shutil.which("conda"), "run", "--no-capture-output", "-n", "openvla-oft",
             "python", "-m", "ovlab_openvla_oft.service", "--socket", str(socket_path),
-            "--registry", str(REPOSITORY / "configs/resources/registry.yaml"),
+            "--registry", str(REPOSITORY / "plugins/openvla-oft/configs/registry/default.yaml"),
             "--resource-id", "openvla-oft-7b-finetuned-libero-10", "--device", "cuda:0",
         ],
         socket_path, log_path,

@@ -1,7 +1,0 @@
-schema_version: "0.1.0"
-kind: policy
-type: openvla_vanilla
-extends: base.yaml
-settings:
-  runtime:
-    quantization: 8bit

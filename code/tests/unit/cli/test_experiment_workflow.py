@@ -18,18 +18,21 @@ from ovlab_benchctl.experiment_workflow import ExperimentExecutionError, Experim
 from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 from ovlab_benchctl.training_composition import load_training_profile
 from ovlab_benchctl.strict_yaml import dumps
+from helpers.configuration_fixtures import training_config, evaluation_config
 
 
 ROOT = Path(__file__).resolve().parents[4]
 
 
 def _spec():
+    train = training_config()
+    train["patch"]["training"]["seed"] = 0
     return {
         "schema_version": "ovlab.experiment/v1", "kind": "workflow",
         "id": "models-on-libero", "name": "Models on shared LIBERO tasks",
         "config": {
-            "train": {"profile": "openvla-lora-libero10-smoke.yaml", "patch": {"training": {"seed": 0}}},
-            "evaluate": {"profile": "libero10-lora-4bit-three-per-task.yaml"},
+            "train": train,
+            "evaluate": evaluation_config(),
         },
         "children": [
             {"id": "model-a", "execute": ["evaluate"], "children": [
@@ -50,24 +53,20 @@ def _write(tmp_path, document):
     return path
 
 
-def test_checked_in_yaml_and_json_examples_describe_the_same_experiment():
-    workflow = ExperimentWorkflow(ROOT)
-    directory = ROOT / "experiments/workflows"
-    json_plan = workflow.plan(directory / "libero-model-tree.json")
-    yaml_plan = workflow.plan(directory / "libero-model-tree.yaml")
-    json_plan.pop("spec")
-    yaml_plan.pop("spec")
-    assert yaml_plan == json_plan
+@pytest.mark.parametrize("name", ["mock-smoke", "openvla-eval", "openvla-oft-eval", "plugin-pipeline-smoke"])
+def test_checked_in_reference_examples_validate(name):
+    plan = ExperimentWorkflow(ROOT).plan(ROOT / "examples/experiments" / (name + ".yaml"))
+    assert plan["steps"]
+    assert plan["side_effects_performed"] is False
 
 
-def test_reference_examples_validate_and_resolve_together():
-    plan = ExperimentWorkflow(ROOT).plan("experiments/workflows/example.yaml")
-    assert [step["phase"] for step in plan["steps"]] == ["evaluate", "evaluate"]
+def test_reference_training_and_evaluation_defaults_resolve_together():
+    plan = ExperimentWorkflow(ROOT).plan("examples/experiments/plugin-pipeline-smoke.yaml")
+    assert [step["phase"] for step in plan["steps"]] == ["train", "evaluate"]
     configs = plan["nodes"][0]["configuration"]
-    assert configs["train"]["profile"] == "experiments/training/example.yaml"
-    assert configs["evaluate"]["profile"] == "experiments/evaluation/example.yaml"
-    train = load_training_profile(ROOT / "experiments/training/example.yaml")
-    assert train.document["training"]["mode"] == "peft"
+    assert configs["train"]["profile"] == "plugin://openvla-quic/train/default.yaml"
+    assert configs["evaluate"]["profile"] == "plugin://openvla-quic/evaluate/default.yaml"
+    assert configs["train"]["document"]["training"]["mode"] == "peft"
 
 
 @pytest.mark.parametrize("suffix", [".json", ".yaml"])
@@ -123,7 +122,7 @@ def test_invalid_yaml_fails_before_creating_artifacts(tmp_path, source):
 def test_yaml_run_preserves_original_source_and_canonical_json(tmp_path):
     document = {
         "schema_version": "ovlab.experiment/v1", "kind": "workflow", "id": "yaml-test", "name": "YAML workflow",
-        "config": {"evaluate": {"profile": "mock-e2e-smoke.yaml"}}, "execute": ["evaluate"],
+        "config": {"evaluate": {"profile": "examples/experiments/mock-smoke.yaml"}}, "execute": ["evaluate"],
     }
     path = tmp_path / "experiment.yml"
     original = "# Preserve this comment\n" + dumps(document)
@@ -235,7 +234,7 @@ def test_dependency_cycle_is_rejected(tmp_path):
 def test_run_scopes_children_publishes_grouped_and_cleans_ephemeral_yaml(tmp_path):
     spec = _spec()
     spec.pop("config")
-    spec["config"] = {"evaluate": {"profile": "libero10-lora-4bit-three-per-task.yaml"}}
+    spec["config"] = {"evaluate": evaluation_config()}
     spec["children"][0].pop("children")
     spec["children"][1].pop("config")
     calls = []
@@ -274,7 +273,7 @@ def test_run_scopes_children_publishes_grouped_and_cleans_ephemeral_yaml(tmp_pat
 def test_independent_phases_run_in_parallel_and_dependencies_wait(tmp_path):
     spec = {
         "schema_version": "ovlab.experiment/v1", "kind": "workflow", "id": "parallel", "name": "Parallel",
-        "config": {"evaluate": {"profile": "libero10-lora-4bit-three-per-task.yaml"}},
+        "config": {"evaluate": evaluation_config()},
         "children": [
             {"id": "a", "execute": ["evaluate"]},
             {"id": "b", "execute": ["evaluate"]},
@@ -343,8 +342,8 @@ def test_sequential_mode_runs_one_phase_at_a_time(tmp_path):
 def test_parallel_failure_preserves_completed_run_and_blocks_dependents(tmp_path):
     spec = {
         "schema_version": "ovlab.experiment/v1", "kind": "workflow", "id": "parallel-failure", "name": "Failure",
-        "config": {"train": {"profile": "openvla-lora-libero10-smoke.yaml"},
-                   "evaluate": {"profile": "libero10-lora-4bit-three-per-task.yaml"}},
+        "config": {"train": training_config(),
+                   "evaluate": evaluation_config()},
         "children": [
             {"id": "a", "execute": ["train"]},
             {"id": "b", "execute": ["evaluate"]},
@@ -426,8 +425,8 @@ def test_run_executes_train_then_eval_with_valid_materialized_profiles(tmp_path)
     spec = {
         "schema_version": "ovlab.experiment/v1", "kind": "workflow", "id": "train-eval-tree", "name": "Train and evaluate",
         "config": {
-            "train": {"profile": "openvla-lora-libero10-smoke.yaml"},
-            "evaluate": {"profile": "libero10-lora-4bit-three-per-task.yaml"},
+            "train": training_config(),
+            "evaluate": evaluation_config(),
         },
         "children": [
             {"id": "model-a", "execute": ["train", "evaluate"], "config": {"evaluate": {
@@ -445,7 +444,7 @@ def test_run_executes_train_then_eval_with_valid_materialized_profiles(tmp_path)
         instance, node = env["OVLAB_EXPERIMENT_ID"], env["OVLAB_EXPERIMENT_NODE"]
         category = command[1]
         if category == "train":
-            assert load_training_profile(command[3], config_root=ROOT / "experiments").document["training"]["seed"] == 7
+            assert load_training_profile(command[3], config_root=ROOT / "experiments").document["training"]["seed"] == 42
             result = {"host_path": str(tmp_path / "runs" / instance / "train" / node / f"trained-{node}")}
         elif category == "eval":
             generated = Path(command[3])
@@ -478,7 +477,7 @@ def test_run_executes_train_then_eval_with_valid_materialized_profiles(tmp_path)
 def test_host_evaluation_publishes_report_after_run(tmp_path):
     spec = {
         "schema_version": "ovlab.experiment/v1", "kind": "workflow", "id": "host-eval", "name": "Host evaluation",
-        "config": {"evaluate": {"profile": "mock-e2e-smoke.yaml"}},
+        "config": {"evaluate": {"profile": "examples/experiments/mock-smoke.yaml"}},
         "execute": ["evaluate"],
     }
     seen = []

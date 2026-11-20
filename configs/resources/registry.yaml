@@ -1,5 +1,0 @@
-# Optional local resource catalog. Model defaults belong to registered plugins.
-schema_version: "0.1.0"
-kind: resource_registry
-checkpoints: {}
-repositories: {}

@@ -87,7 +87,7 @@ services:
         source: ${OVLAB_EXPORTS_ROOT:-../../../ovlab-data/exports}
         target: /var/lib/ovlab/exports
       - type: bind
-        source: ${OVLAB_EXPORT_SPEC_PATH:-../../configs/exports/libero-success-comparison.yaml}
+        source: ${OVLAB_EXPORT_SPEC_PATH:-../../config/exports/default.yaml}
         target: /etc/ovlab/export.yaml
         read_only: true
 

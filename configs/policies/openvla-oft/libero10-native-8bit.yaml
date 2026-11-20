@@ -1,5 +1,0 @@
-# Compatibility reference; defaults are owned by the OpenVLA plugin.
-schema_version: "0.1.0"
-kind: "policy"
-type: "openvla_oft"
-extends: plugin://openvla/policies/openvla-oft/libero10-native-8bit.yaml

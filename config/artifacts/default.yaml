@@ -1,0 +1,5 @@
+schema_version: "0.1.0"
+kind: "artifact_store"
+type: "filesystem"
+settings:
+  root_resource: "runs_root"

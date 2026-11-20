@@ -3,8 +3,7 @@
 A policy plugin owns the model integration: configuration validation, settings,
 observation compatibility, adapter construction, RPC identity and model-specific
 runtime mounts. OVLAB owns configuration composition, checkpoint verification,
-containers, RPC transport, evaluation lifecycle and artifacts. Adding a policy
-family requires a plugin and a registry entry; it requires no new branch in the
+containers, RPC transport, evaluation lifecycle and artifacts. Adding a model requires a plugin and a registry entry; it requires no new branch in the
 resolver, CLI or deployment code.
 
 The public interface is `ovlab_policy_sdk.plugin.PolicyPlugin` (API `"1"`).
@@ -62,9 +61,12 @@ Remote registration acquires the pinned manifest into an ignored project cache.
 Offline operations and build dry runs require that cached manifest; they never
 fetch an uncached project. `plugin register --dry-run` previews a remote acquisition
 without creating a cache or writing the registry.
-The checked-in default registry registers the reference OpenVLA project at
-`plugins/openvla/`; it does not contain model-specific dispatch or dependency
-recipes. Infrastructure sources and build roles can be declared alongside the
+The checked-in registry registers independent `openvla`, `openvla-oft` and
+`openvla-quic` projects. OpenVLA owns Vanilla and LoRA adapter support; OFT and
+QuIC own their distinct runtimes. Shared implementation code lives in the
+reusable `plugins/_shared/openvla-support` distribution, explicitly declared as
+a control/build source by each consuming project. Core packages do not depend
+on that distribution. Infrastructure sources and build roles can be declared alongside the
 project registrations using top-level `sources` and `builds` mappings.
 
 Selection order is an explicit `OVLAB_PLUGIN_REGISTRY`, a user registry at
@@ -119,7 +121,7 @@ A minimal project manifest looks like this:
       "locks": ["locks/runtime.requirements.txt"]
     }
   },
-  "configs": {"root": "configs", "checkpoints": ["resources/registry.yaml"]}
+  "configs": {"root": "configs", "checkpoints": ["registry/default.yaml"]}
 }
 ```
 
@@ -132,8 +134,9 @@ these under the manifest's `sources` as pinned Git or local sources, then list
 their IDs in the variant and recipe. OVLAB acquires each source independently.
 Neither the upstream model nor the core needs an extra dispatch branch.
 
-A project can expose several policy types and images, as the reference OpenVLA
-project does. Several variants may share a build role. The deployment image must
+A model project can expose supported adapter variants and images. Independent
+model implementations should be independent projects; LoRA remains an adaptation
+choice within OpenVLA. Several variants may share a build role. The deployment image must
 match the role's recipe, and the recipe must include all variant sources. Shared
 profile definitions must be identical. Set `deployment.gpu: false` for CPU-only
 policies. Persistent deployment also accepts `runtime.gpu: null`; benchmark GPU
@@ -268,6 +271,47 @@ shape, horizon and action contract. Implement `_initialize`, `_reset_episode`,
 timestamps and inference duration. Keep the runner's episode identity intact.
 Never expose benchmark evaluation signals as model observations.
 
+## Default categories and composition
+
+Each model project supplies modular `configs/policy`, `deploy`, `registry`,
+`train` (when supported), and `evaluate` defaults, with one commented example per
+supported category in `examples/`. Ablations, task subsets and smoke budgets live
+in user experiments or the small OVLAB verification set. Model projects do not
+own benchmark or metric choices.
+
+Training defaults may omit the dataset selection. Evaluation defaults contain
+policy, deployment and checkpoint catalog choices; the experiment must supply
+benchmark, metrics, protocol and artifacts. Composition resolves inheritance and
+workflow patches first, then validates complete documents. Executing an
+incomplete default fails explicitly.
+
+Declare discoverable templates in manifest `configs.templates`, for example
+`{"train": ["train/default.yaml"], "evaluate": ["evaluate/default.yaml"]}`.
+`ovlab train profiles` distinguishes templates from complete runnable profiles.
+A training extension can implement SDK `validate_profile_template`; its default
+is strict complete-profile validation. The OpenVLA support package only relaxes
+the missing dataset reference for its training templates and validates all other
+fields normally.
+
+A policy plugin can implement `validate_checkpoint_template(doc, path)` for a
+policy whose artifact identity will come from training. The default calls strict
+`validate_policy`. OVLAB invokes the template hook only in a workflow declaring
+`checkpoint_from`; standalone serving and evaluation always require a complete
+policy. QuIC templates omit adapter paths and hashes entirely. Finalization binds
+real identities and normal validation runs before model startup.
+
+Shared control libraries must be explicit source dependencies. Declare their
+source IDs in each consuming policy descriptor
+(`plugins.<type>.control_sources`) and in its policy/build `sources`. OVLAB includes their bounded Python packages in frozen configuration
+bundles; Docker recipes install the corresponding distributions. Local sources
+are useful inside this checkout. Independently published remote projects must
+pin external dependencies to Git commits instead of relying on sibling paths.
+
+The same explicit configuration origins and complete-document validation can
+support future benchmark and metric projects. Their plugin APIs are a subsequent
+step; current benchmark/metric implementations and defaults remain owned by
+OVLAB.
+
 ## Configuration and checkpoints
 
 A policy configuration retains this common envelope:
@@ -283,7 +327,7 @@ settings:
   runtime:
     quantization: none
   action:
-    action_interface: interfaces/actions/libero-osc-pose-v1.yaml
+    action_interface: ovlab://interfaces/actions/libero-osc-pose-v1.yaml
   raw_output:
     enabled: false
 ```
@@ -304,7 +348,7 @@ explicit, for example `configs/policies/my-openvla.yaml`:
 schema_version: "0.1.0"
 kind: policy
 type: openvla_vanilla
-extends: plugin://openvla/policies/openvla-vanilla/base.yaml
+extends: plugin://openvla/policy/default.yaml
 settings:
   runtime:
     quantization: 4bit
@@ -313,12 +357,14 @@ settings:
 Select `policies/my-openvla.yaml` in the experiment's `components.policy`; core
 composition merges it over the plugin default. Relative `extends` stays bounded
 to its owning configuration tree; only an explicit plugin URI crosses project
-boundaries. Compatibility aliases keep existing preset names usable, while
-new configurations should use explicit URIs. OpenVLA provides `none`, `8bit`
-and `4bit` presets for Vanilla, merged LoRA and OFT; QuIC requires `none`.
+boundaries. `ovlab://` selects the generic OVLAB defaults under `config/`.
+User `configs/` and `experiments/` contents are ignored by Git and are applied
+only when explicitly selected. OpenVLA and OFT accept `none`, `8bit` and `4bit`
+as runtime settings; there is one policy default rather than a file per precision.
+QuIC currently accepts `none` only.
 
 Checkpoint registration belongs to the plugin project, for example
-`plugin://openvla/resources/registry.yaml`. Declare catalog paths in
+`plugin://openvla/registry/default.yaml`. Declare catalog paths in
 `configs.checkpoints` so generic listing and training can discover their entries.
 Local catalogs can extend plugin catalogs and override individual entries.
 It binds weights to a repository, revision and verified file hashes. Sources

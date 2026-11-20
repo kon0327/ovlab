@@ -1,136 +1,45 @@
-# OVLAB configuration
+# Local configuration workspace
 
-OVLAB composes experiments from explicit, versioned component documents. There
-is no implicit search path, Hydra defaults list, environment-variable expansion,
-or runtime mutation. An experiment names every component, the resource registry,
-and—when it is deployable—its portable deployment topology and renderer. A
-machine-local resource profile is selected separately by the caller.
+Put personal overrides and machine settings here. Everything except this README
+is ignored by Git. This directory does not contain OVLAB's shipped defaults.
 
-Inheritance is opt-in through a relative `extends` path. Mappings deep-merge,
-while scalar and sequence values replace the parent. Every composed document is
-validated against an exact schema, so misspelled or unknown keys fail early.
+There are three explicit configuration origins:
 
-The policy's `settings.action.action_interface` selects the action contract.
-The shared LIBERO interface records the verified `closed_positive` gripper
-convention. The benchmark's `settings.action.interface_ref` must resolve to the
-same interface, and the resolver compares it with the concrete LIBERO adapter
-contract. Canonical camera names are checked in the same way.
+| Reference | Location |
+| --- | --- |
+| `ovlab://metrics/default.yaml` | Versioned OVLAB defaults in `config/`. |
+| `plugin://openvla/policy/default.yaml` | Defaults supplied by a registered plugin. |
+| `policy/my-model.yaml` | A local file under `configs/`. |
 
-## Scenario directories
+Copy a category example from `plugins/<model>/examples/` into this directory.
+Each plugin provides policy, deployment, checkpoint registry and evaluation
+examples; trainable plugins also provide a training example. Its `extends`
+reference keeps the connection to the plugin explicit.
 
-- `../experiments/workflows/`: hierarchical YAML or JSON experiments selected by
-  `ovlab run FILE` (add `--plan` to preview); see the
-  [experiment workflow guide](../docs/EXPERIMENT_WORKFLOW.md).
-- `../experiments/training/`: training scenarios selected by `ovlab run TARGET`.
-- `../experiments/evaluation/`: evaluation scenarios selected by `ovlab run TARGET`.
-- `deploy/`: policy-only deployment configs selected by `ovlab deploy run TARGET`.
+For example, save this as `configs/policy/my-openvla.yaml`:
 
-Commented reference files: [`evaluation/example.yaml`](../experiments/evaluation/example.yaml),
-[`training/example.yaml`](../experiments/training/example.yaml) and
-[`workflows/example.yaml`](../experiments/workflows/example.yaml). Each contains a
-valid example plus commented alternatives; validate any of them with
-`ovlab run FILE --verify`, or display its tree with `ovlab run FILE --plan`.
-
-Workflow specs accept YAML or JSON paths. Training and evaluation scenarios
-accept YAML names or paths through the same `ovlab run` entry point. Use
-`ovlab run INSTANCE_OR_RUN_ID --verify` for canonical evidence. Persistent
-deployment uses `ovlab deploy` with service IDs or deployment config names.
-See [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
-for deployment schema, image building, ports, quantization, readiness, and
-service lifecycle.
-
-## LIBERO renderer execution profiles
-
-Renderer selection is declared in the execution-only `deployment` block of a
-deployable experiment. `renderer: egl` selects
-`profiles/libero-bench-egl.yaml` for headless benchmarking; `renderer: glfw`
-selects `profiles/libero-playground-glfw.yaml` for an interactive playground.
-The selected profile and resolved renderer are included in the execution
-configuration hash; changing them leaves the scientific hash, tasks, seeds,
-observation/action contracts, and metrics unchanged. The CLI's `--renderer`
-option and the lower-level `OVLAB_EXECUTION_PROFILE` diagnostic override take
-precedence over the experiment default.
-
-The EGL profile resolves its device from the local profile's optional
-`execution.libero.renderer.device_id`, falling back to the index in
-`devices.primary_gpu`. GLFW never emits an EGL device setting. Diagnostic
-process environment values have precedence: `MUJOCO_GL` selects `egl` or
-`glfw`, and `MUJOCO_EGL_DEVICE_ID` overrides the EGL device. Unsupported values
-fail during configuration resolution. No MuJoCo, Robosuite, or LIBERO import is
-performed by the resolver.
-
-Machine paths and devices belong in gitignored `local/*.yaml` profiles. The
-resolver produces a scientific hash without that profile and an execution hash
-including all resolved paths and devices. Its immutable output is one
-`resolved_config.yaml`.
-
-## Reporting and export configuration
-
-An experiment may declare a `reporting` block with `enabled`, a built-in or
-local `profile`, task/run finalization hooks, and `failure_policy`. Reporting
-defaults to the built-in `libero-task-default` profile when the block is omitted.
-Its content affects only the derived report identity, not the scientific or
-benchmark execution configuration hashes.
-
-New exports use built-in, versioned `isolated-default-v1` and
-`grouped-default-v1` templates selected directly by the CLI. Their normalized
-selection and every source run's canonical configuration identity are recorded
-in the resulting `metadata.json`. Files below `exports/` retain only the legacy
-`ovlab.export-spec/v1` grouped bridge; new grouped comparisons should use
-`ovlab report EXPERIMENT_ID`. Python expressions, YAML tags, arbitrary imports, and
-remote assets are not supported.
-
-## Checkpoint resources
-
-Portable policy configurations select a logical `settings.checkpoint_id`.
-`resources/registry.yaml` binds that ID to its repository, immutable `revision`,
-aggregate SHA-256, and file manifest. Absolute paths never belong in an
-experiment or the portable registry.
-
-A gitignored local profile may provide
-`resources.checkpoints.<checkpoint-id>.local_path` for an unpublished artifact
-such as a QuIC checkpoint. The path is execution-only. Repository, revision,
-file sizes, and hashes remain registry-controlled and therefore remain in the
-scientific configuration hash.
-
-Docker deployment resolves global Hugging Face cache, local override, and
-OVLAB-managed cache in that order. The policy always sees the selected artifact
-at `/checkpoints/resolved/<checkpoint-id>` and cannot observe its host location.
-
-Model-family policy owners validate their own deployment and artifact contracts.
-QuIC adapter-only training and placement studies live under `../experiments/training/` and
-`ablations/`; benchmark experiments continue to select policies and benchmarks
-independently.
-
-## Training and ablation profiles
-
-`../experiments/training/` uses `ovlab.training-profile/v1` and requires
-`kind: training` in every file, including extending profiles, with the same explicit relative
-`extends` merge rules. `ablations/` uses `ovlab.training-ablation/v1` and references
-a common training base plus ordinary variant profiles. Declared method factor
-paths may differ; checkpoint/data identities, episode split, normalization, seed,
-optimizer budget and resource contract must remain shared.
-
-```bash
-./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab train ablate materialize --suite configs/ablations/openvla-quic-placement-smoke.yaml \
-  --output /tmp/quic-placement-plan
+```yaml
+schema_version: "0.1.0"
+kind: policy
+extends: plugin://openvla/policy/lora.yaml
+settings:
+  runtime:
+    quantization: 4bit
 ```
 
-Materialization resolves and verifies local data/model resources and creates a
-new immutable plan plus profiles. `train ablate run` executes those profiles
-through the normal isolated training/checkpoint/report lifecycle. See
-[`../docs/ABLATIONS.md`](../docs/ABLATIONS.md) for the episode partition contract
-and source-project migration audit.
+Select it from your experiment with
+`components.policy: policy/my-openvla.yaml`. An override has no effect until an
+experiment or build configuration references it. Mappings merge recursively;
+lists and scalar values replace their parent values. Relative `extends` paths
+stay within their configuration origin. Use `plugin://` or `ovlab://` when
+crossing origins.
 
-The [`quic/lora-coverage`](../experiments/training/quic/lora-coverage/)
-profiles select the active dense linear and convolutional modules matching the
-explicit LoRA suffix list, including the vision patch projections and `lm_head`.
-They provide smoke and 50,000-update recipes for LIBERO-10, Object, Spatial and
-Goal with a 5% whole-episode validation split and physical batch size 4. The
-[coverage experiment guide](../docs/QUIC_LORA_COVERAGE.md) explains the staged
-launcher, inactive vision exclusions, resource budget and recorded evidence.
+For machine paths and GPU selection, copy `config/local/example.yaml` to
+`configs/local/machine.yaml`, replace the example absolute paths, and select it
+with the normal local-profile option. Checkpoint weights and generated run
+artifacts remain outside configuration directories.
 
-OpenVLA QuIC action-chunk ablations under `../experiments/training/quic/action-chunks/`
-include the token baseline with the head disabled plus H=1 and H=8 chunk-head
-smokes. See [action chunk contracts](../docs/QUIC_ACTION_CHUNKS.md).
+Plugin registration writes `configs/plugins/registry.json` by default. This is
+also local workspace state; the public registry in `plugins/registry.json` only
+provides the bundled reference projects. The same arrangement allows a future
+external configuration library without adding personal experiments to OVLAB.

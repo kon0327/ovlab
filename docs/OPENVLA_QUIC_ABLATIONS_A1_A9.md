@@ -1,5 +1,11 @@
 # OpenVLA QuIC: konfigurace a předání ablací A1–A9
 
+> Metodické poznámky k výzkumným konfiguracím. Historické soubory profilů byly
+> odstraněny při oddělení pluginů. Vlastní studie se skládá z
+> `plugin://openvla-quic/train/default.yaml`; pracovní recepty patří do ignorovaných
+> uživatelských konfigurací. Aktuální integrační příklad je
+> [plugin pipeline smoke](../examples/experiments/plugin-pipeline-smoke.yaml).
+
 ## Účel dokumentu
 
 Tento dokument shrnuje implementované a návrhové konfigurace QuIC variant
@@ -43,7 +49,7 @@ hostitelského modelu.
 | `action` | Poslední jazykové vrstvy nebo lm head | posledních `action_proximal_last_n` vrstev |
 
 Rozhraní pro klasifikaci regionů je implementované v
-[quic_experiments.py](../plugins/openvla/src/ovlab_openvla_training/quic_experiments.py).
+[quic_experiments.py](../plugins/_shared/openvla-support/src/ovlab_openvla_training/quic_experiments.py).
 `language_model.lm_head` je automaticky klasifikován jako `action`.
 
 ### QP profily
@@ -152,7 +158,7 @@ PLACEMENTS = {
 }
 ```
 
-Zdroj: [quic_experiments.py](../plugins/openvla/src/ovlab_openvla_training/quic_experiments.py).
+Zdroj: [quic_experiments.py](../plugins/_shared/openvla-support/src/ovlab_openvla_training/quic_experiments.py).
 
 ## Společná konfigurace hostitele a dat
 
@@ -211,7 +217,7 @@ resources:
   network: disabled
 ```
 
-Profil je [openvla-libero10-quic-smoke.yaml](../plugins/openvla/configs/training/openvla-libero10-quic-smoke.yaml).
+Profil je `openvla-libero10-quic-smoke.yaml` (historický recept).
 
 Toto je integrace/smoke rozpočet, nikoliv vědecky rozumný finální tréninkový
 budget. Při porovnávání variant musejí zůstat stejné host identity, preprocessing,
@@ -275,7 +281,7 @@ training:
 ```
 
 Konfigurace:
-[libero10-a1-qp2.yaml](../plugins/openvla/configs/training/quic/libero10-a1-qp2.yaml)
+`libero10-a1-qp2.yaml` (historický recept)
 
 A1 změňuje pouze vision backbone. Projektor, jazyk a action-proximal části jsou
 zmrazené.
@@ -301,7 +307,7 @@ training:
 ```
 
 Konfigurace:
-[libero10-a3-qp2.yaml](../plugins/openvla/configs/training/quic/libero10-a3-qp2.yaml)
+`libero10-a3-qp2.yaml` (historický recept)
 
 A3 používá vybrané jazykové self-attention projekce, nikoliv action-proximal
 vrstvy.
@@ -333,7 +339,7 @@ training:
 ```
 
 Konfigurace:
-[libero10-a9-qp2.yaml](../plugins/openvla/configs/training/quic/libero10-a9-qp2.yaml)
+`libero10-a9-qp2.yaml` (historický recept)
 
 A9 kombinuje vision a language regiony. Projektor a action-proximal vrstvy jsou
 zmrazené.
@@ -356,7 +362,7 @@ variants:
 ```
 
 Soubor:
-[openvla-quic-placement-smoke.yaml](../plugins/openvla/configs/ablations/openvla-quic-placement-smoke.yaml)
+`openvla-quic-placement-smoke.yaml` (historický recept)
 
 Varianta je výběr placementu i explicitních target selektorů. Suite nesmí měnit
 hostitelskou identitu, preprocessing, datovou partition, seed, optimizer nebo

@@ -1,5 +1,0 @@
-# Compatibility reference; defaults are owned by the OpenVLA plugin.
-schema_version: "0.1.0"
-kind: "policy"
-type: "openvla_lora_merged"
-extends: plugin://openvla/policies/openvla-lora/merged-libero10-8bit.yaml

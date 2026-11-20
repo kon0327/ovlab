@@ -39,6 +39,7 @@ RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation --requir
     && rm -rf /tmp/locks
 COPY code /opt/ovlab/code
 COPY external/plugin-openvla /opt/ovlab/external/plugin-openvla
+COPY external/openvla-support /opt/ovlab/external/openvla-support
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 ARG OVLAB_CONFIG_BUNDLE_SHA256=none
@@ -47,6 +48,7 @@ RUN --mount=type=secret,id=ovlab_source_manifest \
     --mount=type=secret,id=ovlab_config_bundle \
     test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
     && bash /tmp/install-ovlab-packages.sh \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla-support \
     && bash /opt/ovlab/external/plugin-openvla/scripts/install-plugin.sh \
     && rm /tmp/install-ovlab-packages.sh \
     && groupadd --gid 10001 ovlab \

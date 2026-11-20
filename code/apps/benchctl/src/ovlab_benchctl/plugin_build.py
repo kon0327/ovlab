@@ -135,7 +135,7 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
         if roles is None:
             selected = [configured_role]
         if execution_profile is None and kind == "experiment" and "deployment" in document:
-            execution_profile = {"egl": "profiles/libero-bench-egl.yaml", "glfw": "profiles/libero-playground-glfw.yaml"}.get(document["deployment"].get("renderer", "egl"))
+            execution_profile = {"egl": "ovlab://profiles/egl.yaml", "glfw": "ovlab://profiles/glfw.yaml"}.get(document["deployment"].get("renderer", "egl"))
         bundle = builder.build(reference, execution_profile, kind=kind)
     unknown = set(selected) - registry["builds"].keys()
     if unknown:
