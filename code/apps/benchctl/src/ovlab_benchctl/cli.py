@@ -132,6 +132,12 @@ def _parser() -> argparse.ArgumentParser:
 
     plugin = commands.add_parser("plugin", help="inspect, sync and build registered model plugins")
     plugin_commands = plugin.add_subparsers(dest="plugin_command", required=True)
+    register = plugin_commands.add_parser("register", help="register a standalone local or pinned Git plugin project")
+    register.add_argument("source", help="local project directory or Git repository URL")
+    register.add_argument("--commit", help="full immutable Git commit for a remote project")
+    register.add_argument("--registry", help="destination project registry (default configs/plugins/registry.json)")
+    register.add_argument("--dry-run", action="store_true")
+    _output_options(register)
     for name, help_text in (("list", "list plugin registrations without model imports"), ("inspect", "inspect one plugin and source identities"), ("sync", "materialize registered sources into external/"), ("build", "build plugin images from registered recipes")):
         command = plugin_commands.add_parser(name, help=help_text)
         if name != "list": command.add_argument("plugin", nargs="?" if name in {"sync", "build"} else None, help="plugin ID or policy type; omit to select all")
@@ -140,6 +146,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--offline", action="store_true")
             command.add_argument("--dry-run", action="store_true")
         if name == "build":
+            command.add_argument("--config", help="experiment/deployment configuration to resolve and include in the image")
+            command.add_argument("--execution-profile", help="execution profile included with --config")
             sources = command.add_mutually_exclusive_group()
             sources.add_argument("--isolated-sources", dest="isolated_sources", action="store_true", default=True,
                                  help="fetch/copy registered sources into a temporary context (default)")
@@ -190,8 +198,7 @@ def _parser() -> argparse.ArgumentParser:
         help="override deployment.renderer from the experiment",
     )
     eval_run.add_argument(
-        "--quantization", choices=("none", "8bit", "4bit"),
-        help="override inference quantization from the experiment policy",
+        "--quantization", help="override with a quantization profile supported by the selected plugin",
     )
     eval_run.add_argument(
         "--offline",
@@ -212,7 +219,7 @@ def _parser() -> argparse.ArgumentParser:
     deploy_run = deploy_commands.add_parser("run", help="build a policy image and start a model service")
     deploy_run.add_argument("target", help="deployment YAML name/path in configs/deploy")
     deploy_run.add_argument("--profile", help="local checkpoint profile (overrides OVLAB_LOCAL_PROFILE)")
-    deploy_run.add_argument("--quantization", choices=("none", "8bit", "4bit"))
+    deploy_run.add_argument("--quantization", help="quantization profile supported by the selected plugin")
     deploy_run.add_argument("--port", type=int, help="override the published model RPC port")
     deploy_run.add_argument("--offline", action="store_true", help="resolve checkpoints without downloading")
     deploy_run.add_argument("--dry-run", action="store_true", help="show the plan without building or starting containers")
@@ -1012,7 +1019,8 @@ def _classify(exc: BaseException) -> tuple[int, str]:
         return ExitCode.RUNTIME, "training_error"
     if name in {"RunIntegrityError", "ArtifactError", "ExperimentIntegrityError"}:
         return ExitCode.INTEGRITY, "run_integrity_error"
-    if name.startswith("QuIC") and ("Incomplete" in name or "Unavailable" in name or "Provider" in name):
+    from ovlab_policy_sdk.plugin import PolicyPluginUnavailableError
+    if isinstance(exc, PolicyPluginUnavailableError):
         return ExitCode.POLICY_UNAVAILABLE, "policy_unavailable"
     if name.startswith("RemotePolicy") or name in {"ContractCompatibilityError", "ConnectionError"}:
         return ExitCode.SERVICE, "service_or_capability_error"
@@ -1098,6 +1106,10 @@ def _dispatch(args):
         from .strict_yaml import dumps
         return dumps(document), False, "raw"
     if args.command == "plugin":
+        if args.plugin_command == "register":
+            from .plugin_projects import register_project
+            return register_project(_repository_root(), args.source, commit=args.commit,
+                                    registry_path=args.registry, dry_run=args.dry_run), args.json, None
         from .policy_plugins import registered_plugins
         from .plugin_sources import inspect_sources, sync_sources
         from .plugin_build import build_images
@@ -1107,20 +1119,27 @@ def _dispatch(args):
         if args.registry:
             path = Path(args.registry).expanduser()
             values["OVLAB_PLUGIN_REGISTRY"] = str(path if path.is_absolute() else root / path)
-        with registry_scope(root, values):
+        with registry_scope(root, values, offline=getattr(args, "offline", False) or getattr(args, "dry_run", False)):
             plugins = registered_plugins(root)
             selection = getattr(args, "plugin", None)
-            selected = [p for p in plugins if selection in (p.descriptor["id"], p.descriptor["config_type"])] if selection else plugins
+            selected = [p for p in plugins if selection in (p.descriptor["id"], p.descriptor["config_type"], p.descriptor.get("project"))] if selection else plugins
             if selection and not selected: raise CliUsageError(f"unknown plugin {selection!r}")
             sources = list(dict.fromkeys(name for p in selected for name in p.descriptor.get("sources", [])))
             if args.plugin_command == "list": result = [p.descriptor for p in selected]
-            elif args.plugin_command == "inspect": result = {"plugin": selected[0].descriptor, "sources": inspect_sources(root, sources)}
+            elif args.plugin_command == "inspect":
+                from .policy_plugins import registry_document
+                registry = registry_document(root)
+                project = selected[0].descriptor.get("project")
+                result = {"plugin": selected[0].descriptor, "variants": [p.descriptor for p in selected],
+                          "project": registry.get("projects", {}).get(project),
+                          "sources": inspect_sources(root, sources)}
             elif args.plugin_command == "sync": result = sync_sources(root, sources if selection else None, offline=args.offline, dry_run=args.dry_run)
             else:
                 roles = list(dict.fromkeys(p.descriptor["deployment"]["role"] for p in selected if "deployment" in p.descriptor))
                 if selection and not roles: raise CliUsageError(f"plugin {selection!r} has no runnable image recipe")
                 result = build_images(root, roles, offline=args.offline, dry_run=args.dry_run,
-                                      isolated_sources=args.isolated_sources)
+                                      isolated_sources=args.isolated_sources, config=args.config,
+                                      execution_profile=args.execution_profile)
             return result, args.json, None
     if args.command == "policy":
         if args.policy_command == "list":
@@ -1447,7 +1466,8 @@ def main(argv=None) -> int:
     command = _command_name(args)
     wants_json = bool(getattr(args, "json", False))
     try:
-        with _configured_artifact_umask():
+        from .policy_plugins import registry_scope
+        with _configured_artifact_umask(), registry_scope(_repository_root(), os.environ):
             result, json_mode, render = _dispatch(args)
         diagnosis_failed = command == "doctor" and result["status"] == "error"
         if json_mode:

@@ -117,7 +117,9 @@ def test_direct_eval_revision_scenarios_resolve_to_content_identity(tmp_path, se
     root = tmp_path / "project"
     shutil.copytree(REPOSITORY / "configs", root / "configs")
     shutil.copytree(REPOSITORY / "experiments", root / "experiments")
-    registry = root / "configs/resources/registry.yaml"
+    shutil.copytree(REPOSITORY / "plugins/openvla", root / "plugins/openvla")
+    shutil.copyfile(REPOSITORY / "plugins/registry.json", root / "plugins/registry.json")
+    registry = root / "plugins/openvla/configs/resources/registry.yaml"
     document = registry.read_text()
     start = document.index("  openvla-7b:\n")
     end = document.index("  openvla-7b-finetuned-libero-10:\n")
@@ -160,7 +162,7 @@ def test_checkpoint_identity_resolution_needs_only_system_python():
     completed = subprocess.run(
         [
             "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=/tmp",
-            f"PYTHONPATH={source}", "python3", "-c",
+            f"PYTHONPATH={source}:{REPOSITORY / 'code/packages/ovlab-policy-sdk/src'}", "python3", "-c",
             "from pathlib import Path; from ovlab_benchctl.checkpointing import checkpoint_spec; "
             f"s=checkpoint_spec(Path({str(REPOSITORY)!r}), {EXPERIMENT!r}); print(s.resource_id)",
         ],

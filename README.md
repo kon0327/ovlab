@@ -1,6 +1,6 @@
 # OpenVLABenchmark (OVLAB)
 
-OpenVLABenchmark (OVLAB) is a reproducible experimental framework for evaluating OpenVLA-derived Vision–Language–Action policies, initially with the LIBERO benchmark.
+OpenVLABenchmark (OVLAB) is a reproducible experimental framework for evaluating Vision–Language–Action policies through independent model plugins, initially OpenVLA with the LIBERO benchmark.
 
 OVLAB is authored by **Jiří Konečný**, VSB – Technical University of Ostrava.
 
@@ -26,8 +26,11 @@ export. See its [usage guide](code/apps/workflow-builder/README.md).
 The experiment runner and benchmark adapter execute together in a runner process or container. Each VLA implementation runs independently as a policy service, communicating through a dependency-light policy protocol. This separation allows Vanilla, LoRA, OFT, and QuIC implementations to keep distinct dependency environments.
 
 Model implementations connect through the versioned [policy plugin API](docs/POLICY_PLUGINS.md).
-The registry binds each plugin to Git commits or local projects and a Docker build
-recipe. Use `./ovlab plugin list`, `./ovlab plugin sync` and
+The registry binds each plugin project to a Git commit or local directory. Its
+`plugin.json` owns policy variants, source pins, interface capabilities, default
+configs, checkpoint catalogs, training hooks and image recipes. Register a project
+with `./ovlab plugin register PATH_OR_GIT_URL` (add `--commit FULL_COMMIT` for Git),
+then use `./ovlab plugin list`, `./ovlab plugin sync` and
 `./ovlab plugin build PLUGIN`. Builds use a temporary context prepared from
 registered Git commits or local projects; `external/` is a development workspace
 and optional offline Git cache. A new policy family needs no core dispatch or
@@ -36,8 +39,9 @@ the complete adapter connection.
 
 ## Repository layout
 
-- `code/`: core packages, the policy SDK, benchmark adapters, metrics, policy integrations, applications, and tests.
-- `configs/`: benchmark, policy, metric, protocol, and experiment configuration.
+- `code/`: generic core packages, the policy SDK, benchmark adapters, metrics, applications, and tests.
+- `plugins/`: independent plugin projects; `plugins/openvla/` owns the reference model integration and its runtime dependencies.
+- `configs/`: shared interfaces, benchmark/metric/protocol settings and explicit local overrides of plugin defaults.
 - `deploy/`: reserved for Docker, Compose, and deployment scripts.
 - `external/`: ignored source workspace populated from registered Git commits or local projects.
 - `references/`: tracked historical source artifacts and their provenance.
@@ -138,6 +142,13 @@ Runtime settings belong in YAML: model and quantization in policy configuration,
 renderer in the evaluation deployment, and `execution.max_workers` at the workflow
 root. Configuration mappings inherit from parent to child; sequences and scalar
 values replace inherited values. See the [experiment guide](docs/EXPERIMENT_WORKFLOW.md).
+
+Plugin defaults are addressed as `plugin://openvla/policies/openvla-vanilla/base.yaml`.
+A local YAML can `extends` a plugin URI and override just the checkpoint,
+quantization or execution settings; use the local file explicitly as the
+experiment component. Plugin checkpoint catalogs are declared in the manifest
+and discovered by `./ovlab checkpoint list --source registry`. The generic
+core registry can remain empty when no model plugin is selected.
 
 Evaluation phases launch the policy service and LIBERO runner in separate
 Compose containers, propagate results, clean up the private deployment, and

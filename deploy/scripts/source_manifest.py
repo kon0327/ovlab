@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "code/apps/benchctl
 
 EXCLUDED_PREFIXES = (
     ".git/", "configs/", "experiments/", "runs/", "checkpoints/", "datasets/",
-    "docs/", "notebooks/", "code/tests/", "references/", "examples/", "external/",
+    "docs/", "notebooks/", "code/tests/", "code/policies/", "references/", "examples/", "external/", "plugins/",
 )
 
 
@@ -41,7 +41,7 @@ def _included(relative: str) -> bool:
     # must not invalidate images that contain exactly the same runtime source.
     if "/" not in relative and relative.endswith(".md"):
         return False
-    return relative == "configs/plugins/registry.json" or (not relative.startswith(EXCLUDED_PREFIXES) and relative not in {".git", "external"})
+    return relative in {"configs/plugins/registry.json", "plugins/registry.json"} or (not relative.startswith(EXCLUDED_PREFIXES) and relative not in {".git", "external"})
 
 
 def _included_status(line: str) -> bool:
@@ -107,14 +107,14 @@ def build_manifest(root: Path, *, registry=None, source_rows=None) -> dict[str, 
     from ovlab_benchctl.policy_plugins import registry_document, registry_identity
     from ovlab_benchctl.plugin_sources import inspect_sources
     registry = registry if registry is not None else registry_document(root)
-    source_rows = source_rows if source_rows is not None else inspect_sources(root)
+    source_rows = source_rows if source_rows is not None else inspect_sources(root, registry=registry)
     registered_sources = [{key: value for key, value in row.items() if key != "path"} for row in source_rows]
     payload = {
         "schema_version": "ovlab-source-manifest/1.0.0",
         "repository_revision": head,
         "dirty": bool(status) or any(row["dirty"] for row in submodule_rows) or any(row.get("dirty", False) for row in source_rows),
         "plugin_registry": registry,
-        "plugin_registry_sha256": registry_identity(root),
+        "plugin_registry_sha256": hashlib.sha256(json.dumps(registry, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         "registered_sources": registered_sources,
         "status": list(status),
         "submodules": sorted(submodule_rows, key=lambda row: row["path"]),

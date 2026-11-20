@@ -17,18 +17,27 @@ own its digest-pinned base image and locked dependencies.
 
 | File | Purpose |
 | --- | --- |
-| `registry.json` | Binds `example_policy` to this local project and the `policy-example` image recipe. |
+| `registry.json` | Registers this complete local project with an `ovlab.plugins/v2` source binding. |
+| `plugin.json` | Owns policy entrypoints, declared interfaces, configs, checkpoint catalog and image recipe. |
 | `src/example_policy/plugin.py` | Implements API v1 validation, settings, adapter construction and identity. |
 | `src/example_policy/runtime.py` | Implements the stateful `PolicyAdapter` lifecycle and predictions. |
 | `configs/policy.yaml` | Selects the plugin, primary checkpoint and shared action contract. |
 | `configs/resources.yaml` | Pins the bundled artifact's revision and file hashes. |
 | `configs/deployment.yaml` | Configures a CPU service on localhost port 8123. |
-| `configure.py` | Copies namespaced configs into OVLAB and writes the absolute local checkpoint override. |
+| `configure.py` | Creates thin explicit overrides of plugin configs and the absolute local checkpoint override. |
 | `Dockerfile` | Installs the integration and records its own build provenance. |
 
 ## Run the complete example
 
-Prepare the small configurations. The setup is idempotent and refuses to
+The project is registered by its `plugin.json` manifest; no core Python module
+needs its policy type or image name. To add it alongside the default OpenVLA
+project in your user registry, run `./ovlab plugin register examples/policy-plugin`.
+The commands below instead select the shipped example-only registry so the
+example remains independent from other installed integrations.
+
+Prepare the small configuration overrides. They inherit defaults using
+`plugin://example-policy/policy.yaml`, `deployment.yaml` and `resources.yaml`.
+The setup is idempotent and refuses to
 overwrite files you edited. `--dry-run` previews all four destination paths.
 
 ```bash
@@ -86,17 +95,19 @@ HTTP endpoint. See [DEPLOYMENT.md](../../DEPLOYMENT.md#connecting-to-the-model)
 for the client connection. `stop` removes the service container and keeps the
 record below `$OVLAB_MODEL_DATA_ROOT/deployments/example-plugin/`.
 
-The generated configs are `configs/policies/example-plugin.yaml`,
+The generated override configs are `configs/policies/example-plugin.yaml`,
 `configs/resources/example-plugin.yaml`, `configs/deploy/example-plugin.yaml`
-and `configs/local/example-plugin.yaml`. They are developer examples you can
-edit. The source snapshot in `external/example-policy` and the built image are
+and `configs/local/example-plugin.yaml`. They extend plugin-owned defaults and are the explicit files to
+edit. The source snapshot in `external/plugin-example-policy` and the built image are
 intentional caches. Clear `OVLAB_PLUGIN_REGISTRY` before returning to the default
 registry, and clear `OVLAB_MODEL_DATA_ROOT` to restore your normal data root.
 
 ## Adapt it to a real model
 
 1. Copy the project and choose a unique package, policy type, plugin ID, image
-   role and Compose profile. Keep those names consistent in the registry/configs.
+   role and Compose profile. Keep those names consistent in `plugin.json` and
+   the project's configs. Register the resulting project through its local
+   directory or Git URL and commit.
 2. Implement your settings validation in `plugin.py`. Control hooks execute on
    the host; keep model dependencies and weight loading inside the adapter's
    `_initialize` method.
@@ -105,12 +116,13 @@ registry, and clear `OVLAB_MODEL_DATA_ROOT` to restore your normal data root.
    supported horizons. Return checkpoint/method identity through RPC.
 4. Register real checkpoint hashes separately from model implementation sources.
    Install runtime dependencies in your own Docker recipe.
-5. For distribution, change `sources.example-policy` from `kind: local` plus
-   `path` to `kind: git` plus `url` and a full immutable `commit`. Source IDs
-   determine `external/<id>`; update the Dockerfile's `COPY` paths too.
-   Your adapter and upstream model may also be two separate registered projects:
-   list both source IDs in the plugin and build recipe, and keep `entrypoint`
-   pointing to your adapter. Either project can use a Git pin or a local path.
+5. For distribution, change the user registry's `plugins.example-policy.source`
+   from a local path to a Git URL and full immutable commit. The project manifest
+   remains the integration's source of defaults and recipes. OVLAB automatically
+   stages it as `external/plugin-example-policy`; renaming the project ID also
+   requires updating that Docker `COPY` path. Additional upstream model projects
+   belong in the manifest's `sources` mapping; list their IDs in the policy and
+   build recipe. Keep the entrypoint pointing at your own adapter.
 
 After changing local implementation files, rebuild the plugin image before
 redeploying. After importing a plugin in a long-lived Python process, restart
@@ -118,5 +130,5 @@ that process before selecting a different checkout of the same Python package.
 
 The full [plugin developer guide](../../docs/POLICY_PLUGINS.md) describes the
 API, build/image identity, observations, checkpoints, mounts and migration. The
-inference API covers build, serving and evaluation; model-specific training
-algorithms have their own specialized components.
+policy API covers build, serving and evaluation. Projects that implement training
+or checkpoint conversion can also declare the optional public SDK extensions.

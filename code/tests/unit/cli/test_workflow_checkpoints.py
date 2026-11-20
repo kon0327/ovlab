@@ -38,6 +38,16 @@ def resources(tmp_path):
     repository, data = tmp_path / 'repository', tmp_path / 'data'
     shutil.copytree(ROOT / 'configs', repository / 'configs')
     shutil.copytree(ROOT / 'experiments', repository / 'experiments')
+    registrations = json.loads((ROOT / 'plugins/registry.json').read_text())
+    registrations['plugins']['openvla']['source']['path'] = str(ROOT / 'plugins/openvla')
+    (repository / 'plugins').mkdir()
+    (repository / 'plugins/registry.json').write_text(json.dumps(registrations))
+    # This fixture supplies a tiny, explicit resource catalog; real plugin
+    # defaults remain read-only and still provide the policy implementations.
+    for experiment in (repository / 'experiments/evaluation').glob('*.yaml'):
+        experiment.write_text(experiment.read_text().replace(
+            'plugin://openvla/resources/registry.yaml', 'resources/registry.yaml'))
+
     revision = 'c' * 40
     base = data / 'checkpoints/huggingface/openvla-7b' / revision
     base.mkdir(parents=True)
@@ -45,7 +55,7 @@ def resources(tmp_path):
     (base / 'preprocessor_config.json').write_text('{}')
     tensor(base / 'model.safetensors')
     spec = checkpoint_spec_from_snapshot('openvla-7b', 'tiny/openvla', revision, base)
-    registry = load(repository / 'configs/resources/registry.yaml')
+    registry = load(ROOT / 'plugins/openvla/configs/resources/registry.yaml')
     registry['checkpoints']['openvla-7b'] = {
         'repo_id': spec.repo_id, 'revision': revision, 'expected_sha256': spec.expected_sha256,
         'files': {name: {'size': size, 'sha256': digest} for name, size, digest in spec.files},
@@ -215,7 +225,7 @@ def test_invalid_training_handoff_never_reaches_reference_evaluation(resources, 
         record['result']['result']['checkpoint_id'] = 'checkpoint-' + '0' * 32
     with pytest.raises((RuntimeError, ValueError)):
         bind(resources, configuration, profile, record, converter)
-    assert configuration['document']['components']['policy'] == 'policies/openvla-lora/merged-libero10.yaml'
+    assert configuration['document']['components']['policy'] == 'plugin://openvla/policies/openvla-lora/merged-libero10.yaml'
     if failure == 'conversion':
         assert not list((resources.data / 'checkpoints/local/inference').rglob('manifest.json'))
     else:

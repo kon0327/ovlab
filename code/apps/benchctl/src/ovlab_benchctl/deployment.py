@@ -270,9 +270,9 @@ class ComposeDeployment:
             raise ValueError(f"renderer must be one of: {', '.join(sorted(self._RENDERERS))}")
 
         policy_reference = experiment_doc["components"]["policy"]
-        policy_path = (config_root / policy_reference).resolve()
-        if not policy_path.is_relative_to(config_root / "policies") or not policy_path.is_file():
-            raise ValueError(f"experiment policy must resolve below configs/policies/: {policy_reference}")
+        policy_path = resolver.references.source(policy_reference)
+        if not policy_path.is_file():
+            raise ValueError(f"experiment policy configuration does not exist: {policy_reference}")
         policy_doc = resolver.load_component(policy_reference, "policy")
         policy_type = policy_doc.get("type")
         from .policy_plugins import plugin_for_type
@@ -286,8 +286,8 @@ class ComposeDeployment:
                 f"{policy_type!r}; expected {required_profile!r}"
             )
 
-        if quantization is not None and quantization not in {"none", "8bit", "4bit"}:
-            raise ConfigSchemaError("quantization must be one of: none, 8bit, 4bit")
+        if quantization is not None and (not isinstance(quantization, str) or not quantization):
+            raise ConfigSchemaError("quantization must name a plugin-supported profile")
         selected_quantization = quantization or policy_doc["settings"]["runtime"]["quantization"]
         if selected_quantization not in deploy.get("quantization", ["none"]):
             raise ConfigSchemaError(f"plugin {policy_type} does not support quantization {selected_quantization}")

@@ -29,8 +29,7 @@ _DOWNLOAD_REPORT_BYTES = 256 * 1024 * 1024
 ProgressCallback = Callable[[str], None]
 
 
-class CheckpointResolutionError(RuntimeError):
-    """A checkpoint could not be resolved or failed immutable verification."""
+from ovlab_policy_sdk.training_errors import CheckpointResolutionError
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,59 +168,77 @@ def _inside(path: Path, root: Path, label: str) -> Path:
 
 
 def _composed(path: Path, config_root: Path, expected_kind: str, stack=()) -> dict[str, object]:
-    path = _inside(path, config_root, expected_kind)
-    if path in stack:
-        raise CheckpointResolutionError(f"configuration inheritance cycle at {path}")
-    document = load(path)
-    if document.get("kind") != expected_kind:
-        raise CheckpointResolutionError(f"{path} is not a {expected_kind} configuration")
-    parent = document.get("extends")
-    if parent is None:
-        return document
-    if not isinstance(parent, str) or not parent:
-        raise CheckpointResolutionError(f"{path}.extends must be a non-empty relative path")
-    return _merge(_composed(path.parent / parent, config_root, expected_kind, stack + (path,)), document)
+    """Compatibility wrapper using the shared bounded configuration composer."""
+    from .config_bundle import ConfigBundleBuilder
+    from .config_references import ConfigReferences
+    config_root = Path(config_root).resolve()
+    root = config_root.parent
+    refs = ConfigReferences(root)
+    try:
+        return ConfigBundleBuilder(root).load_component(refs.reference(path), expected_kind, validate_document=False)
+    except (ValueError, KeyError) as exc:
+        raise CheckpointResolutionError(str(exc)) from exc
 
 
 def checkpoint_spec(repository_root: Path, experiment: str | Path) -> CheckpointSpec | LatestCheckpointSelection:
-    """Resolve the selected policy's logical checkpoint identity without heavy imports."""
-    root = repository_root.resolve()
-    config_root = root / "configs"
-    experiment_path = Path(experiment)
-    if not experiment_path.is_absolute():
-        experiment_path = root / experiment_path
-    kind = load(experiment_path).get("kind")
+    """Resolve explicit experiment policy/catalog references, including plugin URIs."""
+    from .config_bundle import ConfigBundleBuilder
+    from .config_references import ConfigReferences
+    root = Path(repository_root).resolve()
+    refs = ConfigReferences(root)
+    builder = ConfigBundleBuilder(root)
+    path = refs.source(str(experiment)) if str(experiment).startswith("plugin:") else Path(experiment)
+    if not path.is_absolute():
+        path = root / path
+    kind = load(path).get("kind")
     if kind not in {"experiment", "deployment"}:
         raise CheckpointResolutionError("checkpoint selection requires an evaluation or deployment config")
-    experiment_root = root / "experiments" if experiment_path.resolve().is_relative_to(root / "experiments") else config_root
-    experiment_doc = _composed(experiment_path, experiment_root, kind)
+    experiment_doc = builder.load_component(refs.reference(path), kind, validate_document=False)
     try:
-        policy_ref = experiment_doc["components"]["policy"]  # type: ignore[index]
-        registry_ref = experiment_doc["resources"]["registry"]  # type: ignore[index]
-    except (KeyError, TypeError) as exc:
-        raise CheckpointResolutionError("experiment lacks policy or resource registry reference") from exc
-    policy = _composed(config_root / str(policy_ref), config_root, "policy")
-    try:
-        resource_id = str(policy["settings"]["checkpoint_id"])  # type: ignore[index]
-    except (KeyError, TypeError) as exc:
-        raise CheckpointResolutionError("selected policy lacks settings.checkpoint_id") from exc
-    registry = _composed(config_root / str(registry_ref), config_root, "resource_registry")
-    try:
-        entry = registry["checkpoints"][resource_id]  # type: ignore[index]
-        return _selection_from_entry(resource_id, entry)
+        policy = builder.load_component(experiment_doc["components"]["policy"], "policy", validate_document=False)
+        resource_id = str(policy["settings"]["checkpoint_id"])
+        registry = builder.load_component(experiment_doc["resources"]["registry"], "resource_registry", validate_document=False)
+        return _selection_from_entry(resource_id, registry["checkpoints"][resource_id])
     except (KeyError, TypeError, ValueError) as exc:
-        raise CheckpointResolutionError(
-            f"registry entry {resource_id!r} has an invalid checkpoint selection"
-        ) from exc
+        raise CheckpointResolutionError("experiment has an invalid checkpoint selection") from exc
+
+
+def registered_checkpoint_catalog(repository_root: Path) -> dict[str, object]:
+    """Compose explicitly declared catalogs without choosing a model family.
+
+    Local entries override project defaults by ID. Conflicting project defaults
+    require an explicit experiment catalog instead of depending on load order.
+    """
+    from .config_bundle import ConfigBundleBuilder
+    from .policy_plugins import registry_document
+    root = Path(repository_root).resolve()
+    builder = ConfigBundleBuilder(root)
+    document = registry_document(root)
+    merged = {"schema_version": "0.1.0", "kind": "resource_registry", "checkpoints": {}, "repositories": {}}
+    for project_id, project in document.get("projects", {}).items():
+        catalogs = project.get("checkpoint_catalogs", [])
+        for relative in catalogs:
+            reference = relative if str(relative).startswith("plugin:") else f"plugin://{project_id}/{relative}"
+            catalog = builder.load_component(reference, "resource_registry", validate_document=False)
+            for resource_id, entry in catalog["checkpoints"].items():
+                existing = merged["checkpoints"].get(resource_id)
+                if existing is not None and existing != entry:
+                    raise CheckpointResolutionError(f"conflicting plugin checkpoint {resource_id!r}; select an explicit experiment resource catalog")
+                merged["checkpoints"][resource_id] = entry
+            merged["repositories"].update(catalog.get("repositories", {}))
+    local = root / "configs/resources/registry.yaml"
+    if local.is_file():
+        catalog = builder.load_component("resources/registry.yaml", "resource_registry", validate_document=False)
+        merged["checkpoints"].update(catalog["checkpoints"])
+        merged["repositories"].update(catalog.get("repositories", {}))
+    return merged
 
 
 def checkpoint_spec_by_id(repository_root: Path, resource_id: str) -> CheckpointSpec | LatestCheckpointSelection:
-    """Resolve one portable registry checkpoint without an experiment wrapper."""
-    root = repository_root.resolve()
-    registry = _composed(root / "configs" / "resources" / "registry.yaml", root / "configs", "resource_registry")
+    """Resolve a local or registered project checkpoint by its logical ID."""
+    registry = registered_checkpoint_catalog(repository_root)
     try:
-        entry = registry["checkpoints"][resource_id]  # type: ignore[index]
-        return _selection_from_entry(resource_id, entry)
+        return _selection_from_entry(resource_id, registry["checkpoints"][resource_id])
     except (KeyError, TypeError, ValueError) as exc:
         raise CheckpointResolutionError(
             f"registry entry {resource_id!r} has an invalid checkpoint selection"

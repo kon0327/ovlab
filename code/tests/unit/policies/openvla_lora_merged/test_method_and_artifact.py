@@ -43,7 +43,7 @@ def observation():
 
 def registered_entry():
     registry = ConfigResolver(CONFIGS, repository_root=REPOSITORY).load_component(
-        "resources/registry.yaml", "resource_registry"
+        "plugin://openvla/resources/registry.yaml", "resource_registry"
     )
     return registry["checkpoints"]["openvla-7b-finetuned-libero-10"]
 

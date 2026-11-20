@@ -9,9 +9,9 @@ def configure(root, *, dry_run=False):
     root = Path(root).resolve()
     package = root / 'examples/policy-plugin'
     files = {
-        root / 'configs/policies/example-plugin.yaml': (package / 'configs/policy.yaml').read_text(),
-        root / 'configs/deploy/example-plugin.yaml': (package / 'configs/deployment.yaml').read_text(),
-        root / 'configs/resources/example-plugin.yaml': (package / 'configs/resources.yaml').read_text(),
+        root / 'configs/policies/example-plugin.yaml': 'schema_version: \"0.1.0\"\nkind: policy\nextends: plugin://example-policy/policy.yaml\n',
+        root / 'configs/deploy/example-plugin.yaml': 'schema_version: ovlab.deployment/v1\nkind: deployment\nextends: plugin://example-policy/deployment.yaml\ncomponents:\n  policy: policies/example-plugin.yaml\nresources:\n  registry: resources/example-plugin.yaml\n',
+        root / 'configs/resources/example-plugin.yaml': 'schema_version: \"0.1.0\"\nkind: resource_registry\nextends: plugin://example-policy/resources.yaml\n',
     }
     checkpoint = package / 'fixtures/checkpoint'
     if not checkpoint.is_dir():

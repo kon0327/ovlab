@@ -3,7 +3,7 @@ set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_paths=()
-for source_path in "$repository_root"/code/packages/*/src "$repository_root"/code/policies/*/src "$repository_root"/code/apps/*/src "$repository_root"/external/quic-peft-vla/src; do
+for source_path in "$repository_root"/code/packages/*/src "$repository_root"/code/apps/*/src; do
     if [[ -d "$source_path" ]]; then
         source_paths+=("$source_path")
     fi

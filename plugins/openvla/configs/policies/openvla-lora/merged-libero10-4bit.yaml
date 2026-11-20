@@ -1,0 +1,10 @@
+schema_version: "0.1.0"
+kind: policy
+type: openvla_lora_merged
+extends: merged-libero10.yaml
+
+settings:
+  runtime:
+    # Quantize the already merged full-weight artifact for inference. This does
+    # not reclassify the published training procedure as QLoRA.
+    quantization: 4bit

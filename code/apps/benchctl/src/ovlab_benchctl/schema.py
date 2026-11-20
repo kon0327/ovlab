@@ -267,8 +267,8 @@ def validate_protocol(doc, path):
 def validate_registry(doc, path):
     header(doc, path, "resource_registry")
     mapping(doc, path, required=("schema_version", "kind", "checkpoints", "repositories"))
-    if not isinstance(doc["checkpoints"], dict) or not doc["checkpoints"]:
-        raise ConfigSchemaError(f"{path}.checkpoints must be a non-empty mapping")
+    if not isinstance(doc["checkpoints"], dict):
+        raise ConfigSchemaError(f"{path}.checkpoints must be a mapping")
     if not isinstance(doc["repositories"], dict):
         raise ConfigSchemaError(f"{path}.repositories must be a mapping")
     for resource_id, entry in doc["checkpoints"].items():
@@ -429,7 +429,7 @@ def validate_deployment(doc, path):
         exact_type(doc["build"], bool, f"{path}.build")
     runtime = mapping(doc.get("runtime", {}), f"{path}.runtime", optional=("quantization", "gpu"))
     if "quantization" in runtime:
-        enum(runtime["quantization"], ("none", "8bit", "4bit"), f"{path}.runtime.quantization")
+        non_empty_string(runtime["quantization"], f"{path}.runtime.quantization")
     if "gpu" in runtime and runtime["gpu"] is not None:
         non_empty_string(runtime["gpu"], f"{path}.runtime.gpu")
     service = mapping(doc.get("service", {}), f"{path}.service",

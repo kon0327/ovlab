@@ -22,7 +22,8 @@ def _experiment(tmp_path: Path, selector: str) -> Path:
     root = tmp_path / "repository"
     shutil.copytree(ROOT / "configs", root / "configs")
     shutil.copytree(ROOT / "experiments", root / "experiments")
-    registry = root / "configs/resources/registry.yaml"
+    shutil.copytree(ROOT / "plugins", root / "plugins", ignore=shutil.ignore_patterns('.cache', '__pycache__', '*.egg-info'))
+    registry = root / "plugins/openvla/configs/resources/registry.yaml"
     content = registry.read_text(encoding="utf-8")
     start = content.index("  openvla-7b:\n")
     end = content.index("  openvla-7b-finetuned-libero-10:\n")

@@ -122,6 +122,14 @@ def test_ablation_materializes_existing_profiles_without_model_imports(tmp_path)
         suite.materialize(tmp_path / "study")
 
 
+def test_plugin_owned_ablation_uses_only_project_profiles():
+    plugin_suite = ROOT / 'plugins/openvla/configs/ablations/openvla-quic-placement-smoke.yaml'
+    native = TrainingAblation(plugin_suite, config_root=ROOT / 'configs')
+    compatibility = TrainingAblation(SUITE, config_root=ROOT / 'configs')
+    assert native.plan()['ablation_id'] == compatibility.plan()['ablation_id']
+    assert all(path.is_relative_to(ROOT / 'plugins/openvla/configs') for path, profile in native.variants.values())
+
+
 def test_ablation_runner_keeps_failure_evidence_for_partition_drift(tmp_path):
     suite = TrainingAblation(SUITE, config_root=ROOT / "configs")
     class Deployment:

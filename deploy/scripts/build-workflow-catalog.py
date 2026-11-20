@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-for directory in (ROOT / 'code/apps', ROOT / 'code/packages', ROOT / 'code/policies'):
+for directory in (ROOT / 'code/apps', ROOT / 'code/packages'):
     for source in sorted(directory.glob('*/src')):
         sys.path.insert(0, str(source))
 
@@ -19,9 +19,15 @@ from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 from ovlab_benchctl.experiment_workflow import _validate_node
 from ovlab_benchctl.strict_yaml import load
 from ovlab_benchctl.training_composition import load_training_profile
+from ovlab_benchctl.policy_plugins import plugin_config_roots, plugin_project_root, registry_scope
 
 
 def build_catalog(root=ROOT):
+    with registry_scope(root):
+        return _build_catalog(root)
+
+
+def _build_catalog(root):
     bundle = ConfigBundleBuilder(root)
     catalog = {'version': 1, 'generated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
                'training': [], 'evaluation': [], 'workflows': [], 'components': {}, 'tasks': {}, 'excluded': []}
@@ -53,6 +59,23 @@ def build_catalog(root=ROOT):
             reference = path.relative_to(root / 'configs').as_posix()
             collect(path, lambda r=reference, s=schema: bundle.load_component(r, s),
                     catalog['components'][kind], reference)
+    component_kinds = {'benchmark': 'benchmark', 'policy': 'policy', 'protocol': 'protocol',
+                       'metric_set': 'metrics', 'artifact_store': 'artifacts'}
+    project_roots = plugin_config_roots(root)
+    for project, config_root in project_roots.items():
+        files.add(plugin_project_root(project, root) / 'plugin.json')
+        for path in sorted(config_root.rglob('*.yaml')):
+            if path.is_symlink() or not path.resolve().is_relative_to(config_root):
+                continue
+            files.add(path)
+            try:
+                kind = load(path).get('kind')
+            except ValueError:
+                continue
+            if kind in component_kinds:
+                reference = f'plugin://{project}/{path.relative_to(config_root).as_posix()}'
+                collect(path, lambda r=reference, s=kind: bundle.load_component(r, s),
+                        catalog['components'][component_kinds[kind]], reference)
     for path in sorted((root / 'experiments/workflows').glob('*')):
         if path.suffix not in {'.yaml', '.yml', '.json'}:
             continue
@@ -76,9 +99,19 @@ def build_catalog(root=ROOT):
     digest = hashlib.sha256()
     for path in sorted(files):
         if '.generated' not in path.parts:
-            digest.update(path.relative_to(root).as_posix().encode() + b'\0' + path.read_bytes())
+            if path.is_relative_to(root):
+                reference = path.relative_to(root).as_posix()
+            elif path.name == 'plugin.json':
+                reference = 'plugin-manifest:' + load_manifest_id(path)
+            else:
+                reference = bundle.references.reference(path)
+            digest.update(reference.encode() + b'\0' + path.read_bytes())
     catalog['source_sha256'] = digest.hexdigest()
     return catalog
+
+
+def load_manifest_id(path):
+    return json.loads(path.read_text())['id']
 
 
 if __name__ == '__main__':

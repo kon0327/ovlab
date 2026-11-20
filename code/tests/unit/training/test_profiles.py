@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ovlab_benchctl.strict_yaml import load
+from ovlab_benchctl.training_composition import load_training_document
 from ovlab_benchctl.training_errors import TrainingProfileError, TrainingResourceError
 from ovlab_benchctl.training_profiles import TrainingProfile, TrainingPlanner
 
@@ -14,11 +15,11 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def _lora():
-    return load(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml")
+    return load_training_document(ROOT / "experiments/training/openvla-libero10-lora-smoke.yaml")
 
 
 def _full():
-    return load(ROOT / "experiments/training/openvla-full-reference.yaml")
+    return load_training_document(ROOT / "experiments/training/openvla-full-reference.yaml")
 
 
 def test_lora_and_full_profiles_are_strict_and_deterministic():

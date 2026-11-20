@@ -23,6 +23,10 @@ class PolicyPluginReferenceError(ValueError):
     """A required resource or implementation is missing."""
 
 
+class PolicyPluginUnavailableError(RuntimeError):
+    """A selected integration cannot provide its declared runtime service."""
+
+
 class PolicySettings(Protocol):
     """Minimum settings contract consumed by the generic experiment resolver."""
 
@@ -70,6 +74,10 @@ class PolicyPlugin(ABC):
 
     def validate_observation(self, doc: dict, benchmark_doc: dict) -> None:
         """Check named inputs, shapes and preprocessing compatibility."""
+
+    def deployment_context(self, policy: dict, deployment: dict) -> dict:
+        """Provide settings context for standalone serving without a benchmark."""
+        return {"settings": {"observation": deepcopy(deployment.get("input", {}))}}
 
     def validate_checkpoint(self, entry: dict, path: str) -> None:
         """Validate plugin-specific artifact/method metadata beyond file hashes."""

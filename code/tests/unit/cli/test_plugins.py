@@ -102,7 +102,17 @@ def external_plugin(tmp_path, monkeypatch):
     (root / 'deploy/docker').mkdir()
     (root / 'deploy/docker/base-images.lock').write_text('fixture base lock')
     (root / 'VERSION').write_text('0.2.0')
-    registry = json.loads((ROOT / 'examples/policy-plugin/registry.json').read_text())
+    # Keep the legacy expanded registry covered alongside project registration
+    # tests. This fixture intentionally supplies an independently wired adapter.
+    manifest = json.loads((ROOT / 'examples/policy-plugin/plugin.json').read_text())
+    registry = {'schema_version': 'ovlab.plugins/v1',
+                'sources': {'example-policy': {'kind': 'local', 'path': 'examples/policy-plugin'}},
+                'plugins': manifest['plugins'], 'builds': manifest['builds']}
+    registry['plugins']['example_policy']['sources'] = ['example-policy']
+    registry['builds']['policy-example'].update(dockerfile='external/example-policy/Dockerfile', sources=['example-policy'])
+    shutil.copyfile(ROOT / 'plugins/openvla/configs/resources/registry.yaml', root / 'configs/resources/registry.yaml')
+    for path in (root / 'experiments/evaluation').glob('*.yaml'):
+        path.write_text(path.read_text().replace('plugin://openvla/resources/registry.yaml', 'resources/registry.yaml'))
     write_registry(root, registry)
     monkeypatch.delenv('OVLAB_PLUGIN_REGISTRY', raising=False)
     policy = {'schema_version': '0.1.0', 'kind': 'policy', 'type': 'example_policy', 'settings': {
@@ -635,6 +645,7 @@ def test_documented_cpu_example_configures_and_verifies_its_tiny_artifact(extern
     from ovlab_benchctl.application import OvlabApplication
     from ovlab_benchctl.model_deployment import resolve_policy_service
     root = external_plugin
+    write_registry(root, json.loads((ROOT/'examples/policy-plugin/registry.json').read_text()))
     configure = runpy.run_path(str(root/'examples/policy-plugin/configure.py'))['configure']
     paths = configure(root, dry_run=True)
     assert all(not (root/path).exists() for path in paths)

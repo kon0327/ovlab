@@ -1,0 +1,50 @@
+{
+  "schema_version": "ovlab.plugins/v2",
+  "plugins": {
+    "openvla": {
+      "source": {
+        "kind": "local",
+        "path": "plugins/openvla"
+      }
+    }
+  },
+  "sources": {
+    "libero": {
+      "kind": "git",
+      "url": "https://github.com/Lifelong-Robot-Learning/LIBERO.git",
+      "commit": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
+      "path": "external/libero"
+    }
+  },
+  "builds": {
+    "benchmark": {
+      "dockerfile": "deploy/docker/Dockerfile.benchmark",
+      "image": "ovlab-benchmark-libero:local",
+      "sources": [
+        "libero"
+      ],
+      "locks": [
+        "deploy/locks/benchmark.pylock.toml",
+        "deploy/locks/benchmark.requirements.txt"
+      ]
+    },
+    "reporting": {
+      "dockerfile": "deploy/docker/Dockerfile.reporting",
+      "image": "ovlab-reporting:local",
+      "sources": [],
+      "locks": [
+        "deploy/locks/reporting.pylock.toml",
+        "deploy/locks/reporting.requirements.txt"
+      ]
+    },
+    "dataset": {
+      "dockerfile": "deploy/docker/Dockerfile.dataset",
+      "image": "ovlab-dataset:local",
+      "sources": [],
+      "locks": [
+        "deploy/locks/dataset.pylock.toml",
+        "deploy/locks/dataset.requirements.txt"
+      ]
+    }
+  }
+}

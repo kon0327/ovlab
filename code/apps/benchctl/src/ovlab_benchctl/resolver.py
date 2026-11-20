@@ -36,6 +36,7 @@ from .models import (
 )
 from .schema import SCHEMA_VERSION, validate
 from .strict_yaml import load
+from .config_references import ConfigReferences
 
 
 def _plain(value):
@@ -64,6 +65,7 @@ class ConfigResolver:
         self.environment = environment
         self.config_root = Path(config_root).resolve()
         self.repository_root = Path(repository_root).resolve() if repository_root else self.config_root.parent.resolve()
+        self.references = ConfigReferences(self.repository_root, self.config_root)
         if not self.config_root.is_dir(): raise ConfigReferenceError(f"config root does not exist: {self.config_root}")
 
     @staticmethod
@@ -75,14 +77,12 @@ class ConfigResolver:
 
     def _root_reference(self, reference: str, label: str) -> Path:
         if not isinstance(reference, str) or not reference:
-            raise ConfigReferenceError(f"{label} must be a non-empty relative path")
-        path = Path(reference)
-        if path.is_absolute(): raise ConfigReferenceError(f"{label} must be relative to configs/")
-        return self._inside(self.config_root / path, self.config_root, label)
+            raise ConfigReferenceError(f"{label} must be a non-empty configuration reference")
+        return self.references.source(reference)
 
     def _load_composed(self, path: Path, expected_kind: str, stack=()) -> dict[str, Any]:
-        root = self.repository_root / "experiments" if expected_kind == "experiment" and path.resolve().is_relative_to(self.repository_root / "experiments") else self.config_root
-        path = self._inside(path, root, "configuration")
+        path = Path(path).resolve()
+        self.references.origin(path)
         if path in stack:
             chain = " -> ".join(str(item) for item in stack + (path,))
             raise ConfigReferenceError(f"extends cycle detected: {chain}")
@@ -98,9 +98,9 @@ class ConfigResolver:
         else:
             if not isinstance(reference, str) or not reference:
                 raise ConfigSchemaError(f"{path}.extends must be a non-empty relative path")
-            parent_path = self._inside(path.parent / reference, root, "extends")
+            parent_path = self.references.parent(path, reference)
             parent = self._load_composed(parent_path, expected_kind, stack + (path,))
-            if raw.get("type") != parent.get("type"):
+            if "type" in raw and raw["type"] != parent.get("type"):
                 raise ConfigSchemaError(f"{path}.type must match its parent")
             resolved = _merge(parent, raw)
         validate(resolved, str(path), expected_kind, repository_root=self.repository_root)
@@ -137,10 +137,10 @@ class ConfigResolver:
         execution_profile: str | Path | None = None,
         environment=None,
     ) -> ResolvedExperimentConfig:
-        experiment_path = Path(experiment)
+        experiment_path = (self.references.source(str(experiment)) if str(experiment).startswith("plugin:")
+                           else Path(experiment))
         if not experiment_path.is_absolute(): experiment_path = self.repository_root / experiment_path
-        experiment_root = self.repository_root / "experiments" if experiment_path.resolve().is_relative_to(self.repository_root / "experiments") else self.config_root
-        experiment_path = self._inside(experiment_path, experiment_root, "experiment")
+        self.references.origin(experiment_path)
         experiment_doc = self._load_composed(experiment_path, "experiment")
 
         kinds = {

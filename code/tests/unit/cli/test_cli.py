@@ -100,7 +100,7 @@ def test_lightweight_commands_do_not_import_runtime_packages(arguments):
     paths = [str(path) for path in REPOSITORY.glob("code/*/*/src")]
     paths += [str(path) for path in REPOSITORY.glob("code/apps/*/src")]
     paths += [str(path) for path in REPOSITORY.glob("code/packages/*/src")]
-    paths += [str(path) for path in REPOSITORY.glob("code/policies/*/src")]
+    paths += [str(path) for path in REPOSITORY.glob("plugins/*/src")]
     env["PYTHONPATH"] = ":".join(paths)
     completed = subprocess.run(
         [sys.executable, "-c", expression], cwd=REPOSITORY, env=env,

@@ -69,8 +69,12 @@ RUN install -d -o root -g root -m 0755 /etc/ovlab/libero
 COPY --chmod=0444 deploy/config/libero/config.yaml /etc/ovlab/libero/config.yaml
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 COPY external/libero /opt/ovlab/external/libero
+ARG OVLAB_CONFIG_BUNDLE_SHA256=none
 RUN --mount=type=secret,id=ovlab_source_manifest \
-    bash /tmp/install-ovlab-packages.sh \
+    --mount=type=secret,id=ovlab_plugin_registry \
+    --mount=type=secret,id=ovlab_config_bundle \
+    test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
+    && bash /tmp/install-ovlab-packages.sh \
     && rm /tmp/install-ovlab-packages.sh \
     && groupadd --gid 10001 ovlab \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \

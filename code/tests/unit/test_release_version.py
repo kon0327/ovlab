@@ -38,7 +38,8 @@ def test_release_version_is_semantic_and_shared_by_public_surfaces() -> None:
     assert f'CLI_VERSION = "{version}"' in versioning
 
     pyprojects = _ovlab_projects()
-    assert len(pyprojects) == 12
+    assert pyprojects
+    assert not any("ovlab-openvla" in path.read_text() for path in pyprojects)
     assert {_project_version(path) for path in pyprojects} == {version}
 
 
@@ -60,6 +61,7 @@ def test_internal_distribution_requirements_do_not_accept_an_older_release() -> 
 def test_container_images_publish_the_same_release_version() -> None:
     version = (REPOSITORY / "VERSION").read_text(encoding="utf-8").strip()
     dockerfiles = sorted((REPOSITORY / "deploy/docker").glob("Dockerfile.*"))
+    dockerfiles += sorted((REPOSITORY / "plugins/openvla/docker").glob("Dockerfile.*"))
     assert dockerfiles
     for dockerfile in dockerfiles:
         source = dockerfile.read_text(encoding="utf-8")

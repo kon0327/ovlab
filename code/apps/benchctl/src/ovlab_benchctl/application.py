@@ -139,18 +139,25 @@ class OvlabApplication:
         return self._resolver
 
     def _config_path(self, config: str | Path) -> Path:
+        from .config_references import ConfigReferences
+        references = ConfigReferences(self.repository_root, self.config_root)
+        if str(config).startswith("plugin:"):
+            path = references.source(str(config))
+            if not path.is_file():
+                raise ConfigReferenceError(f"configuration does not exist: {config}")
+            return path
         path = Path(config).expanduser()
         if not path.is_absolute():
             path = self.repository_root / path
         path = path.resolve()
         if not path.is_file():
             raise ConfigReferenceError(f"configuration does not exist: {path}")
-        if not (path.is_relative_to(self.config_root) or path.is_relative_to(self.repository_root / "experiments")):
-            raise ConfigReferenceError("CLI configurations must be inside configs/ or experiments/")
+        references.origin(path)
         return path
 
     def _relative(self, path: Path) -> str:
-        return str(path.relative_to(self.config_root))
+        from .config_references import ConfigReferences
+        return ConfigReferences(self.repository_root, self.config_root).reference(path)
 
     def _local_profile(self, override: str | Path | None = None) -> Path:
         configured = override if override is not None else self.environment.get("OVLAB_LOCAL_PROFILE")
@@ -934,6 +941,7 @@ class OvlabApplication:
         from .datasets import DatasetStore
         return DatasetStore(self._model_data_root()).verify(dataset_id)
 
+    @with_registry
     def train_profiles(self):
         from .training_composition import load_training_profile
         profiles = []
@@ -946,12 +954,11 @@ class OvlabApplication:
                 profiles.append({"id": profile.profile_id, "path": str(path), "valid": True})
         return {"schema_version": "ovlab.training-profiles/v1", "profiles": profiles}
 
+    @with_registry
     def train_ablate(self, suite, *, resolve=False, output=None, execute=False, fit_action_normalization=False):
         from .training_ablations import TrainingAblation
         from .training_profiles import TrainingPlanner
-        path = Path(suite).expanduser()
-        if not path.is_absolute():
-            path = self.repository_root / path
+        path = self._config_path(suite)
         ablation = TrainingAblation(path, config_root=self.config_root, fit_action_normalization=fit_action_normalization)
         kwargs = {}
         planner = None
@@ -970,6 +977,7 @@ class OvlabApplication:
             return ablation.run(Path(output), TrainingDeployment(self.repository_root, environment=self.environment), plan=plan)
         return ablation.materialize(Path(output), plan=plan) if output is not None else plan
 
+    @with_registry
     def train_validate(self, profile, *, fit_action_normalization=False):
         from .training_identity import identity
         path, parsed = self._training_profile(profile)
@@ -985,6 +993,7 @@ class OvlabApplication:
             "network_used": False,
         }
 
+    @with_registry
     def train_plan(self, profile, *, allow_dataset_download=False, fit_action_normalization=False):
         from .training_profiles import TrainingPlanner, with_fitted_action_normalization
         _, parsed = self._training_profile(profile)
@@ -1008,6 +1017,7 @@ class OvlabApplication:
         inspected = self.train_inspect(run_id)
         return {"schema_version": "ovlab.training-status/v1", "run_id": inspected["run_id"], **inspected["result"]}
 
+    @with_registry
     def train_verify(self, run_id):
         from .training_runs import TrainingRunStore
         resolved = self._training_run(run_id)
@@ -1046,9 +1056,11 @@ class OvlabApplication:
         from .training_runs import CheckpointBundleStore
         return {"schema_version": "ovlab.checkpoint-list/v1", "checkpoints": CheckpointBundleStore(self._model_data_root()).list()}
 
+    @with_registry
     def checkpoint_registry_list(self, *, online=False, profile=None):
         from .checkpoint_catalog import registry_checkpoints
-        registry = self.resolver.load_component("resources/registry.yaml", "resource_registry")
+        from .checkpointing import registered_checkpoint_catalog
+        registry = registered_checkpoint_catalog(self.repository_root)
         return registry_checkpoints(registry, environment=self.environment,
                                     model_data_root=self._model_data_root(), online=online,
                                     profile=profile)
@@ -1057,6 +1069,7 @@ class OvlabApplication:
         from .training_runs import CheckpointBundleStore
         return CheckpointBundleStore(self._model_data_root()).inspect(checkpoint_id)
 
+    @with_registry
     def checkpoint_verify(self, checkpoint_id):
         from .training_runs import CheckpointBundleStore
         return CheckpointBundleStore(self._model_data_root()).verify(checkpoint_id)

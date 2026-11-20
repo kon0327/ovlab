@@ -4,21 +4,32 @@ The installer creates the named Conda environment `ovlab-env` when Conda is
 available. Otherwise it creates a Python `venv` at `.ovlab-env/` in the
 repository. Conda is recommended because it pins the host interpreter to
 Python 3.10; `venv` uses the Python supplied to the installer. The installer
-installs all
-OVLAB Python packages from this checkout in editable mode, including the
+installs the generic
+OVLAB core Python packages from this checkout in editable mode, including the
 regular `wandb` dependency of `ovlab-benchctl`. Re-run the installer to update
 the environment after changing package requirements; use `--update` to force
 a reinstall without requirement changes. Training and evaluation
 still use their dedicated Docker images for model and simulator dependencies.
 
-Model sources are selected through the [plugin registry](docs/POLICY_PLUGINS.md).
+Independent model projects are selected through the [plugin registry](docs/POLICY_PLUGINS.md).
+Register a local project using `./ovlab plugin register /path/to/project`, or a
+remote project with `./ovlab plugin register GIT_URL --commit FULL_COMMIT`.
+The project's `plugin.json` supplies its integration, configs and dependency recipes;
+the host installer does not install every model integration into the core CLI.
 Image builds fetch registered Git commits or snapshot local directories into a
 temporary context; no prepared `external/` is required. Use `./ovlab plugin sync`
 to populate ignored `external/` for source inspection or an offline Git cache.
 `--workspace-sources` explicitly builds from that development workspace instead.
 For local development, register a filesystem project rather than editing a
 managed remote checkout. The OVLAB adapter's lightweight control hooks must be
-available to the host; upstream model dependencies stay in their Docker image.
+available to the host; the selected project loader exposes its source or installed
+distribution without making the core depend on that package. Upstream model
+dependencies stay in their Docker image. For direct Python development, install
+the selected project explicitly, for example
+`python -m pip install --no-deps -e plugins/openvla`. Its declared lightweight
+dependencies must already be available in the environment. Installed plugins can
+expose their manifest directory through the `ovlab.plugin_projects` entrypoint;
+the OpenVLA wheel includes its project assets under `share/ovlab/plugins/openvla`.
 
 ## Linux and macOS
 

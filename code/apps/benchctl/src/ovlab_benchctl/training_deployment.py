@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ import uuid
 
 from ovlab_core.experiment_scope import ExperimentScope
 
+from .policy_plugins import with_registry
 from .application import OvlabApplication
 from .datasets import DatasetRequest, DatasetStore, LiberoDatasetBridge
 from .image_metadata import IMAGE_CONTRACT_LABEL
@@ -41,6 +43,7 @@ class TrainingDeployment:
             self.environment.get("OVLAB_RUNS_ROOT", self.model_data_root / "runs")
         ).expanduser().resolve()
 
+    @with_registry
     def _profile(self, reference: str | Path) -> tuple[Path, TrainingProfile]:
         from .config_paths import resolve_config_path
 
@@ -60,7 +63,7 @@ class TrainingDeployment:
         values = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
         return len(values), max((float(value) / 1024.0 for value in values), default=0.0)
 
-    def _docker_image(self, variable: str, default: str, expected_contract: str) -> tuple[str, str]:
+    def _docker_image(self, variable: str, default: str, expected_contract: str, *, plugin_role=None) -> tuple[str, str]:
         image = self.environment.get(variable, default)
         completed = self.runner(
             ["docker", "image", "inspect", image, "--format", "{{json .Config.Labels}}|{{.Id}}"],
@@ -75,6 +78,12 @@ class TrainingDeployment:
                 f"image {image} has deployment contract {labels.get(IMAGE_CONTRACT_LABEL)!r}, "
                 f"expected {expected_contract!r}"
             )
+        if plugin_role is not None:
+            from .plugin_identity import verify_plugin_image
+            try:
+                verify_plugin_image(labels, self.repository_root, plugin_role)
+            except ValueError as exc:
+                raise TrainingRuntimeError(f"image {image} differs from registered training plugin; rebuild {plugin_role}: {exc}") from exc
         return image, digest
 
     @staticmethod
@@ -156,6 +165,7 @@ class TrainingDeployment:
         if completed.returncode != 0:
             raise DatasetUnavailableError(f"explicit LIBERO acquisition container failed with exit code {completed.returncode}")
 
+    @with_registry
     def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False,
             fit_action_normalization: bool = False, interactive_progress: bool = False) -> dict[str, object]:
         scope = ExperimentScope.from_environment(self.environment)
@@ -180,14 +190,21 @@ class TrainingDeployment:
         profile_path, profile = self._profile(profile_reference)
         from .training_profiles import with_fitted_action_normalization
         profile = with_fitted_action_normalization(profile, fit_action_normalization)
-        is_quic = profile.document["training"].get("peft", {}).get("method") == "quic"
+        from .training_plugins import training_image, finalizer_image
+        selected_image = training_image(profile.document, self.repository_root)
         training_image, training_digest = self._docker_image(
-            "OVLAB_TRAINING_QUIC_IMAGE" if is_quic else "OVLAB_TRAINING_IMAGE",
-            "ovlab-training-openvla-quic:local" if is_quic else "ovlab-training-openvla:local",
+            selected_image["image_env"], selected_image["image"],
             "offline-dataset-ro-base-ro-training-run-rw-v1",
+            plugin_role=selected_image["role"],
         )
         dataset_image, dataset_digest = self._docker_image(
             "OVLAB_DATASET_IMAGE", "ovlab-dataset:local", "dataset-write-only-or-finalizer-v1"
+        )
+        selected_finalizer = finalizer_image(profile.document, self.repository_root)
+        finalizer_image_reference, finalizer_digest = self._docker_image(
+            selected_finalizer["image_env"], selected_finalizer["image"],
+            "dataset-write-only-or-finalizer-v1",
+            plugin_role=selected_finalizer["role"],
         )
         reporting_image, reporting_digest = self._docker_image(
             "OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "canonical-readonly-reporting-v1"
@@ -204,8 +221,8 @@ class TrainingDeployment:
                     raise DatasetUnavailableError(
                         f"dataset {reference!r} is missing; fetch it explicitly or repeat train run with --allow-dataset-download"
                     )
-                self._explicit_dataset_acquisition(profile, dataset_image)
-        gpu_count, vram_gib = self._gpu()
+                self._explicit_dataset_acquisition(profile, dataset_digest)
+        gpu_count, vram_gib = self._gpu() if selected_image.get("gpu", True) else (0, 0.0)
         plan = TrainingPlanner(self.repository_root, self.model_data_root).plan(
             profile,
             available_gpu_count=gpu_count,
@@ -223,7 +240,7 @@ class TrainingDeployment:
                 "repository_revision": repository_revision(self.repository_root) or "unavailable",
                 "source_dirty": bool(subprocess.run(["git", "status", "--porcelain"], cwd=self.repository_root, capture_output=True, text=True).stdout),
                 "training_image": {"reference": training_image, "digest": training_digest},
-                "finalizer_image": {"reference": dataset_image, "digest": dataset_digest},
+                "finalizer_image": {"reference": finalizer_image_reference, "digest": finalizer_digest},
                 "reporting_image": {"reference": reporting_image, "digest": reporting_digest},
                 "gpu_count": gpu_count,
                 "detected_vram_gib": vram_gib,
@@ -238,18 +255,28 @@ class TrainingDeployment:
         dataset_identity = scientific["dataset"]
         assert isinstance(dataset_identity, dict)
         dataset_manifest = datasets.inspect(str(dataset_identity["dataset_id"]))
-        tfds_name = dataset_manifest.get("source_metadata", {}).get("tfds_name") if isinstance(dataset_manifest.get("source_metadata"), dict) else None
-        if not isinstance(tfds_name, str):
-            raise TrainingRuntimeError("prepared dataset manifest lacks its OpenVLA TFDS name")
+        from .training_plugins import backend_for_profile
+        from .plugin_mounts import validate_runtime_mounts, docker_bind
+        resources = backend_for_profile(profile.document, self.repository_root).container_resources(plan, dataset_manifest)
+        if not isinstance(resources, dict) or set(resources) - {"environment", "mounts"}:
+            raise TrainingRuntimeError("training plugin must return environment and read-only mounts")
+        worker_environment = resources.get("environment", {})
+        if not isinstance(worker_environment, dict) or any(
+            not isinstance(key, str) or re.fullmatch(r"[A-Z_][A-Z0-9_]*", key) is None
+            or not isinstance(value, str) or "\0" in value
+            or key in {"OVLAB_PLUGIN_REGISTRY", "OVLAB_LOCAL_PROFILE", "OVLAB_ROOT", "OVLAB_TRAINING_BASE_CHECKPOINT"}
+            for key, value in worker_environment.items()
+        ):
+            raise TrainingRuntimeError("training plugin returned invalid or reserved environment variables")
+        worker_mounts = validate_runtime_mounts(resources.get("mounts", []))
         base_path = Path(str(execution["model_host_path"]))
-        prepared = Path(str(dataset_manifest["host_path"])) / "prepared"
         container_name = f"ovlab-training-{uuid.uuid4().hex[:12]}"
         # Workers derive the canonical run ID from the mounted root's basename.
         container_run_root = f"/var/lib/ovlab/training-run/{context.run_id}"
         command = [
             "docker", "run", *(["--tty"] if interactive_progress else []),
             "--name", container_name, "--rm", "--network", "none", "--read-only",
-            "--gpus", f"device={self.environment.get('OVLAB_GPU_DEVICE', '0')}",
+            *(["--gpus", f"device={self.environment.get('OVLAB_GPU_DEVICE', '0')}"] if selected_image.get("gpu", True) else []),
             "--user", "10001:10001", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             *self._container_groups(context.root),
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=4g,uid=10001,gid=10001,mode=0700",
@@ -258,12 +285,11 @@ class TrainingDeployment:
             "--env", f"OVLAB_PROGRESS={self.environment.get('OVLAB_PROGRESS', 'auto')}",
             *(["--env", f"OVLAB_TERMINAL_COLUMNS={shutil.get_terminal_size((80, 24)).columns or 80}"] if interactive_progress else []),
             "--env", "OVLAB_TRAINING_BASE_CHECKPOINT=/checkpoints/base",
-            "--env", "OVLAB_TRAINING_DATA_ROOT=/datasets/resolved",
-            "--env", f"OVLAB_TRAINING_DATASET_NAME={tfds_name}",
+            *[argument for key, value in worker_environment.items() for argument in ("--env", f"{key}={value}")],
             "--mount", f"type=bind,source={base_path},target=/checkpoints/base,readonly",
-            "--mount", f"type=bind,source={prepared},target=/datasets/resolved/{tfds_name}/1.0.0,readonly",
+            *[argument for mount in worker_mounts for argument in ("--mount", docker_bind(mount["source"], mount["target"]))],
             "--mount", f"type=bind,source={context.root},target={container_run_root}",
-            "--entrypoint", "python", training_image,
+            "--entrypoint", "python", training_digest,
             "-m", "ovlab_benchctl.training_worker", "train", "--run-root", container_run_root,
         ]
         atomic_json(context.root / "container-commands.json", {"training": command}, mode=0o644)
@@ -275,7 +301,7 @@ class TrainingDeployment:
             store.fail(context, exc, interrupted=True)
             raise
         if completed.returncode != 0:
-            error = TrainingRuntimeError(f"isolated OpenVLA trainer failed with exit code {completed.returncode}; evidence: {context.root}")
+            error = TrainingRuntimeError(f"isolated trainer failed with exit code {completed.returncode}; evidence: {context.root}")
             if not (context.root / "result.json").is_file():
                 store.fail(context, error)
             raise error
@@ -286,7 +312,7 @@ class TrainingDeployment:
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
             "--mount", f"type=bind,source={context.root},target={container_run_root}",
             "--mount", f"type=bind,source={self.model_data_root / 'checkpoints'},target=/var/lib/ovlab/model-data/checkpoints",
-            "--entrypoint", "python", dataset_image,
+            "--entrypoint", "python", finalizer_digest,
             "-m", "ovlab_benchctl.training_worker", "finalize", "--run-root", container_run_root,
             "--model-data-root", "/var/lib/ovlab/model-data",
         ]

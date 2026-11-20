@@ -9,8 +9,6 @@
 !code/apps/runner/**
 !code/packages/
 !code/packages/**
-!code/policies/
-!code/policies/**
 
 !configs/
 !configs/**

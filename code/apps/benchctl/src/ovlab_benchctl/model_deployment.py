@@ -71,10 +71,10 @@ class ModelDeployment:
     def plan(self, target, *, quantization=None, port=None, offline=False, local_profile=None):
         path = resolve_config_path(target, self.repository_root, "deploy")
         config_root = self.repository_root / "configs"
-        if not path.is_relative_to(config_root / "deploy"):
-            raise ConfigReferenceError("deployment configs must be below configs/deploy/")
         builder = ConfigBundleBuilder(self.repository_root)
-        reference = path.relative_to(config_root).as_posix()
+        reference = builder.references.reference(path)
+        if not path.is_relative_to(config_root / "deploy") and not reference.startswith("plugin:"):
+            raise ConfigReferenceError("deployment configs must be below configs/deploy/ or a registered plugin configuration root")
         doc = builder.load_component(reference, "deployment")
         policy = builder.load_component(doc["components"]["policy"], "policy")
         from .policy_plugins import plugin_for_type
@@ -82,11 +82,11 @@ class ModelDeployment:
         role = deployment.get("role")
         if role is None:
             raise ConfigCompatibilityError("deployment requires a production policy")
-        if policy["settings"]["checkpoint_id"] != policy["settings"].get("processor_id", policy["settings"]["checkpoint_id"]):
-            raise ConfigCompatibilityError("model deployment requires a shared model and processor checkpoint")
         selected = quantization if quantization is not None else doc.get("runtime", {}).get("quantization")
-        bundle = builder.build(f"configs/{reference}", None, quantization=selected, kind="deployment")
+        bundle = builder.build(reference, None, quantization=selected, kind="deployment")
         effective = selected if selected is not None else policy["settings"]["runtime"]["quantization"]
+        if effective not in deployment.get("quantization", ["none"]):
+            raise ConfigCompatibilityError(f"plugin {policy['type']} does not support quantization {effective}")
         settings = doc.get("service", {})
         selected_port = port if port is not None else settings.get("port", 8000)
         if selected_port is not None and (type(selected_port) is not int or not 1 <= selected_port <= 65535):
@@ -100,7 +100,7 @@ class ModelDeployment:
             profile = str(profile.resolve())
         normalized = {**doc, "effective_quantization": effective, "published_port": selected_port}
         return ModelDeploymentPlan(
-            doc["id"], f"configs/{reference}", role, doc.get("image", deployment["image"]), doc.get("build", True),
+            doc["id"], (reference if reference.startswith("plugin:") else f"configs/{reference}"), role, doc.get("image", deployment["image"]), doc.get("build", True),
             settings.get("host", "127.0.0.1"), selected_port, settings.get("container_port", 8000),
             settings.get("restart", "unless-stopped"), settings.get("readiness_timeout_s", 900),
             doc.get("runtime", {}).get("gpu", "all" if deployment.get("gpu", True) else None), effective, selected, offline, profile,
@@ -289,7 +289,7 @@ class ModelDeployment:
     def _record(self, target):
         path = resolve_config_path(target, self.repository_root, "deploy")
         identifier = (ConfigBundleBuilder(self.repository_root).load_component(
-            path.relative_to(self.repository_root / "configs").as_posix(), "deployment")["id"]
+            ConfigBundleBuilder(self.repository_root).references.reference(path), "deployment")["id"]
             if path.is_file() else str(target))
         if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", identifier) is None:
             raise ConfigReferenceError("deployment target must be a config name/path or deployment ID")
@@ -389,14 +389,9 @@ def resolve_policy_service(application, path):
             resolved.update(local_path=env["OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH"],
                             revision=env["OVLAB_CHECKPOINT_REVISION"], expected_sha256=env["OVLAB_CHECKPOINT_SHA256"])
         checkpoints[key] = resolved
-    from .policy_plugins import plugin_for_type
+    from .policy_plugins import plugin_for_type, call_plugin
     settings = policy["settings"]
-    # Existing policy owners use this observation context to validate image shape
-    # and artifact adaptation; no benchmark, task, protocol, or renderer is started.
-    observation = {"height": doc.get("input", {}).get("height", 224),
-                   "width": doc.get("input", {}).get("width", 224),
-                   "profile": plugin_for_type(policy["type"], resolver.repository_root).descriptor["deployment"]["observation_profile"]}
-    context = {"settings": {"suite": settings.get("unnorm_key"), "observation": observation}}
+    context = call_plugin(plugin_for_type(policy["type"], resolver.repository_root), "deployment_context", policy, doc)
     action = resolver.load_component(settings["action"]["action_interface"], "action_interface")
     typed = resolver._policy(policy, context, resolver._action_spec(action), checkpoints, local["devices"], environment=env)
     return SimpleNamespace(policy_type=policy["type"], policy_settings=typed, experiment_id=doc["id"], protocol_settings=SimpleNamespace(base_seed=0))

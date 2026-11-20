@@ -1,12 +1,17 @@
+# syntax=docker/dockerfile:1.7
 # Development base: build the OVLAB reporting image first. No GPU is required.
 # Production plugins should own a digest-pinned base and dependency lock.
 FROM ovlab-reporting:local
 USER root
 COPY code /opt/ovlab/code
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
-COPY external/example-policy /opt/ovlab/external/example-policy
-RUN bash /tmp/install-ovlab-packages.sh \
-    && python -m pip install --no-deps --no-build-isolation /opt/ovlab/external/example-policy \
+COPY external/plugin-example-policy /opt/ovlab/external/plugin-example-policy
+ARG OVLAB_CONFIG_BUNDLE_SHA256=none
+RUN --mount=type=secret,id=ovlab_plugin_registry \
+    --mount=type=secret,id=ovlab_config_bundle \
+    test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
+    && bash /tmp/install-ovlab-packages.sh \
+    && python -m pip install --no-deps --no-build-isolation /opt/ovlab/external/plugin-example-policy \
     && rm /tmp/install-ovlab-packages.sh \
     && install -d -o 10001 -g 10001 -m 0700 /run/ovlab
 
@@ -35,6 +40,8 @@ ENV OVLAB_REVISION=$OVLAB_REVISION \
     OVLAB_LOCK_SHA256=$OVLAB_LOCK_SHA256 \
     OVLAB_DOCKERFILE_SHA256=$OVLAB_DOCKERFILE_SHA256
 RUN --mount=type=secret,id=ovlab_source_manifest \
+    --mount=type=secret,id=ovlab_plugin_registry \
+    --mount=type=secret,id=ovlab_config_bundle \
     test -s /run/secrets/ovlab_source_manifest \
     && cp /run/secrets/ovlab_source_manifest /usr/share/ovlab/source-manifest.json \
     && chmod 0444 /usr/share/ovlab/source-manifest.json

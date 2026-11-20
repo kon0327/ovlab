@@ -14,6 +14,7 @@ from ovlab_benchctl.versioning import repository_revision
 
 ROOT = Path(__file__).resolve().parents[4]
 DOCKER = ROOT / "deploy/docker"
+PLUGIN = ROOT / "plugins/openvla"
 COMPOSE = (ROOT / "deploy/compose/compose.yaml").read_text(encoding="utf-8")
 from ovlab_benchctl.deployment import ComposeDeployment
 
@@ -26,7 +27,33 @@ def _evaluation_services(profile="openvla", renderer="egl"):
 
 
 def _dockerfile(name: str) -> str:
-    return (DOCKER / name).read_text(encoding="utf-8")
+    path = DOCKER / name
+    return (path if path.is_file() else PLUGIN / "docker" / name).read_text(encoding="utf-8")
+
+
+def _lock(name):
+    path = ROOT / "deploy/locks" / name
+    return path if path.is_file() else PLUGIN / "locks" / name
+
+
+def test_configuration_secret_layers_use_bundle_identity_in_their_cache_key():
+    recipes = [*DOCKER.glob("Dockerfile.*"), *PLUGIN.joinpath("docker").glob("Dockerfile.*"),
+               ROOT / "examples/policy-plugin/Dockerfile"]
+    for path in recipes:
+        text = path.read_text()
+        if "id=ovlab_config_bundle" not in text:
+            continue
+        instructions = re.sub(r"\\\n\s*", " ", text).splitlines()
+        installation = [index for index, instruction in enumerate(instructions)
+                        if instruction.startswith("RUN ") and "id=ovlab_config_bundle" in instruction
+                        and "bash /tmp/install-ovlab-packages.sh" in instruction]
+        assert installation, path
+        for index in installation:
+            assert instructions[index - 1] == "ARG OVLAB_CONFIG_BUNDLE_SHA256=none", path
+            assert 'test -n "$OVLAB_CONFIG_BUNDLE_SHA256"' in instructions[index], path
+            assert instructions[index].index('test -n "$OVLAB_CONFIG_BUNDLE_SHA256"') < instructions[index].index(
+                "bash /tmp/install-ovlab-packages.sh"
+            ), path
 
 
 def _service(name: str, next_name: str | None = None) -> str:
@@ -89,8 +116,8 @@ def test_role_closures_do_not_cross_heavy_runtime_boundaries():
 
 
 def test_oft_quantization_stack_pins_the_dispatch_compatible_accelerate_version():
-    source = (ROOT / "deploy/locks/openvla-oft.in").read_text(encoding="utf-8")
-    requirements = (ROOT / "deploy/locks/openvla-oft.requirements.txt").read_text(
+    source = _lock("openvla-oft.in").read_text(encoding="utf-8")
+    requirements = _lock("openvla-oft.requirements.txt").read_text(
         encoding="utf-8"
     )
     for document in (source, requirements):
@@ -187,26 +214,26 @@ def test_gate_i_images_keep_dataset_and_training_dependency_closures_separate():
 def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
     locks = ROOT / "deploy/locks"
     for role in ("benchmark", "reporting", "openvla", "openvla-oft", "flash-attn"):
-        pylock = (locks / f"{role}.pylock.toml").read_text(encoding="utf-8")
-        requirements = (locks / f"{role}.requirements.txt").read_text(encoding="utf-8")
+        pylock = _lock(f"{role}.pylock.toml").read_text(encoding="utf-8")
+        requirements = _lock(f"{role}.requirements.txt").read_text(encoding="utf-8")
         assert 'lock-version = "1.0"' in pylock
         assert 'sha256 = "' in pylock
         assert "--hash=sha256:" in requirements
-    assert "rich==15.0.0" in (locks / "openvla.requirements.txt").read_text(encoding="utf-8")
-    openvla_lock = (locks / "openvla.requirements.txt").read_text(encoding="utf-8")
+    assert "rich==15.0.0" in _lock("openvla.requirements.txt").read_text(encoding="utf-8")
+    openvla_lock = _lock("openvla.requirements.txt").read_text(encoding="utf-8")
     assert (
         "bitsandbytes==0.43.1 "
         "--hash=sha256:a81c826d576d6d691c7b4a7491c8fdc0f37f769795d6ca2e54afa605d2c260a3"
     ) in openvla_lock
     assert "bitsandbytes=0.43.1" in _dockerfile("Dockerfile.openvla")
-    assert "rich==15.0.0" in (locks / "openvla-oft.requirements.txt").read_text(encoding="utf-8")
+    assert "rich==15.0.0" in _lock("openvla-oft.requirements.txt").read_text(encoding="utf-8")
     assert "imageio-ffmpeg==0.6.0" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
     assert "jinja2==3.1.6" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
     assert "markupsafe==3.0.3" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
-    oft = (locks / "openvla-oft.pylock.toml").read_text(encoding="utf-8")
+    oft = _lock("openvla-oft.pylock.toml").read_text(encoding="utf-8")
     assert oft.count('commit-id = "bc339d9ad707454c0c115970db43c260067c61ab"') == 1
     assert oft.count('commit-id = "040105d256bd28866cc6620621a3d5f7b6b91b46"') == 1
-    oft_input = (locks / "openvla-oft.in").read_text(encoding="utf-8")
+    oft_input = _lock("openvla-oft.in").read_text(encoding="utf-8")
     assert "tensorflow==2.15.0" in oft_input
     assert "tensorflow-datasets==4.9.3" in oft_input
     assert "tensorflow-metadata==1.15.0" in oft_input
@@ -226,7 +253,7 @@ def test_dataset_pyyaml_lock_uses_the_verified_platform_wheel_hash():
     locks = ROOT / "deploy/locks"
     dataset_requirement = (locks / "dataset.requirements.txt").read_text(encoding="utf-8")
     dataset_pylock = (locks / "dataset.pylock.toml").read_text(encoding="utf-8")
-    accepted_openvla_lock = (locks / "openvla.requirements.txt").read_text(encoding="utf-8")
+    accepted_openvla_lock = _lock("openvla.requirements.txt").read_text(encoding="utf-8")
     assert f"pyyaml==6.0.3 --hash=sha256:{expected}" in dataset_requirement
     assert f'sha256 = "{expected}"' in dataset_pylock
     assert f"pyyaml==6.0.3 --hash=sha256:{expected}" in accepted_openvla_lock
@@ -254,11 +281,11 @@ def test_pinned_base_networkx_overlay_and_numba_cache_are_normalized():
     for name in ("Dockerfile.benchmark", "Dockerfile.openvla", "Dockerfile.openvla-oft"):
         text = _dockerfile(name)
         assert "/site-packages/networkx-*.dist-info" in text
-        assert "networkx==3.4.2" in (ROOT / "deploy/locks" / (
+        assert "networkx==3.4.2" in _lock(
             "benchmark.requirements.txt" if name == "Dockerfile.benchmark" else
             "openvla-oft.requirements.txt" if name == "Dockerfile.openvla-oft" else
             "openvla.requirements.txt"
-        )).read_text(encoding="utf-8")
+        ).read_text(encoding="utf-8")
     assert "NUMBA_CACHE_DIR=/tmp/ovlab-numba-cache" in _dockerfile("Dockerfile.benchmark")
     assert "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6" in _dockerfile("Dockerfile.benchmark")
 
@@ -298,7 +325,9 @@ def test_source_manifest_is_deterministic_and_records_dirty_state():
     assert re.fullmatch(r"[0-9a-f]{40}", document["repository_revision"])
     assert re.fullmatch(r"[0-9a-f]{64}", document["source_content_sha256"])
     assert document["submodules"] == []
-    assert {row["id"] for row in document["registered_sources"]} == {"libero", "openvla", "openvla-oft", "openvla-quic", "quic-peft-vla"}
+    assert {row["id"] for row in document["registered_sources"]} == {
+        "libero", "plugin-openvla", "openvla", "openvla-oft", "openvla-quic", "quic-peft-vla",
+    }
     status = subprocess.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=ROOT,
@@ -347,16 +376,17 @@ def test_portable_config_change_does_not_invalidate_image_source_hash(tmp_path):
         str(ROOT / "deploy/scripts/source_manifest.py")
     )["build_manifest"]
 
-    initial = build_manifest(repository)["source_content_sha256"]
+    registry = {"schema_version": "ovlab.plugins/v1", "sources": {}, "plugins": {}, "builds": {}}
+    initial = build_manifest(repository, registry=registry)["source_content_sha256"]
     config.write_text("name: second\n", encoding="utf-8")
-    config_only = build_manifest(repository)["source_content_sha256"]
+    config_only = build_manifest(repository, registry=registry)["source_content_sha256"]
     guide.write_text("Updated guide\n", encoding="utf-8")
-    guide_only = build_manifest(repository)["source_content_sha256"]
+    guide_only = build_manifest(repository, registry=registry)["source_content_sha256"]
     source.write_text("VALUE = 2\n", encoding="utf-8")
-    dirty_source = build_manifest(repository)
+    dirty_source = build_manifest(repository, registry=registry)
     subprocess.run(["git", "add", "."], cwd=repository, check=True)
     subprocess.run(["git", "commit", "-qm", "source change"], cwd=repository, check=True)
-    committed_source = build_manifest(repository)
+    committed_source = build_manifest(repository, registry=registry)
 
     assert config_only == initial
     assert guide_only == initial
@@ -386,7 +416,7 @@ def test_dirty_submodule_manifest_distinguishes_local_source_bytes_and_deletions
 def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount():
     policy = _dockerfile("Dockerfile.openvla-quic")
     training = _dockerfile("Dockerfile.training-openvla-quic")
-    lock = (ROOT / "deploy/locks/quic-openvla.requirements.txt").read_text()
+    lock = _lock("quic-openvla.requirements.txt").read_text()
     for dockerfile in (policy, training):
         assert "/opt/ovlab/external/quic-peft-vla" in dockerfile
         assert "COPY external/quic-peft-vla " in dockerfile

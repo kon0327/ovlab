@@ -15,13 +15,13 @@ experiment: # Required description recorded in the run evidence.
 
 components: # Required references relative to configs/; contents are defined in separate files.
   benchmark: benchmarks/libero/libero10.yaml # Task suite; see configs/benchmarks/ for alternatives.
-  policy: policies/openvla-lora/merged-libero10-4bit.yaml # Model and inference; see configs/policies/.
+  policy: plugin://openvla/policies/openvla-lora/merged-libero10-4bit.yaml # Model and inference; see configs/policies/.
   metrics: metrics/action-safe-v1.yaml # Metric set; see configs/metrics/.
   protocol: protocols/libero-three-episodes-v1.yaml # Episodes, limits and recording; see configs/protocols/.
   artifacts: artifacts/filesystem.yaml # Artifact store; see configs/artifacts/.
 
 resources: # Required references to logical resources.
-  registry: resources/registry.yaml # Checkpoint and repository registry relative to configs/.
+  registry: plugin://openvla/resources/registry.yaml # Checkpoint and repository registry relative to configs/.
 
 reporting: # Optional block; when present, all five fields are required.
   enabled: true # Enable reporting; workflows require true.

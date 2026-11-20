@@ -1,0 +1,675 @@
+{
+  "schema_version": "ovlab.plugin/v1",
+  "api_version": "1",
+  "kind": "policy",
+  "id": "openvla",
+  "version": "0.2.0",
+  "description": "OpenVLA Vanilla, merged LoRA, OFT and QuIC policy and training integration for OVLAB.",
+  "sources": {
+    "openvla": {
+      "kind": "git",
+      "url": "https://github.com/openvla/openvla.git",
+      "commit": "c8f03f48af692657d3060c19588038c7220e9af9",
+      "path": "external/openvla"
+    },
+    "openvla-oft": {
+      "kind": "git",
+      "url": "https://github.com/moojink/openvla-oft.git",
+      "commit": "e4287e94541f459edc4feabc4e181f537cd569a8",
+      "path": "external/openvla-oft"
+    },
+    "openvla-quic": {
+      "kind": "git",
+      "url": "https://github.com/kon0327/openvla-quic.git",
+      "commit": "cca67fab79646363fa98b7d96e6216dcee11fcc6",
+      "path": "external/openvla-quic"
+    },
+    "quic-peft-vla": {
+      "kind": "git",
+      "url": "https://github.com/kon0327/quic-peft-vla.git",
+      "commit": "e727b31c2e4e160c29c0dbe865be093bdd65e5e2",
+      "path": "external/quic-peft-vla"
+    }
+  },
+  "plugins": {
+    "openvla_vanilla": {
+      "config_type": "openvla_vanilla",
+      "id": "vanilla",
+      "family": "openvla",
+      "runtime_status": "implemented",
+      "entrypoint": "ovlab_openvla_vanilla.plugin:plugin",
+      "sources": [
+        "openvla"
+      ],
+      "source_repositories": [
+        "external/openvla"
+      ],
+      "deployment": {
+        "profile": "openvla",
+        "role": "policy-openvla",
+        "image": "ovlab-policy-openvla:local",
+        "image_env": "OVLAB_OPENVLA_IMAGE",
+        "policy_service": "policy-openvla",
+        "benchmark_service": "benchmark-openvla",
+        "quantization": [
+          "none",
+          "8bit",
+          "4bit"
+        ],
+        "observation_profile": "primary_rgb"
+      },
+      "capabilities": {
+        "observation": {
+          "images": {
+            "encoding": "raw",
+            "color_space": "RGB",
+            "dtype": "uint8",
+            "roles": [
+              "primary"
+            ]
+          },
+          "proprioception": {
+            "required": false
+          },
+          "instruction": {
+            "required": true,
+            "dynamic": true
+          }
+        },
+        "action": {
+          "dimension": 7,
+          "representation": "delta_pose",
+          "rotation_representation": "axis_angle",
+          "gripper_convention": "closed_positive",
+          "codecs": [
+            "openvla-to-libero-v1"
+          ],
+          "prediction_horizon": {
+            "minimum": 1,
+            "maximum": 1,
+            "configurable": false
+          }
+        },
+        "inference": {
+          "quantization": {
+            "none": {
+              "backend": null,
+              "weight_dtype": "bfloat16",
+              "training_supported": true
+            },
+            "8bit": {
+              "backend": "bitsandbytes",
+              "format": "llm_int8",
+              "bits": 8,
+              "compute_dtype": "bfloat16",
+              "training_supported": false
+            },
+            "4bit": {
+              "backend": "bitsandbytes",
+              "format": "nf4",
+              "bits": 4,
+              "compute_dtype": "bfloat16",
+              "storage_dtype": "float16",
+              "double_quantization": true,
+              "training_supported": false
+            }
+          },
+          "policy_configs": {
+            "none": "plugin://openvla/policies/openvla-vanilla/base.yaml",
+            "4bit": "plugin://openvla/policies/openvla-vanilla/4bit.yaml",
+            "8bit": "plugin://openvla/policies/openvla-vanilla/8bit.yaml"
+          }
+        },
+        "checkpoints": {
+          "expected_loaders": [
+            "ovlab-openvla-vanilla"
+          ],
+          "artifact_forms": [
+            "full_weights"
+          ],
+          "requires_base_model": false
+        },
+        "training": {
+          "supported": true,
+          "implementations": [
+            "openvla-reference"
+          ],
+          "methods": [
+            "full",
+            "lora"
+          ],
+          "quantization": [
+            "none"
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    "openvla_lora_merged": {
+      "config_type": "openvla_lora_merged",
+      "id": "lora",
+      "family": "lora",
+      "runtime_status": "implemented",
+      "entrypoint": "ovlab_openvla_lora_merged.plugin:plugin",
+      "sources": [
+        "openvla"
+      ],
+      "source_repositories": [
+        "external/openvla"
+      ],
+      "deployment": {
+        "profile": "openvla",
+        "role": "policy-openvla",
+        "image": "ovlab-policy-openvla:local",
+        "image_env": "OVLAB_OPENVLA_IMAGE",
+        "policy_service": "policy-openvla",
+        "benchmark_service": "benchmark-openvla",
+        "quantization": [
+          "none",
+          "8bit",
+          "4bit"
+        ],
+        "observation_profile": "primary_rgb"
+      },
+      "artifact_forms": [
+        "merged_full_weights"
+      ],
+      "capabilities": {
+        "observation": {
+          "images": {
+            "encoding": "raw",
+            "color_space": "RGB",
+            "dtype": "uint8",
+            "roles": [
+              "primary"
+            ]
+          },
+          "proprioception": {
+            "required": false
+          },
+          "instruction": {
+            "required": true,
+            "dynamic": true
+          }
+        },
+        "action": {
+          "dimension": 7,
+          "representation": "delta_pose",
+          "rotation_representation": "axis_angle",
+          "gripper_convention": "closed_positive",
+          "codecs": [
+            "openvla-to-libero-v1"
+          ],
+          "prediction_horizon": {
+            "minimum": 1,
+            "maximum": 1,
+            "configurable": false
+          }
+        },
+        "inference": {
+          "quantization": {
+            "none": {
+              "backend": null,
+              "weight_dtype": "bfloat16",
+              "training_supported": true
+            },
+            "8bit": {
+              "backend": "bitsandbytes",
+              "format": "llm_int8",
+              "bits": 8,
+              "compute_dtype": "bfloat16",
+              "training_supported": false
+            },
+            "4bit": {
+              "backend": "bitsandbytes",
+              "format": "nf4",
+              "bits": 4,
+              "compute_dtype": "bfloat16",
+              "storage_dtype": "float16",
+              "double_quantization": true,
+              "training_supported": false
+            }
+          },
+          "policy_configs": {
+            "none": "plugin://openvla/policies/openvla-lora/merged-libero10.yaml",
+            "8bit": "plugin://openvla/policies/openvla-lora/merged-libero10-8bit.yaml",
+            "4bit": "plugin://openvla/policies/openvla-lora/merged-libero10-4bit.yaml"
+          }
+        },
+        "checkpoints": {
+          "expected_loaders": [
+            "ovlab-openvla-vanilla"
+          ],
+          "artifact_forms": [
+            "merged_full_weights"
+          ],
+          "requires_base_model": false,
+          "adaptation_suite": "LIBERO-10"
+        },
+        "training": {
+          "supported": true,
+          "implementations": [
+            "openvla-reference"
+          ],
+          "methods": [
+            "full",
+            "lora"
+          ],
+          "quantization": [
+            "none"
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    "openvla_oft": {
+      "config_type": "openvla_oft",
+      "id": "openvla-oft",
+      "family": "openvla_oft",
+      "runtime_status": "implemented",
+      "entrypoint": "ovlab_openvla_oft.plugin:plugin",
+      "sources": [
+        "openvla-oft"
+      ],
+      "source_repositories": [
+        "external/openvla-oft"
+      ],
+      "deployment": {
+        "profile": "oft",
+        "role": "policy-openvla-oft",
+        "image": "ovlab-policy-openvla-oft:local",
+        "image_env": "OVLAB_OFT_IMAGE",
+        "policy_service": "policy-openvla-oft",
+        "benchmark_service": "benchmark-oft",
+        "quantization": [
+          "none",
+          "8bit",
+          "4bit"
+        ],
+        "observation_profile": "native_oft"
+      },
+      "artifact_forms": [
+        "merged_backbone_with_auxiliary_components"
+      ],
+      "capabilities": {
+        "observation": {
+          "images": {
+            "encoding": "raw",
+            "color_space": "RGB",
+            "dtype": "uint8",
+            "roles": [
+              "primary",
+              "wrist"
+            ]
+          },
+          "proprioception": {
+            "required": true,
+            "canonical_name": "robot.proprioception",
+            "dimension": 8
+          },
+          "instruction": {
+            "required": true,
+            "dynamic": true
+          }
+        },
+        "action": {
+          "dimension": 7,
+          "representation": "delta_pose",
+          "rotation_representation": "axis_angle",
+          "gripper_convention": "closed_positive",
+          "codecs": [
+            "openvla-to-libero-v1"
+          ],
+          "prediction_horizon": {
+            "minimum": 8,
+            "maximum": 8,
+            "configurable": false
+          }
+        },
+        "inference": {
+          "quantization": {
+            "none": {
+              "backend": null,
+              "weight_dtype": "bfloat16",
+              "training_supported": true
+            },
+            "8bit": {
+              "backend": "bitsandbytes",
+              "format": "llm_int8",
+              "bits": 8,
+              "compute_dtype": "bfloat16",
+              "training_supported": false
+            },
+            "4bit": {
+              "backend": "bitsandbytes",
+              "format": "nf4",
+              "bits": 4,
+              "compute_dtype": "bfloat16",
+              "storage_dtype": "float16",
+              "double_quantization": true,
+              "training_supported": false
+            }
+          },
+          "policy_configs": {
+            "none": "plugin://openvla/policies/openvla-oft/libero10-native.yaml",
+            "8bit": "plugin://openvla/policies/openvla-oft/libero10-native-8bit.yaml",
+            "4bit": "plugin://openvla/policies/openvla-oft/libero10-native-4bit.yaml"
+          }
+        },
+        "checkpoints": {
+          "expected_loaders": [
+            "ovlab-openvla-oft"
+          ],
+          "artifact_forms": [
+            "merged_backbone_with_auxiliary_components"
+          ],
+          "requires_base_model": false,
+          "adaptation_suite": "LIBERO-10"
+        },
+        "training": {
+          "supported": false,
+          "implementations": [],
+          "methods": [],
+          "quantization": [],
+          "status": "unavailable"
+        }
+      }
+    },
+    "openvla_quic": {
+      "config_type": "openvla_quic",
+      "id": "quic-peft",
+      "family": "openvla_quic",
+      "runtime_status": "experimental",
+      "entrypoint": "ovlab_openvla_quic.plugin:plugin",
+      "sources": [
+        "openvla-quic",
+        "quic-peft-vla"
+      ],
+      "source_repositories": [
+        "external/openvla-quic",
+        "external/quic-peft-vla"
+      ],
+      "deployment": {
+        "profile": "quic",
+        "role": "policy-openvla-quic",
+        "image": "ovlab-policy-openvla-quic:local",
+        "image_env": "OVLAB_QUIC_IMAGE",
+        "policy_service": "policy-openvla-quic",
+        "benchmark_service": "benchmark-quic",
+        "quantization": [
+          "none"
+        ],
+        "observation_profile": "primary_rgb"
+      },
+      "document_kinds": [
+        "quic_policy_descriptor"
+      ],
+      "supported_quic_profiles": [
+        "QP1",
+        "QP2",
+        "QP3",
+        "QP4",
+        "custom"
+      ],
+      "supported_profiles": [
+        "QP1",
+        "QP2",
+        "QP3",
+        "QP4",
+        "custom"
+      ],
+      "capabilities": {
+        "observation": {
+          "images": {
+            "encoding": "raw",
+            "color_space": "RGB",
+            "dtype": "uint8",
+            "roles": [
+              "primary"
+            ]
+          },
+          "proprioception": {
+            "required": false
+          },
+          "instruction": {
+            "required": true,
+            "dynamic": true
+          }
+        },
+        "action": {
+          "dimension": 7,
+          "representation": "delta_pose",
+          "rotation_representation": "axis_angle",
+          "gripper_convention": "closed_positive",
+          "codecs": [
+            "openvla-to-libero-v1",
+            "openvla-decoded-v1"
+          ],
+          "prediction_horizon": {
+            "minimum": 1,
+            "maximum": 256,
+            "configurable": true
+          }
+        },
+        "inference": {
+          "quantization": {
+            "none": {
+              "backend": null,
+              "weight_dtype": "bfloat16",
+              "training_supported": true
+            }
+          },
+          "policy_configs": {
+            "none": "plugin://openvla/policies/openvla-quic/adapter-libero10.yaml"
+          }
+        },
+        "checkpoints": {
+          "expected_loaders": [
+            "ovlab-openvla-quic"
+          ],
+          "artifact_forms": [
+            "multiplicative_adapter"
+          ],
+          "requires_base_model": true
+        },
+        "training": {
+          "supported": true,
+          "implementations": [
+            "openvla-quic"
+          ],
+          "methods": [
+            "quic"
+          ],
+          "quantization": [
+            "none"
+          ],
+          "status": "experimental"
+        }
+      }
+    },
+    "quic-wc": {
+      "config_type": "quic-wc",
+      "id": "quic-wc",
+      "family": "openvla_quic",
+      "runtime_status": "unavailable",
+      "entrypoint": null,
+      "sources": [],
+      "source_repositories": [],
+      "capabilities": {
+        "policy": false,
+        "training": false,
+        "reason": "Implementation unavailable; descriptor inspection only."
+      }
+    }
+  },
+  "builds": {
+    "policy-openvla": {
+      "dockerfile": "docker/Dockerfile.openvla",
+      "image": "ovlab-policy-openvla:local",
+      "sources": [
+        "openvla"
+      ],
+      "locks": [
+        "locks/openvla.pylock.toml",
+        "locks/openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "policy-openvla-oft": {
+      "dockerfile": "docker/Dockerfile.openvla-oft",
+      "image": "ovlab-policy-openvla-oft:local",
+      "sources": [
+        "openvla-oft"
+      ],
+      "locks": [
+        "locks/openvla-oft.pylock.toml",
+        "locks/openvla-oft.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "policy-openvla-quic": {
+      "dockerfile": "docker/Dockerfile.openvla-quic",
+      "image": "ovlab-policy-openvla-quic:local",
+      "sources": [
+        "openvla-quic",
+        "quic-peft-vla"
+      ],
+      "locks": [
+        "locks/quic-openvla.pylock.toml",
+        "locks/quic-openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "training-openvla": {
+      "dockerfile": "docker/Dockerfile.training-openvla",
+      "image": "ovlab-training-openvla:local",
+      "sources": [
+        "openvla"
+      ],
+      "locks": [
+        "locks/openvla-oft.pylock.toml",
+        "locks/openvla-oft.requirements.txt",
+        "locks/training-openvla.pylock.toml",
+        "locks/training-openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "training-openvla-quic": {
+      "dockerfile": "docker/Dockerfile.training-openvla-quic",
+      "image": "ovlab-training-openvla-quic:local",
+      "sources": [
+        "openvla-quic",
+        "quic-peft-vla"
+      ],
+      "locks": [
+        "locks/quic-openvla.pylock.toml",
+        "locks/quic-openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "finalizer-openvla": {
+      "dockerfile": "docker/Dockerfile.finalizer",
+      "image": "ovlab-finalizer-openvla:local",
+      "sources": [],
+      "locks": [
+        "locks/finalizer.pylock.toml",
+        "locks/finalizer.requirements.txt"
+      ]
+    }
+  },
+  "capabilities": {
+    "policy": {
+      "supported": true,
+      "variants": [
+        "vanilla",
+        "lora",
+        "openvla-oft",
+        "quic-peft"
+      ],
+      "unavailable": [
+        "quic-wc"
+      ]
+    },
+    "training": {
+      "supported": true,
+      "methods": [
+        "full",
+        "lora",
+        "quic"
+      ],
+      "quantization": [
+        "none"
+      ],
+      "supports_qlora": false,
+      "dataset_preparation": [
+        "openvla-rlds"
+      ]
+    },
+    "checkpoint_preparation": {
+      "supported": true,
+      "source_loader": "ovlab-openvla-peft",
+      "target_loader": "ovlab-openvla-vanilla",
+      "operation": "merge_lora_into_dense_weights"
+    },
+    "discovery": "Per-variant capabilities are declarations; plugin hooks validate each concrete configuration and checkpoint."
+  },
+  "configs": {
+    "root": "configs",
+    "checkpoints": [
+      "resources/registry.yaml"
+    ]
+  },
+  "config_aliases": "configs/aliases.json",
+  "training": {
+    "entrypoint": "ovlab_openvla_training.plugin:plugin",
+    "implementations": [
+      "openvla-reference",
+      "openvla-quic"
+    ],
+    "expected_loaders": [
+      "ovlab-openvla-vanilla",
+      "ovlab-openvla-peft",
+      "ovlab-openvla-quic"
+    ],
+    "images": {
+      "openvla-reference": {
+        "role": "training-openvla",
+        "image": "ovlab-training-openvla:local",
+        "image_env": "OVLAB_TRAINING_IMAGE"
+      },
+      "openvla-quic": {
+        "role": "training-openvla-quic",
+        "image": "ovlab-training-openvla-quic:local",
+        "image_env": "OVLAB_TRAINING_QUIC_IMAGE"
+      }
+    },
+    "modules": {
+      "training_runs": "ovlab_openvla_training.training_runs",
+      "training_data": "ovlab_openvla_training.training_data",
+      "training_evidence": "ovlab_openvla_training.training_evidence",
+      "training_quic": "ovlab_openvla_training.training_quic",
+      "quic_experiments": "ovlab_openvla_training.quic_experiments",
+      "checkpoint_preparation": "ovlab_openvla_training.checkpoint_preparation",
+      "workflow_checkpoints": "ovlab_openvla_training.workflow_checkpoints"
+    },
+    "finalizer": {
+      "role": "finalizer-openvla",
+      "image": "ovlab-finalizer-openvla:local",
+      "image_env": "OVLAB_FINALIZER_IMAGE"
+    }
+  },
+  "preparation": {
+    "entrypoint": "ovlab_openvla_training.plugin:preparer",
+    "expected_loaders": [
+      "ovlab-openvla-peft"
+    ],
+    "converter_version": "ovlab-dense-inference/v1",
+    "image_capability_label": "io.github.ovlab.checkpoint-preparation",
+    "image_capability": "lora-merge-v1"
+  }
+}

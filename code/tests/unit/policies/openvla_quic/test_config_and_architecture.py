@@ -17,7 +17,7 @@ from ovlab_openvla_quic import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
 CONFIG_ROOT = REPOSITORY_ROOT / "configs"
-PACKAGE_ROOT = REPOSITORY_ROOT / "code/policies/openvla-quic"
+PACKAGE_ROOT = REPOSITORY_ROOT / "plugins/openvla"
 CONFIGS = {
     QuICVariant.PEFT: "policies/openvla-quic/quic-peft-bones.yaml",
     QuICVariant.WC: "policies/openvla-quic/quic-wc-bones.yaml",
@@ -58,7 +58,7 @@ def test_portable_descriptor_only_configuration_validates_without_external_impor
 
 @pytest.mark.parametrize("variant", list(QuICVariant))
 def test_skeleton_configuration_rejects_runtime_or_compression_claims(variant):
-    document = load(CONFIG_ROOT / CONFIGS[variant])
+    document = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[variant], "quic_policy_descriptor")
     for field in (
         "runtime_validated", "training_validated", "libero_validated", "compression_verified"
     ):
@@ -69,24 +69,24 @@ def test_skeleton_configuration_rejects_runtime_or_compression_claims(variant):
 
 
 def test_source_availability_and_dense_materialization_cannot_cross_modes():
-    peft = load(CONFIG_ROOT / CONFIGS[QuICVariant.PEFT])
+    peft = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
     peft["source_import_status"] = "absent"
     with pytest.raises(ConfigSchemaError, match="source_import_status"):
         validate(peft, "test", "quic_policy_descriptor")
 
-    wc = load(CONFIG_ROOT / CONFIGS[QuICVariant.WC])
+    wc = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.WC], "quic_policy_descriptor")
     wc["semantics"]["dense_adapter_materialization_allowed"] = True
     with pytest.raises(ConfigSchemaError, match="misclassifies QuIC-WC"):
         validate(wc, "test", "quic_policy_descriptor")
 
 
 def test_configurations_cannot_alias_or_swap_peft_and_wc_semantics():
-    peft = load(CONFIG_ROOT / CONFIGS[QuICVariant.PEFT])
+    peft = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
     peft["id"] = "quic-wc"
     with pytest.raises(ConfigSchemaError, match="id must equal"):
         validate(peft, "test", "quic_policy_descriptor")
 
-    wc = load(CONFIG_ROOT / CONFIGS[QuICVariant.WC])
+    wc = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.WC], "quic_policy_descriptor")
     wc["published_method_relation"] = "direct"
     with pytest.raises(ConfigSchemaError, match="published_method_relation"):
         validate(wc, "test", "quic_policy_descriptor")
@@ -94,7 +94,7 @@ def test_configurations_cannot_alias_or_swap_peft_and_wc_semantics():
 
 @pytest.mark.parametrize("profile", ("QP1", "QP2", "QP3", "QP4"))
 def test_gate_f_qp_profiles_remain_unresolved_without_invented_numbers(profile):
-    document = load(CONFIG_ROOT / CONFIGS[QuICVariant.PEFT])
+    document = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
     document["profile"] = {
         "id": profile,
         "definition_availability": "unresolved",
@@ -110,7 +110,7 @@ def test_gate_f_qp_profiles_remain_unresolved_without_invented_numbers(profile):
 
 
 def test_provider_boundary_is_pinned_and_cannot_be_redirected():
-    document = load(CONFIG_ROOT / CONFIGS[QuICVariant.PEFT])
+    document = ConfigResolver(CONFIG_ROOT, repository_root=REPOSITORY_ROOT).load_component(CONFIGS[QuICVariant.PEFT], "quic_policy_descriptor")
     document["external_provider"]["source_commit"] = "0" * 40
     with pytest.raises(ConfigSchemaError, match="pinned public API boundary"):
         validate(document, "test", "quic_policy_descriptor")

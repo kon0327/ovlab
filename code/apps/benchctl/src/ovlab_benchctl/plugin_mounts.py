@@ -6,7 +6,7 @@ import re
 
 from .errors import ConfigCompatibilityError
 
-_RESERVED = tuple(map(PurePosixPath, ("/opt/ovlab/configs", "/checkpoints/resolved", "/run/ovlab", "/tmp")))
+_RESERVED = tuple(map(PurePosixPath, ("/opt/ovlab/configs", "/checkpoints/resolved", "/checkpoints/base", "/var/lib/ovlab/training-run", "/run/ovlab", "/tmp")))
 _ENV_RESERVED = {"OVLAB_PLUGIN_REGISTRY", "OVLAB_CONFIG_BUNDLE_SHA256", "OVLAB_RESOLVED_CHECKPOINT_ID",
                  "OVLAB_RESOLVED_CHECKPOINT_CONTAINER_PATH", "OVLAB_CHECKPOINT_REVISION", "OVLAB_CHECKPOINT_SHA256",
                  "OVLAB_LOCAL_PROFILE", "OVLAB_EXECUTION_PROFILE", "OVLAB_DEPLOYMENT_PROFILE"}

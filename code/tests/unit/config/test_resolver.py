@@ -211,7 +211,7 @@ def test_runtime_quantization_changes_scientific_hash(tmp_path):
     selected_profile = profile(tmp_path, suffix="same-machine")
     configured = ConfigResolver(root, repository_root=tmp_path)
     full = configured.resolve(experiment, local_profile=selected_profile, environment={})
-    policy = root / "policies/openvla-lora/merged-libero10.yaml"
+    policy = root.parent / "plugins/openvla/configs/policies/openvla-lora/merged-libero10.yaml"
     policy.write_text(
         policy.read_text(encoding="utf-8").replace(
             "quantization: none", "quantization: 4bit"
@@ -338,7 +338,7 @@ def test_merged_lora_policy_rejects_cross_suite_acceptance(tmp_path):
 
 def test_merged_weights_cannot_be_configured_as_vanilla(tmp_path):
     root = copied_configs(tmp_path)
-    policy = root / "policies/openvla-lora/merged-libero10.yaml"
+    policy = root.parent / "plugins/openvla/configs/policies/openvla-lora/merged-libero10.yaml"
     policy.write_text(policy.read_text().replace("openvla_lora_merged", "openvla_vanilla"), encoding="utf-8")
     with pytest.raises(ConfigCompatibilityError, match="cannot be classified.*Vanilla"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
@@ -351,20 +351,20 @@ def test_merged_weights_cannot_be_configured_as_vanilla(tmp_path):
 @pytest.mark.parametrize("false_family", ["oft", "quic"])
 def test_merged_lora_registry_rejects_other_method_families(tmp_path, false_family):
     root = copied_configs(tmp_path)
-    registry = root / "resources/registry.yaml"
+    registry = root.parent / "plugins/openvla/configs/resources/registry.yaml"
     registry.write_text(
         registry.read_text().replace("family: lora", f"family: {false_family}"),
         encoding="utf-8",
     )
     with pytest.raises(ConfigSchemaError, match="must be one of: lora"):
         ConfigResolver(root, repository_root=tmp_path).load_component(
-            "resources/registry.yaml", "resource_registry"
+            "plugin://openvla/resources/registry.yaml", "resource_registry"
         )
 
 
 def test_merged_lora_registry_rejects_non_digest_checkpoint_identity(tmp_path):
     root = copied_configs(tmp_path)
-    registry = root / "resources/registry.yaml"
+    registry = root.parent / "plugins/openvla/configs/resources/registry.yaml"
     registry.write_text(
         registry.read_text().replace(
             "33abee128d94d3bf54660b48c233c525f7969608924c58152602acca1b190eed",
@@ -374,7 +374,7 @@ def test_merged_lora_registry_rejects_non_digest_checkpoint_identity(tmp_path):
     )
     with pytest.raises(ConfigSchemaError, match="SHA-256"):
         ConfigResolver(root, repository_root=tmp_path).load_component(
-            "resources/registry.yaml", "resource_registry"
+            "plugin://openvla/resources/registry.yaml", "resource_registry"
         )
 
 
@@ -385,7 +385,7 @@ def test_method_identity_changes_scientific_hash_without_machine_path_leakage(tm
         environment={},
     )
     root = copied_configs(tmp_path)
-    registry = root / "resources/registry.yaml"
+    registry = root.parent / "plugins/openvla/configs/resources/registry.yaml"
     registry.write_text(
         registry.read_text().replace('version: "1.0.0"', 'version: "1.0.1"', 1),
         encoding="utf-8",
@@ -549,6 +549,8 @@ def copied_configs(tmp_path):
     destination = tmp_path / "configs"
     shutil.copytree(CONFIGS, destination)
     shutil.copytree(REPOSITORY / "experiments", tmp_path / "experiments")
+    shutil.copytree(REPOSITORY / "plugins/openvla", tmp_path / "plugins/openvla")
+    shutil.copyfile(REPOSITORY / "plugins/registry.json", tmp_path / "plugins/registry.json")
     return destination
 
 
@@ -579,7 +581,7 @@ def test_extends_cycle_is_rejected(tmp_path):
 
 def test_cross_component_camera_mismatch_is_rejected(tmp_path):
     root = copied_configs(tmp_path)
-    policy = root / "policies/openvla-vanilla/base.yaml"
+    policy = root.parent / "plugins/openvla/configs/policies/openvla-vanilla/base.yaml"
     policy.write_text(policy.read_text().replace("camera.primary.rgb", "camera.wrist.rgb", 1), encoding="utf-8")
     with pytest.raises(ConfigCompatibilityError, match="camera"):
         ConfigResolver(root, repository_root=tmp_path).resolve(
@@ -597,7 +599,7 @@ def test_cross_component_action_convention_mismatch_is_rejected(tmp_path):
 
 def test_policy_action_interface_must_match_benchmark(tmp_path):
     root = copied_configs(tmp_path)
-    policy = root / "policies/openvla-vanilla/base.yaml"
+    policy = root.parent / "plugins/openvla/configs/policies/openvla-vanilla/base.yaml"
     policy.write_text(
         policy.read_text().replace(
             "interfaces/actions/libero-osc-pose-v1.yaml",

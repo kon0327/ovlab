@@ -364,7 +364,7 @@ def test_checkpoint_export_rejects_tampered_source_and_unsupported_onnx(tmp_path
     finalized = CheckpointBundleStore(tmp_path).finalize(_context(tmp_path))
     checkpoint_id = finalized["checkpoint_id"]
     target = tmp_path / "output"
-    with pytest.raises(CheckpointExportError, match="ONNX export is not yet implemented"):
+    with pytest.raises(CheckpointExportError, match="ONNX checkpoint export is not implemented"):
         export_checkpoint(tmp_path, checkpoint_id, format="onnx", output=target)
     assert not target.exists()
     weight = Path(finalized["checkpoint_path"]) / "weights-or-adapter/adapter_model.safetensors"

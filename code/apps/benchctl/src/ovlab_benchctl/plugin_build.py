@@ -10,6 +10,7 @@ from pathlib import Path
 import runpy
 import shutil
 import subprocess
+import tarfile
 import tempfile
 
 from .errors import ConfigCompatibilityError, ConfigReferenceError
@@ -109,11 +110,33 @@ def _plans(root, selected, registry, rows, *, dry_run):
     return plans
 
 
-def build_images(repository_root, roles=None, *, offline=False, dry_run=False, isolated_sources=True, runner=subprocess.run):
+def build_images(repository_root, roles=None, *, offline=False, dry_run=False, isolated_sources=True,
+                 config=None, execution_profile=None, runner=subprocess.run):
     root = Path(repository_root).resolve()
-    registry = registry_document(root)
+    registry = registry_document(root, offline=offline or dry_run)
     registry_sha = registry_identity(root)
     selected = list(registry["builds"]) if roles is None else list(dict.fromkeys(roles))
+    bundle = builder = None
+    if config is not None:
+        from .config_bundle import ConfigBundleBuilder
+        from .strict_yaml import load
+        from .policy_plugins import plugin_for_type
+        builder = ConfigBundleBuilder(root)
+        reference = str(config).removeprefix("configs/")
+        kind = load(builder.references.source(reference)).get("kind")
+        if kind not in {"experiment", "deployment"}:
+            raise ConfigReferenceError("image configuration must be an experiment or deployment")
+        document = builder.load_component(reference, kind)
+        policy = builder.load_component(document["components"]["policy"], "policy")
+        configured_role = plugin_for_type(policy["type"], root).descriptor.get("deployment", {}).get("role")
+        if configured_role not in selected:
+            raise ConfigCompatibilityError("selected image roles do not provide the configured policy")
+        selected = [role for role in selected if role == configured_role or not registry["builds"][role].get("project")]
+        if roles is None:
+            selected = [configured_role]
+        if execution_profile is None and kind == "experiment" and "deployment" in document:
+            execution_profile = {"egl": "profiles/libero-bench-egl.yaml", "glfw": "profiles/libero-playground-glfw.yaml"}.get(document["deployment"].get("renderer", "egl"))
+        bundle = builder.build(reference, execution_profile, kind=kind)
     unknown = set(selected) - registry["builds"].keys()
     if unknown:
         raise ConfigReferenceError(f"unknown image roles: {', '.join(sorted(unknown))}")
@@ -124,7 +147,8 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
                  "selection": dict(registry["sources"][name]),
                  "acquisition": "fetch" if registry["sources"][name]["kind"] == "git" else "copy"}
                 for name in sources] if isolated_sources else inspect_sources(root, sources, registry=registry)
-        return [{**plan, "registry_sha256": registry_sha, "isolated_sources": isolated_sources}
+        return [{**plan, "registry_sha256": registry_sha, "isolated_sources": isolated_sources,
+                 **({"config_bundle_sha256": bundle.sha256} if bundle is not None else {})}
                 for plan in _plans(workspace, selected, registry, rows, dry_run=True)]
     with _build_sources(root, sources, registry, offline=offline, isolated=isolated_sources) as (workspace, source_registry, rows, copied):
         plans = _plans(workspace, selected, registry, rows, dry_run=False)
@@ -136,10 +160,27 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
             manifest_path = Path(temporary) / "source-manifest.json"
             manifest_path.write_text(json.dumps(manifest, sort_keys=True))
             registry_path = Path(temporary) / "plugin-registry.json"
-            registry_path.write_text(json.dumps(registry, sort_keys=True))
+            image_registry = deepcopy(registry)
+            from .plugin_identity import source_identities
+            image_registry["source_identities"] = source_identities(registry, rows)
+            for row in rows:
+                if row["kind"] == "local":
+                    image_registry["sources"][row["id"]]["path"] = f"/opt/ovlab/external/{row['id']}"
+            registry_path.write_text(json.dumps(image_registry, sort_keys=True))
+            config_path = None
+            if bundle is not None:
+                config_path = Path(temporary) / "config-bundle.tar"
+                with builder.materialize(bundle) as configuration:
+                    with tarfile.open(config_path, "w") as archive:
+                        for path in sorted(configuration.rglob("*")):
+                            if path.is_file():
+                                archive.add(path, arcname=path.relative_to(configuration).as_posix(), recursive=False)
             for plan in plans:
                 role, image = plan["role"], plan["image"]
                 build = registry["builds"][role]
+                recipe = Path(plan["dockerfile"]).read_text()
+                if bundle is not None and any(value not in recipe for value in ("ovlab_config_bundle", "OVLAB_CONFIG_BUNDLE_SHA256")):
+                    raise ConfigCompatibilityError(f"configured build recipe for {role} must consume ovlab_config_bundle and its OVLAB_CONFIG_BUNDLE_SHA256 build argument")
                 signature = plugin_build_identity(workspace, role, registry=registry, rows=rows)
                 lock_digest = hashlib.sha256()
                 for name in ["deploy/docker/base-images.lock", *build.get("locks", [])]:
@@ -153,11 +194,14 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
                     "OVLAB_DOCKERFILE_SHA256": hashlib.sha256(Path(plan["dockerfile"]).read_bytes()).hexdigest(),
                     "OVLAB_IMAGE_REFERENCE": image,
                     "OVLAB_VERSION": (workspace / "VERSION").read_text().strip(),
+                    "OVLAB_CONFIG_BUNDLE_SHA256": bundle.sha256 if bundle is not None else "none",
                 }
                 command = plan["command"][:-1] + [
                     "--secret", f"id=ovlab_source_manifest,src={manifest_path}",
                     "--secret", f"id=ovlab_plugin_registry,src={registry_path}",
                 ]
+                if config_path is not None:
+                    command += ["--secret", f"id=ovlab_config_bundle,src={config_path}"]
                 for key, value in arguments.items():
                     command += ["--build-arg", f"{key}={value}"]
                 labels = {
@@ -166,6 +210,8 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
                     "io.github.ovlab.role": role,
                     "io.github.ovlab.source-manifest.sha256": manifest["source_content_sha256"],
                 }
+                if bundle is not None:
+                    labels["io.github.ovlab.config-bundle.sha256"] = bundle.sha256
                 for key, value in labels.items():
                     command += ["--label", f"{key}={value}"]
                 command.append(str(workspace))
@@ -178,4 +224,6 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
                 plan.update(command=command, source_sha256=manifest["source_content_sha256"],
                             registry_sha256=registry_sha, plugin_build_sha256=signature,
                             isolated_sources=isolated_sources)
+                if bundle is not None:
+                    plan["config_bundle_sha256"] = bundle.sha256
         return plans

@@ -30,6 +30,19 @@ def test_training_image_accepts_custom_role_with_training_contract(tmp_path):
         deployment._docker_image("OVLAB_TRAINING_IMAGE", "unused", "incompatible-v2")
 
 
+def test_training_image_rejects_wrong_registered_project_sources():
+    from ovlab_benchctl.image_metadata import IMAGE_CONTRACT_LABEL
+    from ovlab_benchctl.training_errors import TrainingRuntimeError
+    root = Path(__file__).resolve().parents[4]
+    labels = {IMAGE_CONTRACT_LABEL: "offline-dataset-ro-base-ro-training-run-rw-v1",
+              "io.github.ovlab.role": "training-openvla"}
+    deployment = TrainingDeployment(root, runner=lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps(labels) + "|sha256:stale"))
+    with pytest.raises(TrainingRuntimeError, match="differs from registered training plugin"):
+        deployment._docker_image("OVLAB_TRAINING_IMAGE", "stale:local",
+                                 "offline-dataset-ro-base-ro-training-run-rw-v1", plugin_role="training-openvla")
+
+
 @pytest.mark.parametrize("mask", [0o022, 0o077])
 def test_training_run_keeps_worker_group_access_despite_host_umask(tmp_path, mask):
     store = TrainingRunStore(tmp_path)
@@ -100,7 +113,7 @@ def test_isolated_lifecycle_preserves_run_id_and_records_early_failure(tmp_path,
 
     profile_path = tmp_path / "profile.yaml"
     profile_path.write_text("id: fixture\n")
-    profile = SimpleNamespace(document={"id": "fixture", "training": {}, "dataset": {"ref": "dataset-fixture"}})
+    profile = SimpleNamespace(document={"id": "fixture", "trainer": {"implementation": "fixture-trainer"}, "training": {}, "dataset": {"ref": "dataset-fixture"}})
     plan = {"scientific_training_id": "training-plan-fixture", "execution_plan_id": "execution-fixture",
             "scientific": {"dataset": {"dataset_id": "dataset-fixture"}},
             "execution": {"model_host_path": str(tmp_path / "base")}}
@@ -113,9 +126,16 @@ def test_isolated_lifecycle_preserves_run_id_and_records_early_failure(tmp_path,
         return SimpleNamespace(returncode=0, stdout='{"result": {}}')
 
     deployment = TrainingDeployment(tmp_path, runner=runner, environment={"OVLAB_MODEL_DATA_ROOT": str(tmp_path / "data")})
+    from ovlab_benchctl import training_plugins
+    monkeypatch.setattr(training_plugins, "training_image", lambda *args: {
+        "role": "fixture-trainer", "image": "fixture-trainer:local", "image_env": "FIXTURE_TRAINER_IMAGE"})
+    monkeypatch.setattr(training_plugins, "finalizer_image", lambda *args: {
+        "role": "fixture-finalizer", "image": "fixture-finalizer:local", "image_env": "FIXTURE_FINALIZER_IMAGE"})
+    monkeypatch.setattr(training_plugins, "backend_for_profile", lambda *args: SimpleNamespace(
+        container_resources=lambda *args: {"environment": {}, "mounts": []}))
     monkeypatch.setattr(deployment, "_profile", lambda _: (profile_path, profile))
     monkeypatch.setattr(deployment, "_gpu", lambda: (1, 24))
-    monkeypatch.setattr(deployment, "_docker_image", lambda variable, default, role: (default, "sha256:fixture"))
+    monkeypatch.setattr(deployment, "_docker_image", lambda variable, default, role, **kwargs: (default, "sha256:fixture"))
     monkeypatch.setattr(deployment, "_prepare_base_checkpoint", lambda value: value)
     monkeypatch.setattr(training_deployment.TrainingPlanner, "plan", lambda *args, **kwargs: plan)
     monkeypatch.setattr(training_deployment.DatasetStore, "inspect", lambda *args: {

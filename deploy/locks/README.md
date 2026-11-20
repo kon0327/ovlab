@@ -23,20 +23,10 @@ The reporting lock is a separate offline-only closure containing NumPy, Jinja2,
 Matplotlib, and their explicitly pinned renderer dependencies. It contains no
 LIBERO, MuJoCo, policy runtime, checkpoint client, or network service.
 
-OpenVLA-OFT's required Transformers fork is pinned to commit
-`bc339d9ad707454c0c115970db43c260067c61ab`. The
-commit came from the accepted `openvla-oft` environment's installed
-`direct_url.json`; the lock records the resulting source archive hash.
-The same environment identifies its inference-time `dlimp` dependency at
-commit `040105d256bd28866cc6620621a3d5f7b6b91b46`. Although these packages
-originate in the upstream training stack, OFT's accepted inference helper
-imports TensorFlow, TFDS and `dlimp` while loading the provider, so the OFT
-runtime lock retains that closure instead of advertising an image that cannot
-initialize the accepted provider.
-The lock holds `tensorflow-metadata` at 1.15.0 and the eager-import-only W&B
-dependency at 0.16.6 so both share the Protobuf range supported by TensorFlow
-2.15.0. The newer combination currently present in the host snapshot is not a
-resolvable/importable closure and is not reproduced in the image.
+Model runtime locks belong to their registered plugin projects. The reference
+OpenVLA integration keeps its policy and training closures under
+[`plugins/openvla/locks/`](../../plugins/openvla/locks/), with model-specific
+dependency explanations in the plugin's README.
 
 Docker builds consume only artifacts and hashes selected by these locks. The
 local OVLAB and registered external source packages are installed separately with

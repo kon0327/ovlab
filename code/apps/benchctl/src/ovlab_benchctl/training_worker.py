@@ -11,7 +11,6 @@ import sys
 
 from .training_runs import (
     CheckpointBundleStore,
-    OpenVlaTrainerAdapter,
     TrainingRunContext,
     TrainingRunStore,
 )
@@ -65,7 +64,8 @@ def train(root: Path) -> int:
 def _train(root: Path) -> int:
     context = _context(root)
     store = TrainingRunStore(root.parent.parent.parent, training_runs_root=root.parent)
-    adapter = OpenVlaTrainerAdapter()
+    from .training_plugins import backend_for_plan
+    adapter = backend_for_plan(context.plan).create_trainer()
     try:
         adapter.preflight(context.plan)
         store.event(root, "preparing")

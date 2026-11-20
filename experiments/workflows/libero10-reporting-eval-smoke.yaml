@@ -44,7 +44,7 @@ children:
           evaluate:
             patch:
               components:
-                policy: policies/openvla-lora/merged-libero10-4bit.yaml
+                policy: plugin://openvla/policies/openvla-lora/merged-libero10-4bit.yaml
         execute: [evaluate]
 
   - id: oft
@@ -69,7 +69,7 @@ children:
           evaluate:
             patch:
               components:
-                policy: policies/openvla-oft/libero10-native-4bit.yaml
+                policy: plugin://openvla/policies/openvla-oft/libero10-native-4bit.yaml
         execute: [evaluate]
 
   - id: vanilla
@@ -82,7 +82,7 @@ children:
             name: Vanilla OpenVLA on two LIBERO-10 tasks
             tags: [libero-10, vanilla, reporting-smoke, one-episode-per-task]
           components:
-            policy: policies/openvla-vanilla/base.yaml
+            policy: plugin://openvla/policies/openvla-vanilla/base.yaml
     children:
       - id: full
         name: Vanilla, unquantized
@@ -93,5 +93,5 @@ children:
           evaluate:
             patch:
               components:
-                policy: policies/openvla-vanilla/4bit.yaml
+                policy: plugin://openvla/policies/openvla-vanilla/4bit.yaml
         execute: [evaluate]

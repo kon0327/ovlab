@@ -50,7 +50,7 @@ children:
       evaluate:
         patch:
           components:
-            policy: policies/openvla-vanilla/4bit.yaml
+            policy: plugin://openvla/policies/openvla-vanilla/4bit.yaml
         component_patches:
           benchmark:
             settings:

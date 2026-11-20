@@ -118,7 +118,7 @@ devices:
 
 
 def test_quantized_quic_and_unsupported_codec_fail_during_schema_validation():
-    policy = load(ROOT / "configs/policies/openvla-quic/adapter-libero10.yaml")
+    policy = ConfigResolver(ROOT / "configs", repository_root=ROOT).load_component("plugin://openvla/policies/openvla-quic/adapter-libero10.yaml", "policy")
     policy["settings"]["runtime"]["quantization"] = "4bit"
     with pytest.raises(ValueError, match="dense"):
         validate(policy, "test", "policy")

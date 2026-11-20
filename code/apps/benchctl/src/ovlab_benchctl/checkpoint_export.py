@@ -21,7 +21,7 @@ class CheckpointExportError(ValueError):
 def export_checkpoint(model_data_root: Path, checkpoint_id: str, *, format: str, output: Path):
     if format == "onnx":
         raise CheckpointExportError(
-            "ONNX export is not yet implemented for complete OpenVLA, OFT or QuIC policies"
+            "ONNX checkpoint export is not implemented"
         )
     if format not in {"bundle", "tar"}:
         raise CheckpointExportError(f"unsupported checkpoint export format: {format}")

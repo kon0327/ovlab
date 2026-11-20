@@ -10,7 +10,7 @@ import re
 import sys
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-for parent in (REPOSITORY / "code/packages", REPOSITORY / "code/policies", REPOSITORY / "code/apps"):
+for parent in (REPOSITORY / "code/packages", REPOSITORY / "code/apps"):
     for src in parent.glob("*/src"):
         sys.path.insert(0, str(src))
 

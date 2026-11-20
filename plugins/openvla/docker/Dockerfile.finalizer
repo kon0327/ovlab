@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1.7
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime@sha256:e5c32997194edfc6fb0235223d1cd0433056045a468e7dfeaac390a3fcf8ae6d
+
+ARG OVLAB_REVISION
+ARG OVLAB_SOURCE_MANIFEST_SHA256
+ARG OVLAB_SOURCE_DIRTY
+ARG OVLAB_LOCK_SHA256
+ARG OVLAB_DOCKERFILE_SHA256
+ARG OVLAB_IMAGE_REFERENCE=ovlab-finalizer-openvla:local
+ARG OVLAB_VERSION=0.2.0
+
+LABEL org.opencontainers.image.title="OVLAB OpenVLA checkpoint finalizer" \
+      org.opencontainers.image.source="https://github.com/kon0327/OpenVLABenchmark" \
+      org.opencontainers.image.authors="Jiří Konečný, VSB - Technical University of Ostrava" \
+      org.opencontainers.image.revision="$OVLAB_REVISION" \
+      org.opencontainers.image.version="$OVLAB_VERSION" \
+      org.opencontainers.image.licenses="NOASSERTION" \
+      io.github.ovlab.role="finalizer-openvla" \
+      io.github.ovlab.deployment.contract="dataset-write-only-or-finalizer-v1" \
+      io.github.ovlab.source-manifest.sha256="$OVLAB_SOURCE_MANIFEST_SHA256" \
+      io.github.ovlab.source-dirty="$OVLAB_SOURCE_DIRTY" \
+      io.github.ovlab.dependency-lock.sha256="$OVLAB_LOCK_SHA256" \
+      io.github.ovlab.dockerfile.sha256="$OVLAB_DOCKERFILE_SHA256"
+
+ENV OVLAB_ROOT=/opt/ovlab \
+    OVLAB_IMAGE_ROLE=finalizer-openvla \
+    OVLAB_IMAGE_REFERENCE=$OVLAB_IMAGE_REFERENCE \
+    OVLAB_VERSION=$OVLAB_VERSION \
+    OVLAB_SOURCE_MANIFEST_SHA256=$OVLAB_SOURCE_MANIFEST_SHA256 \
+    OVLAB_SOURCE_DIRTY=$OVLAB_SOURCE_DIRTY \
+    OVLAB_LOCK_SHA256=$OVLAB_LOCK_SHA256 \
+    OVLAB_DOCKERFILE_SHA256=$OVLAB_DOCKERFILE_SHA256 \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /opt/ovlab
+COPY external/plugin-openvla/locks/finalizer.requirements.txt /tmp/locks/
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes \
+      -r /tmp/locks/finalizer.requirements.txt \
+    && rm -rf /tmp/locks
+COPY code /opt/ovlab/code
+COPY external/plugin-openvla /opt/ovlab/external/plugin-openvla
+COPY deploy/config /opt/ovlab/deploy/config
+COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
+ARG OVLAB_CONFIG_BUNDLE_SHA256=none
+RUN --mount=type=secret,id=ovlab_source_manifest \
+    --mount=type=secret,id=ovlab_plugin_registry \
+    --mount=type=secret,id=ovlab_config_bundle \
+    test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
+    && bash /tmp/install-ovlab-packages.sh \
+    && bash /opt/ovlab/external/plugin-openvla/scripts/install-plugin.sh \
+    && rm /tmp/install-ovlab-packages.sh \
+    && groupadd --gid 10001 ovlab \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \
+    && install -d -o 10001 -g 10001 -m 0700 /var/lib/ovlab/model-data /tmp/ovlab \
+    && install -d -o root -g root -m 0755 /usr/share/ovlab \
+    && cp /run/secrets/ovlab_source_manifest /usr/share/ovlab/source-manifest.json \
+    && chmod 0444 /usr/share/ovlab/source-manifest.json
+
+USER 10001:10001
+ENTRYPOINT ["ovlab"]
+CMD ["checkpoint", "list"]

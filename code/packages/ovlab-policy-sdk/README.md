@@ -29,3 +29,10 @@ Start with the example README for the complete CPU service workflow. Plugin cont
 hooks are stateless and run on the host; model and episode state belong to the
 adapter. The settings returned by `resolve_settings` must expose the structural
 `PolicySettings.record_raw_output: bool` contract.
+
+
+Training and checkpoint preparation extensions are documented in [TRAINING.md](TRAINING.md).
+
+`ovlab_policy_sdk.strict_yaml` provides the same strict configuration parser used
+by OVLAB, without importing its orchestration package. Plugins can use `load`,
+`loads` and `dumps`; parsing failures raise `PolicyPluginValidationError`.

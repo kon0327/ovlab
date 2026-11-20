@@ -1,0 +1,10 @@
+schema_version: "0.1.0"
+kind: policy
+type: openvla_vanilla
+extends: base.yaml
+
+settings:
+  runtime:
+    # Validated BitsAndBytes NF4 inference recipe: bf16 compute, fp16 storage,
+    # double quantization. This is inference quantization, not QLoRA training.
+    quantization: 4bit

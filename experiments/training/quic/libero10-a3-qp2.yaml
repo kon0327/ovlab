@@ -1,3 +1,4 @@
-extends: ../openvla-libero10-quic-smoke.yaml
-kind: training
-id: openvla-libero10-quic-a3-qp2
+# Local training profile; override plugin defaults below.
+kind: "training"
+id: "openvla-libero10-quic-a3-qp2"
+extends: plugin://openvla/training/quic/libero10-a3-qp2.yaml

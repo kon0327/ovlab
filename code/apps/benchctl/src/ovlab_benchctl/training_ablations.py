@@ -20,7 +20,6 @@ from .training_identity import atomic_json, canonical_json, identity
 ABLATION_SCHEMA = "ovlab.training-ablation/v1"
 ABLATION_PLAN_SCHEMA = "ovlab.training-ablation-plan/v1"
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_ALLOWED_FACTORS = {"training.peft.adapter", "training.peft.placement", "training.peft.targets", "training.peft.max_trainable_parameters"}
 
 
 def _differences(first, second, prefix=""):
@@ -49,9 +48,13 @@ class TrainingAblation:
     def __init__(self, path: Path, *, config_root: Path, fit_action_normalization: bool = False):
         self.path, self.config_root = Path(path).resolve(), Path(config_root).resolve()
         self.fit_action_normalization = fit_action_normalization
-        if not self.path.is_relative_to(self.config_root):
-            raise TrainingProfileError("ablation suite must be inside the configuration root")
-        raw = load_training_document(self.path, config_root=self.config_root)
+        from .config_references import ConfigReferences
+        self.references = ConfigReferences(self.config_root.parent, self.config_root)
+        try:
+            origin = self.references.origin(self.path)
+        except ValueError as exc:
+            raise TrainingProfileError("ablation suite must be inside a registered configuration root") from exc
+        raw = load_training_document(self.path, config_root=origin, repository_root=self.references.repository_root)
         allowed = {"schema_version", "id", "base_profile", "factors", "variants", "evaluation"}
         missing = allowed - {"evaluation"} - set(raw)
         if set(raw) - allowed or missing:
@@ -61,8 +64,8 @@ class TrainingAblation:
         if not isinstance(raw["id"], str) or _SAFE.fullmatch(raw["id"]) is None:
             raise TrainingProfileError("ablation id must be a portable identifier")
         factors = raw["factors"]
-        if not isinstance(factors, list) or not factors or any(not isinstance(factor, str) or not any(factor == allowed or factor.startswith(allowed + ".") for allowed in _ALLOWED_FACTORS) for factor in factors) or len(factors) != len(set(factors)):
-            raise TrainingProfileError("ablation factors must be unique explicit training.peft adapter/placement/targets/budget paths; host, split, optimizer, seed and hardware remain shared")
+        if not isinstance(factors, list) or not factors or any(not isinstance(factor, str) or not factor or any(not part for part in factor.split('.')) for factor in factors) or len(factors) != len(set(factors)):
+            raise TrainingProfileError("ablation factors must be unique explicit configuration paths")
         if any(left != right and right.startswith(left + ".") for left in factors for right in factors):
             raise TrainingProfileError("ablation factors must not overlap")
         variants = raw["variants"]
@@ -71,11 +74,8 @@ class TrainingAblation:
         self.document = raw
         self.base_path, self.base = self._profile(raw["base_profile"])
         self.variants = {variant: self._profile(reference) for variant, reference in variants.items()}
-        dataset = self.base.document["dataset"]
-        if "partition" not in dataset:
-            raise TrainingProfileError("ablation base profile requires explicit shared dataset.partition")
-        from .training_data import validate_partition
-        validate_partition(dataset["partition"])
+        from .training_plugins import backend_for_profile
+        backend_for_profile(self.base.document).validate_ablation(self.base.document, factors)
         common = deepcopy(dict(self.base.document))
         common.pop("id", None)
         for factor in factors:
@@ -103,15 +103,19 @@ class TrainingAblation:
     def _reference(self, reference):
         if not isinstance(reference, str) or not reference or Path(reference).is_absolute():
             raise TrainingProfileError("ablation profile/evaluation references must be nonempty relative paths")
+        if reference.startswith('plugin:'):
+            return self.references.source(reference)
         path = (self.path.parent / reference).resolve()
-        if not (path.is_relative_to(self.config_root) or path.is_relative_to(self.config_root.parent / "experiments")):
-            raise TrainingProfileError("ablation reference escapes configuration and experiment roots")
+        try:
+            self.references.origin(path)
+        except ValueError as exc:
+            raise TrainingProfileError("ablation reference escapes registered configuration and experiment roots") from exc
         return path
 
     def _profile(self, reference):
         path = self._reference(reference)
         from .training_profiles import with_fitted_action_normalization
-        return path, with_fitted_action_normalization(load_training_profile(path, config_root=(self.config_root.parent / "experiments" if path.is_relative_to(self.config_root.parent / "experiments") else self.config_root)), self.fit_action_normalization)
+        return path, with_fitted_action_normalization(load_training_profile(path, config_root=self.references.origin(path)), self.fit_action_normalization)
 
     def plan(self, planner=None, **planner_kwargs) -> dict:
         scientific = {
@@ -119,7 +123,7 @@ class TrainingAblation:
             "suite_id": self.document["id"],
             "factors": self.document["factors"],
             "common": self.common,
-            "partition_contract_id": identity("partition-contract", {"dataset": self.base.document["dataset"], "normalization": self.base.document["training"].get("normalization")}, 32),
+            "partition_contract_id": identity("partition-contract", {"dataset": self.base.document.get("dataset"), "normalization": self.base.document.get("training", {}).get("normalization")}, 32),
             "variants": {variant: dict(profile.document) for variant, (_, profile) in self.variants.items()},
         }
         resolved = {}

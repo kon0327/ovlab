@@ -19,43 +19,86 @@ README](../examples/policy-plugin/README.md). It includes all configuration
 files and a CPU service using a tiny bundled artifact, so you can validate the
 connection without downloading a model. Return here for the full contract.
 
-## Registry and source selection
+## Project registration and source selection
 
-The default registry is
-`code/apps/benchctl/src/ovlab_benchctl/plugins/registry.json`; it ships as package
-data. The same selection is honored by explicit `environment` mappings on the Python
-orchestrators without modifying `os.environ`. A project can supply a complete replacement at
-`configs/plugins/registry.json`. `OVLAB_PLUGIN_REGISTRY` selects an explicit JSON
-file instead. Relative registry and local source paths are relative to the OVLAB
-repository. The `plugin` commands also accept `--registry PATH`.
+A plugin is an independent project containing a `plugin.json` manifest, a Python
+package, configurations and build recipes. The user registry only binds that
+project to a local directory or an immutable Git revision. Policy variants,
+upstream model sources, capability declarations, defaults, checkpoint catalogs,
+training hooks and dependency locks belong to the project.
 
-A registry contains `schema_version: "ovlab.plugins/v1"`, `sources`, `plugins`
-and `builds` mappings. Source IDs, policy configuration types, and image roles
-are independent identifiers. Several policy variants can share a source and an
-image role. A plugin can use several sources. Each build recipe must include every source
-required by the plugins using that role; the deployment image must match the
-recipe image. Shared profile definitions must be identical, and infrastructure
-service/profile names are reserved. `deployment.gpu` defaults to `true`; set it
-to `false` for a CPU-only policy image. Persistent deployment can also specify
-`runtime.gpu: null`. The benchmark keeps its own renderer/GPU requirements.
+The author-facing registry uses `ovlab.plugins/v2`:
 
 ```json
 {
-  "schema_version": "ovlab.plugins/v1",
-  "sources": {
+  "schema_version": "ovlab.plugins/v2",
+  "plugins": {
     "my-model": {
-      "kind": "git",
-      "url": "https://github.com/example/my-model.git",
-      "commit": "0123456789abcdef0123456789abcdef01234567"
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/example/my-model-plugin.git",
+        "commit": "0123456789abcdef0123456789abcdef01234567"
+      }
     }
-  },
+  }
+}
+```
+
+The commit illustrates the required full lowercase 40-character format; replace
+it with an actual commit. Local registrations use
+`{"kind": "local", "path": "/home/developer/my-model-plugin"}` instead. The manifest's
+`id` must match the registry key. To register a complete project, use:
+
+```bash
+./ovlab plugin register /home/developer/my-model-plugin --dry-run
+./ovlab plugin register /home/developer/my-model-plugin
+./ovlab plugin register https://github.com/example/my-model-plugin.git --commit FULL_COMMIT
+```
+
+The command reads the project manifest to obtain its ID and validate the complete
+registration. It writes `configs/plugins/registry.json` by default; `--registry`
+selects another destination. A conflicting existing registration is preserved.
+Remote registration acquires the pinned manifest into an ignored project cache.
+Offline operations and build dry runs require that cached manifest; they never
+fetch an uncached project. `plugin register --dry-run` previews a remote acquisition
+without creating a cache or writing the registry.
+The checked-in default registry registers the reference OpenVLA project at
+`plugins/openvla/`; it does not contain model-specific dispatch or dependency
+recipes. Infrastructure sources and build roles can be declared alongside the
+project registrations using top-level `sources` and `builds` mappings.
+
+Selection order is an explicit `OVLAB_PLUGIN_REGISTRY`, a user registry at
+`configs/plugins/registry.json`, the repository's `plugins/registry.json`, a frozen
+installed-image registry when present, then the core's model-free packaged
+registry. Relative registry and local source paths are
+relative to the OVLAB repository. `plugin` commands also accept `--registry` for
+that one invocation. Python orchestrators honor their explicit environment
+mappings without modifying `os.environ`. A selected registry is a complete
+selection; registering into a new file starts from the selected default to retain
+existing registrations.
+
+A minimal project manifest looks like this:
+
+```json
+{
+  "schema_version": "ovlab.plugin/v1",
+  "api_version": "1",
+  "kind": "policy",
+  "id": "my-model",
+  "version": "1.0.0",
+  "sources": {},
   "plugins": {
     "my_policy": {
-      "id": "my-model",
+      "id": "my-model-policy",
       "family": "my_family",
       "runtime_status": "implemented",
       "entrypoint": "my_model.ovlab_plugin:plugin",
-      "sources": ["my-model"],
+      "sources": [],
+      "capabilities": {
+        "observation": {"images": {"roles": ["primary"]}},
+        "action": {"dimension": 7},
+        "training": {"supported": false}
+      },
       "deployment": {
         "profile": "my-model",
         "role": "policy-my-model",
@@ -70,109 +113,101 @@ to `false` for a CPU-only policy image. Persistent deployment can also specify
   },
   "builds": {
     "policy-my-model": {
-      "dockerfile": "external/my-model/Dockerfile.ovlab",
+      "dockerfile": "docker/Dockerfile",
       "image": "ovlab-policy-my-model:local",
-      "sources": ["my-model"],
-      "locks": ["external/my-model/requirements.lock"]
+      "sources": [],
+      "locks": ["locks/runtime.requirements.txt"]
     }
-  }
+  },
+  "configs": {"root": "configs", "checkpoints": ["resources/registry.yaml"]}
 }
 ```
 
-The SHA above illustrates the required format; replace it with a real full
-40-character commit. Branch names and tags are not immutable registrations and
-are rejected. URLs identify an upstream project, while commits identify its
-version. Recipes receive the source at `external/<source-id>`; optional Git
-`path` must equal that location. The whole `external/` directory is ignored by
-Git. Git metadata is excluded from Docker build contexts.
+Dockerfile and lock paths are project-relative and bounded to that project.
+OVLAB automatically adds the project source, `plugin-<project-id>`, to every
+variant and build. The recipe sees the prepared project at
+`external/plugin-my-model/`; its Docker `COPY` paths use that name. Additional
+model implementations can remain in separate upstream repositories: declare
+these under the manifest's `sources` as pinned Git or local sources, then list
+their IDs in the variant and recipe. OVLAB acquires each source independently.
+Neither the upstream model nor the core needs an extra dispatch branch.
 
-For local development, replace the source entry with:
+A project can expose several policy types and images, as the reference OpenVLA
+project does. Several variants may share a build role. The deployment image must
+match the role's recipe, and the recipe must include all variant sources. Shared
+profile definitions must be identical. Set `deployment.gpu: false` for CPU-only
+policies. Persistent deployment also accepts `runtime.gpu: null`; benchmark GPU
+requirements remain independent. Descriptive `capabilities` mappings advertise
+interfaces, artifact loaders, methods, quantization backends and limitations;
+plugin validation remains authoritative for each actual combination.
 
-```json
-{"kind": "local", "path": "/home/developer/projects/my-model"}
-```
+The expanded `ovlab.plugins/v1` registry is the frozen runtime format. It binds
+all policy entrypoints to project/source identities and recipes and is included
+in configuration bundles and build metadata. Existing explicit v1 registries
+remain supported, but new integrations should publish project manifests.
 
-Local sources are copied into `external/<source-id>` for builds. Snapshots carry
-content hashes and executable modes, so changes are visible in build identity.
-Host control hooks can import the original local source; containers use the
-installed package. Keep runtime imports in adapter initialization. A local path
-is a development source, not a portable substitute for a published Git commit.
+## Preparing and building sources
 
-The model source and the OVLAB adapter do not have to share a repository. For
-example, register `model-code` as a pinned Git source and `ovlab-adapter` as a
-local directory or another pinned Git source. The plugin's `entrypoint` points
-to the adapter package; list both IDs in the plugin's `sources` and its build
-recipe's `sources`. Put the Dockerfile in either project, for example
-`external/ovlab-adapter/Dockerfile`. OVLAB acquires each source independently;
-the adapter imports the model library inside its runtime initialization. The
-adapter's lightweight control hooks must be importable on the host, through an
-installed adapter package, its registered local directory, or a development
-checkout prepared with `plugin sync`. Building an image alone does not install
-the adapter into the host environment. The upstream model library can remain
-entirely inside the image. Neither the core nor the upstream model needs an
-OVLAB-specific dispatch branch.
-
-`sync` verifies existing Git origin, revision and cleanliness. It preserves dirty
-checkouts and refuses to replace an unmanaged directory or an edited local
-snapshot. A changed commit can be fetched and checked out when the checkout is
-clean. Git-ignored files that would be copied into a build also make a checkout
-dirty; Python bytecode, generated `*.egg-info`/`*.dist-info` metadata and MP4
-recordings in `rollouts/` are excluded from both source identity and Docker
-contexts. Tracked edits remain protected even for excluded paths. Offline sync uses only
-existing commits and local projects. `--offline` controls source acquisition and
-checkpoint resolution; dependency installation inside a Docker recipe may still
-need network access. Initial
-clones are published atomically, sync and builds hold locks on their selected sources, local snapshot replacement
-retains a rollback copy until the new snapshot is installed, and source symlinks
-may not escape the project. Sources with Git submodules should vendor or resolve
-their additional sources explicitly in the registry/build recipe.
+Git branches and tags are rejected as source revisions. Managed upstream sources
+are cloned into ignored `external/<source-id>` for development sync. Remote
+project manifests have a separate ignored project cache below `plugins/.cache/`.
+Local projects are used directly for lightweight host hooks and copied into
+content-identified snapshots for builds. Source identity includes executable
+modes; source symlinks cannot escape their project. Git metadata is excluded
+from image contexts.
 
 ```bash
 ./ovlab plugin list --json
-./ovlab plugin inspect my-model
-./ovlab plugin sync my-model --dry-run
-./ovlab plugin sync my-model
-./ovlab plugin sync my-model --offline
-./ovlab plugin build my-model --dry-run
-./ovlab plugin build my-model
+./ovlab plugin inspect my-model-policy
+./ovlab plugin sync my-model-policy --dry-run
+./ovlab plugin sync my-model-policy
+./ovlab plugin sync my-model-policy --offline
+./ovlab plugin build my-model-policy --dry-run
+./ovlab plugin build my-model-policy
 ```
 
-`sync` without an ID prepares every registered source, including benchmark
-sources. `plugin build` without an ID builds registered policy images. The
-existing helper `bash deploy/scripts/build-images.sh ROLE ...` builds any
-registered role, including dataset, benchmark, reporting and training images;
-without roles it builds all recipes. Build input selection is data in the
-registry, not a shell case statement. Build automatically acquires the selected
-recipe's sources first.
+`sync` verifies origin, revision and cleanliness and refuses to replace dirty or
+unmanaged destinations. Edited local snapshots are preserved. A changed Git pin
+can be checked out only in a clean managed checkout. Ignored files that would be
+copied into an image also make it dirty; bytecode, generated package metadata
+and MP4 recordings under `rollouts/` are excluded from source snapshots. Tracked
+edits remain protected. Offline acquisition uses cached Git objects or local
+projects. It does not promise offline package installation inside Docker.
 
-Builds are isolated by default, directly from the registrations and independently
-of the development workspace. The explicit flag is also available:
+Builds prepare a temporary context from registered sources by default; they do
+not need a previous sync or use a mutable development checkout. Each selected
+Git source is fetched at its registered commit, and local projects are snapshotted.
+The temporary context contains only selected sources at their managed `external/`
+paths and is removed after success or failure. `--offline` can reuse synced Git
+objects without copying dirty working files. `--workspace-sources` explicitly
+selects verified persistent development sources. Source preparation uses locks
+and atomic publication and retains rollback data while replacing local snapshots.
+
+`bash deploy/scripts/build-images.sh ROLE ...` builds any registered role, including
+infrastructure, policy, training and finalizer roles; with no roles it builds all.
+The `plugin build` command selects policy images. Add `--config TARGET` when the
+image should include an explicit experiment/deployment configuration closure:
 
 ```bash
-./ovlab plugin build my-model --isolated-sources
-bash deploy/scripts/build-images.sh policy-my-model --isolated-sources
+./ovlab plugin build my-model-policy --config configs/deploy/my-service.yaml
 ```
 
-This creates a temporary Docker context from the Git-visible OVLAB files,
-fetches each remote source at its exact commit, and snapshots each local source
-from its registered directory. Recipes still see `external/<source-id>` inside
-that context, so their `COPY` paths do not change. An existing `external/` in
-your checkout is neither read nor modified; missing, dirty or unrelated
-development checkouts do not affect this build. A preceding `plugin sync` is
-unnecessary. Contexts and fetched sources are removed on success and failure.
-Docker's build cache remains available.
+Plugin defaults and user overrides resolve through the same bounded inheritance
+mechanism before the configuration is frozen into the image. Runtime deployment
+can supply its own separately identified bundle. Changing weights or inference
+settings is independent from changing implementation dependencies.
 
-With `--offline`, an isolated build can read a previously synced Git checkout
-as an object cache. It fetches the pinned commit's objects into the temporary
-context without copying or changing dirty working files. A missing cached
-commit fails before Docker runs. Local-directory sources work offline directly.
-Online isolated builds fetch from the registered URL and do not use `external/`.
+A recipe used with `--config` must mount the optional `ovlab_config_bundle`
+BuildKit secret and extract it through the generic OVLAB installer (as the example
+does), or implement the same bounded configuration-copy contract itself. Recipes
+without this declared input are rejected for configured builds.
 
-Use `--workspace-sources` to build from the persistent development workspace;
-that mode syncs and verifies its checkouts, and protects local edits by refusing
-dirty Git sources. Image identity uses the same registrations, source pins/content
-hashes and recipe in both modes. At runtime, workers use the frozen registry and
-installed packages; they do not clone sources.
+Installed Python distributions can include their complete project assets and
+expose an `ovlab.plugin_projects` entrypoint returning their manifest directory.
+The OpenVLA distribution installs its manifest, configs, recipes, locks and source
+project under `<prefix>/share/ovlab/plugins/openvla`. This locator imports no model
+runtime. A project registered from Git or a local source remains the normal
+source for image construction.
 
 ## Developing the plugin
 
@@ -204,6 +239,7 @@ Optional hooks have safe defaults:
 | Hook | Use |
 | --- | --- |
 | `validate_observation(doc, benchmark_doc)` | Check cameras, shapes, proprioception and instruction requirements. |
+| `deployment_context(policy, deployment)` | Supply standalone serving context without creating a benchmark; model defaults and normalization belong here. |
 | `scientific_policy(doc)` | Return a deep copy without machine-local execution paths; keep immutable hashes and scientific parameters. |
 | `runtime_resources(doc, repository_root, environment)` | Return execution metadata for additional resources. |
 | `runtime_mounts(doc, repository_root, environment)` | Return read-only directory mappings with `source`, `target`, optional `environment` and `required_files`; see the mount contract below. |
@@ -260,7 +296,31 @@ requires it to match the primary checkpoint. Additional files/directories can
 be exposed through `runtime_mounts`. Quantization overrides use
 `settings.runtime.quantization` and must be accepted by the plugin.
 
-Checkpoint registration stays separate in `configs/resources/registry.yaml`.
+Plugin configuration files live under the manifest's `configs.root` and use
+`plugin://<project-id>/<relative-path>` references. A repository override stays
+explicit, for example `configs/policies/my-openvla.yaml`:
+
+```yaml
+schema_version: "0.1.0"
+kind: policy
+type: openvla_vanilla
+extends: plugin://openvla/policies/openvla-vanilla/base.yaml
+settings:
+  runtime:
+    quantization: 4bit
+```
+
+Select `policies/my-openvla.yaml` in the experiment's `components.policy`; core
+composition merges it over the plugin default. Relative `extends` stays bounded
+to its owning configuration tree; only an explicit plugin URI crosses project
+boundaries. Compatibility aliases keep existing preset names usable, while
+new configurations should use explicit URIs. OpenVLA provides `none`, `8bit`
+and `4bit` presets for Vanilla, merged LoRA and OFT; QuIC requires `none`.
+
+Checkpoint registration belongs to the plugin project, for example
+`plugin://openvla/resources/registry.yaml`. Declare catalog paths in
+`configs.checkpoints` so generic listing and training can discover their entries.
+Local catalogs can extend plugin catalogs and override individual entries.
 It binds weights to a repository, revision and verified file hashes. Sources
 are implementation code; checkpoints are model artifacts. The generic settings
 resolver provides checkpoints as mappings containing `source`, `revision`,
@@ -295,6 +355,22 @@ The build runner supplies the existing `OVLAB_REVISION`,
 `OVLAB_SOURCE_MANIFEST_SHA256`, `OVLAB_SOURCE_DIRTY`, `OVLAB_LOCK_SHA256`,
 `OVLAB_DOCKERFILE_SHA256`, `OVLAB_IMAGE_REFERENCE`, `OVLAB_VERSION` build arguments
 and BuildKit secrets `ovlab_source_manifest` and `ovlab_plugin_registry`.
+Configured builds also supply `OVLAB_CONFIG_BUNDLE_SHA256` and the
+`ovlab_config_bundle` secret. Declare the hash argument immediately before the
+installer layer and consume it in the same `RUN` that extracts the configuration:
+
+```dockerfile
+ARG OVLAB_CONFIG_BUNDLE_SHA256=none
+RUN --mount=type=secret,id=ovlab_plugin_registry \
+    --mount=type=secret,id=ovlab_config_bundle \
+    test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
+    && bash /tmp/install-ovlab-packages.sh
+```
+
+BuildKit does not include secret contents in layer cache keys. Consuming the
+bundle hash prevents a changed local override from reusing an older extracted
+configuration, while dependency download layers above the argument remain cached.
+The generic installer verifies the supplied bundle identity before publication.
 Propagate build identity into image environment/labels as the built-in recipes
 do, and copy the source manifest to `/usr/share/ovlab/source-manifest.json`.
 The runner attaches the plugin-registry hash and a per-role
@@ -358,10 +434,31 @@ integration test `code/tests/unit/cli/test_plugins.py` proves that a new policy
 resolves, predicts, plans both deployment modes, builds through a fake Docker
 runner and cleans temporary files without editing the core dispatch.
 
-Model training algorithms remain separate specialized training components.
-This API covers policy integration, model sources, image builds, serving and
-evaluation; it does not pretend that arbitrary training loops share the policy
-inference lifecycle.
+## Optional training and checkpoint preparation
+
+Training is an optional project capability with its own public interfaces in
+`ovlab_policy_sdk.training`. A manifest `training` declaration identifies its
+`TrainingPlugin` entrypoint, implementation IDs, expected checkpoint loaders and
+training images. The backend validates its profile, compiles model-specific
+scientific settings through injected host services, creates a trainer, validates
+staged outputs and verifies loader compatibility. Core orchestration owns stores,
+resource acquisition, execution and immutable publication. Plugins depend on the
+SDK and public contracts and receive host operations as callbacks; they do not
+import private CLI modules.
+
+A `preparation` declaration binds a `CheckpointPreparationPlugin` entrypoint to
+supported input loaders and a compatible image capability, such as merging an
+adapter into dense inference weights. The plugin owns conversion semantics; core
+owns verified inputs, container execution and artifact publication. An optional
+`training.finalizer` image keeps plugin finalization dependencies outside the
+infrastructure dataset image. These are separate extension contracts from policy
+inference and can be omitted by evaluation-only integrations.
+
+The OpenVLA project supports full, LoRA and experimental QuIC training with
+`quantization: none`. Its 4-bit NF4 and 8-bit LLM.int8 declarations describe
+inference through bitsandbytes; they do not imply QLoRA training support. OFT's
+current integration is an evaluation reference, with no registered OFT trainer.
+
 
 ## Migration from submodules
 

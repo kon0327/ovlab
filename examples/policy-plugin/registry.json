@@ -1,44 +1,11 @@
 {
-  "schema_version": "ovlab.plugins/v1",
-  "sources": {
-    "example-policy": {
-      "kind": "local",
-      "path": "examples/policy-plugin"
-    }
-  },
+  "schema_version": "ovlab.plugins/v2",
   "plugins": {
-    "example_policy": {
-      "id": "example-policy",
-      "config_type": "example_policy",
-      "family": "example",
-      "runtime_status": "experimental",
-      "entrypoint": "example_policy.plugin:plugin",
-      "sources": [
-        "example-policy"
-      ],
-      "deployment": {
-        "profile": "example",
-        "role": "policy-example",
-        "image": "ovlab-policy-example:local",
-        "image_env": "OVLAB_EXAMPLE_IMAGE",
-        "policy_service": "policy-example",
-        "benchmark_service": "benchmark-example",
-        "quantization": [
-          "none"
-        ],
-        "observation_profile": "primary_rgb",
-        "gpu": false
+    "example-policy": {
+      "source": {
+        "kind": "local",
+        "path": "examples/policy-plugin"
       }
-    }
-  },
-  "builds": {
-    "policy-example": {
-      "dockerfile": "external/example-policy/Dockerfile",
-      "image": "ovlab-policy-example:local",
-      "sources": [
-        "example-policy"
-      ],
-      "locks": []
     }
   }
 }

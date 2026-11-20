@@ -119,7 +119,7 @@ def test_deployment_verify_detects_modified_bundle(deployment):
     plan = owner.plan("openvla-libero10")
     docker.plan = plan
     owner.run(plan)
-    path = Path(plan.state_directory) / "configs/policies/openvla-lora/merged-libero10.yaml"
+    path = Path(plan.state_directory) / "configs/plugins/configs/openvla/policies/openvla-lora/merged-libero10.yaml"
     path.chmod(0o644)
     path.write_text(path.read_text() + "\n# modified\n")
     with pytest.raises(ConfigCompatibilityError, match="config file changed"):
@@ -137,7 +137,7 @@ def test_deployment_cli_override_reaches_service_settings_without_benchmark(tmp_
     monkeypatch.setattr(app.resolver, "_benchmark", lambda *args: pytest.fail("deployment constructed a benchmark"))
     resolved = resolve_policy_service(app, repo / "configs/deploy/openvla-libero10.yaml")
     assert resolved.policy_settings.quantization.value == "4bit"
-    assert load(ROOT / "configs/deploy/openvla-libero10.yaml")["runtime"]["quantization"] == "none"
+    assert builder.load_component("deploy/openvla-libero10.yaml", "deployment")["runtime"]["quantization"] == "none"
     assert not any(item["path"].startswith(("benchmarks/", "protocols/", "metrics/")) for item in bundle.files)
 
 

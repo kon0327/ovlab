@@ -16,7 +16,7 @@ experiment:
     - "30-episodes"
 components:
   benchmark: "benchmarks/libero/libero10.yaml"
-  policy: "policies/openvla-lora/merged-libero10-4bit.yaml"
+  policy: "plugin://openvla/policies/openvla-lora/merged-libero10-4bit.yaml"
   metrics: "metrics/action-safe-v1.yaml"
   protocol: "protocols/libero-three-episodes-v1.yaml"
   artifacts: "artifacts/filesystem.yaml"

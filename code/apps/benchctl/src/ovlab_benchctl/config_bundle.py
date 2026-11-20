@@ -16,6 +16,7 @@ from .policy_plugins import with_registry
 
 from .schema import validate
 from .strict_yaml import dumps, load
+from .config_references import ConfigReferences
 
 
 _COMPONENT_KINDS = {
@@ -57,6 +58,7 @@ class ConfigBundle:
     sha256: str
     quantization_override: str | None = None
     overlays: tuple[tuple[str, str], ...] = ()
+    sources: tuple[tuple[str, str], ...] = ()
 
     def document(self) -> dict[str, object]:
         document = {
@@ -94,23 +96,16 @@ class ConfigBundleBuilder:
         self.environment = environment
         self.repository_root = Path(repository_root).resolve()
         self.config_root = (self.repository_root / "configs").resolve()
+        self.references = ConfigReferences(self.repository_root, self.config_root)
         if not self.config_root.is_dir():
             raise ValueError(f"config root does not exist: {self.config_root}")
 
+    @with_registry
     def _source(self, reference: str) -> Path:
-        path = Path(reference)
-        external = self.repository_root / path
-        if path.parts and path.parts[0] == "experiments" and (self.repository_root / "experiments").is_dir():
-            return external
-        return self.config_root / path
+        return self.references.source(reference)
 
     def _relative(self, path: Path) -> str:
-        resolved = path.resolve()
-        if resolved.is_relative_to(self.repository_root / "experiments"):
-            return resolved.relative_to(self.repository_root).as_posix()
-        if not resolved.is_relative_to(self.config_root):
-            raise ValueError(f"configuration escapes configs/: {path}")
-        return resolved.relative_to(self.config_root).as_posix()
+        return self.references.bundle_path(path)
 
     def _extends_closure(
         self,
@@ -118,6 +113,7 @@ class ConfigBundleBuilder:
         expected_kind: str,
         selected: set[str],
         stack: tuple[Path, ...] = (),
+        *, validate_document: bool = True,
     ) -> dict[str, object]:
         path = self._source(reference).resolve()
         relative = self._relative(path)
@@ -138,31 +134,30 @@ class ConfigBundleBuilder:
         else:
             if not isinstance(parent, str) or not parent:
                 raise ValueError(f"{relative}.extends must be a non-empty string")
-            parent_path = (path.parent / parent).resolve()
-            parent_root = self.repository_root / "experiments" if path.is_relative_to(self.repository_root / "experiments") else self.config_root
-            if not parent_path.is_relative_to(parent_root):
-                raise ValueError(f"configuration extends escapes its root: {parent_path}")
+            parent_path = self.references.parent(path, parent)
             parent_document = self._extends_closure(
-                self._relative(parent_path), expected_kind, selected, (*stack, path)
+                self._relative(parent_path), expected_kind, selected, (*stack, path),
+                validate_document=validate_document,
             )
-            if document.get("type") != parent_document.get("type"):
+            if "type" in document and document["type"] != parent_document.get("type"):
                 raise ValueError(f"{relative}.type must match its parent")
             resolved = _merge(parent_document, document)
-        validate(resolved, relative, expected_kind, repository_root=self.repository_root)
+        if validate_document:
+            validate(resolved, relative, expected_kind, repository_root=self.repository_root)
         return resolved
 
     @with_registry
-    def load_component(self, reference: str, expected_kind: str) -> dict[str, object]:
+    def load_component(self, reference: str, expected_kind: str, *, validate_document: bool = True) -> dict[str, object]:
         """Resolve inheritance for host orchestration using only the stdlib."""
-        return self._extends_closure(reference, expected_kind, set())
+        return self._extends_closure(reference, expected_kind, set(), validate_document=validate_document)
 
     @with_registry
     def build(
         self, experiment: str, execution_profile: str | None, *, quantization: str | None = None,
         kind: str = "experiment",
     ) -> ConfigBundle:
-        experiment_reference = experiment.removeprefix("configs/")
-        execution_reference = execution_profile.removeprefix("configs/") if execution_profile else None
+        experiment_reference = self._relative(self._source(experiment))
+        execution_reference = self._relative(self._source(execution_profile)) if execution_profile else None
         selected: set[str] = set()
         experiment_document = self._extends_closure(
             experiment_reference, kind, selected
@@ -178,7 +173,7 @@ class ConfigBundleBuilder:
             runtime_document["deployment"].pop("offline")
             overlays[experiment_reference] = dumps(runtime_document)
         if kind == "deployment" and quantization is not None:
-            deployment_leaf = load(self.config_root / experiment_reference)
+            deployment_leaf = load(self._source(experiment_reference))
             deployment_leaf.setdefault("runtime", {})["quantization"] = quantization
             overlays[experiment_reference] = dumps(deployment_leaf)
         component_kinds = {"policy": "policy"} if kind == "deployment" else _COMPONENT_KINDS
@@ -189,11 +184,11 @@ class ConfigBundleBuilder:
                 if quantization is not None:
                     component["settings"]["runtime"]["quantization"] = quantization
                     validate(component, reference, "policy", repository_root=self.repository_root)
-                    policy_leaf = load(self.config_root / reference)
+                    policy_leaf = load(self._source(reference))
                     policy_leaf.setdefault("settings", {}).setdefault("runtime", {})[
                         "quantization"
                     ] = quantization
-                    overlays[reference] = dumps(policy_leaf)
+                    overlays[self._relative(self._source(reference))] = dumps(policy_leaf)
                 self._extends_closure(
                     component["settings"]["action"]["action_interface"],
                     "action_interface", selected,
@@ -203,14 +198,52 @@ class ConfigBundleBuilder:
         if execution_reference is not None:
             self._extends_closure(execution_reference, "execution_profile", selected)
 
-        from .policy_plugins import registry_document
-        registry_snapshot = registry_document(self.repository_root)
+        from .policy_plugins import registry_document, plugin_project_root
+        extra_sources = {}
+        registry_snapshot = deepcopy(registry_document(self.repository_root))
+        for project_id, project in registry_snapshot.get("projects", {}).items():
+            project["configs_root"] = f"configs/plugins/configs/{project_id}"
         policy_ref = experiment_document["components"]["policy"]
         policy_doc = self.load_component(policy_ref, "policy")
         plugin = registry_snapshot["plugins"].get(policy_doc["type"], {})
+        project_ids = {Path(reference).parts[2] for reference in selected
+                       if Path(reference).parts[:2] == ("plugins", "configs") and len(Path(reference).parts) > 3}
+        if plugin.get("project"):
+            project_ids.add(plugin["project"])
+        # A selected catalog may contain artifact metadata validated by another
+        # registered project. Its lightweight control code belongs in the worker.
+        resource_doc = self.load_component(experiment_document["resources"]["registry"], "resource_registry")
+        artifact_forms = {entry.get("artifact", {}).get("form") for entry in resource_doc["checkpoints"].values()}
+        project_ids.update(descriptor["project"] for descriptor in registry_snapshot["plugins"].values()
+                           if descriptor.get("project") and artifact_forms.intersection(descriptor.get("artifact_forms", [])))
+        for project_id in sorted(project_ids):
+            project_root = Path(plugin_project_root(project_id, self.repository_root)).resolve()
+            candidates = [project_root / name for name in ("plugin.json", "pyproject.toml")]
+            if (project_root / "src").is_dir():
+                candidates.extend((project_root / "src").rglob("*"))
+            # Flat and mixed-layout projects can also expose root modules or
+            # packages, independently of model libraries under src/.
+            for path in project_root.iterdir():
+                if path.is_file() and path.suffix == ".py":
+                    candidates.append(path)
+                elif path.is_dir() and (path / "__init__.py").is_file():
+                    candidates.extend(path.rglob("*"))
+            for source in candidates:
+                if source.is_symlink():
+                    raise ValueError(f"plugin control source cannot be a symlink: {source}")
+                if not source.is_file() or "__pycache__" in source.parts or source.suffix in {".pyc", ".pyo"}:
+                    continue
+                relative = f"plugins/projects/{project_id}/{source.relative_to(project_root).as_posix()}"
+                selected.add(relative)
+                extra_sources[relative] = source
+
         from .plugin_identity import registered_source_identities
         registry_snapshot["source_identities"] = registered_source_identities(
-            self.repository_root, plugin.get("sources", []), registry=registry_snapshot,
+            self.repository_root,
+            list(dict.fromkeys(name for descriptor in registry_snapshot["plugins"].values()
+                               if descriptor is plugin or descriptor.get("project") in project_ids
+                               for name in descriptor.get("sources", []))),
+            registry=registry_snapshot,
         )
         gpu = experiment_document.get("runtime", {}).get("gpu", "all" if plugin.get("deployment", {}).get("gpu", True) else None)
         runtime_profile = "plugins/runtime-profile.yaml"
@@ -229,11 +262,11 @@ class ConfigBundleBuilder:
                 "path": relative,
                 "size": (
                     len(overlays[relative].encode("utf-8"))
-                    if relative in overlays else self._source(relative).stat().st_size
+                    if relative in overlays else (extra_sources.get(relative) or self._source(relative)).stat().st_size
                 ),
                 "sha256": (
                     hashlib.sha256(overlays[relative].encode("utf-8")).hexdigest()
-                    if relative in overlays else _sha256(self._source(relative))
+                    if relative in overlays else _sha256(extra_sources.get(relative) or self._source(relative))
                 ),
                 **({"source_sha256": _sha256(self._source(relative))} if relative in overlays and self._source(relative).is_file() else {}),
             }
@@ -257,6 +290,7 @@ class ConfigBundleBuilder:
             hashlib.sha256(canonical).hexdigest(),
             quantization,
             tuple(sorted(overlays.items())),
+            tuple((relative, str(source)) for relative, source in sorted(extra_sources.items())),
         )
 
     @contextmanager
@@ -265,15 +299,18 @@ class ConfigBundleBuilder:
         try:
             root.chmod(0o755)
             overlays = dict(bundle.overlays)
+            sources = dict(bundle.sources)
             for item in bundle.files:
                 relative = str(item["path"])
-                source = self._source(relative)
+                source = Path(sources[relative]) if relative in sources else self._source(relative)
                 target = root / relative
                 target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
                 if relative in overlays:
                     target.write_text(overlays[relative], encoding="utf-8")
                 else:
                     shutil.copyfile(source, target)
+                if target.stat().st_size != item["size"] or _sha256(target) != item["sha256"]:
+                    raise ValueError(f"configuration or plugin source changed after bundling: {relative}")
                 target.chmod(0o444)
             manifest = root / ".ovlab-bundle.json"
             manifest.write_text(

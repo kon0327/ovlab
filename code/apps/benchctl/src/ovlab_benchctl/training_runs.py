@@ -21,6 +21,8 @@ import uuid
 
 from ovlab_core.experiment_scope import ExperimentScope
 
+from ovlab_policy_sdk.training_support import (TrainingRunContext, TrainerAdapter, inspect_safetensors, safetensors_header as _safetensors_header)
+
 from .run_references import RunReferenceError, resolve_run_reference_tree
 from .strict_yaml import dumps
 from .training_errors import CheckpointBundleError, TrainingRuntimeError
@@ -49,122 +51,6 @@ def _run_id(profile_id: str, scientific_id: str, scope: ExperimentScope | None =
         payload = f"{scientific_id}:{scope.experiment_id}:{scope.node_path}:{uuid.uuid4().hex}"
         suffix = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     return f"{slug}_{stamp}_{suffix}"
-
-
-@dataclass(slots=True)
-class TrainingRunContext:
-    run_id: str
-    root: Path
-    plan: Mapping[str, object]
-    close_count: int = 0
-
-    @property
-    def staging_checkpoint(self) -> Path:
-        return self.root / "staging-checkpoints" / "final"
-
-
-class TrainerAdapter(ABC):
-    """Generic owner-controlled training boundary."""
-
-    @abstractmethod
-    def capabilities(self) -> Mapping[str, object]: ...
-
-    @abstractmethod
-    def validate_profile(self, profile: Mapping[str, object]) -> None: ...
-
-    @abstractmethod
-    def resolve_plan(self, profile: Mapping[str, object], model: Mapping[str, object], dataset: Mapping[str, object]) -> Mapping[str, object]: ...
-
-    @abstractmethod
-    def preflight(self, plan: Mapping[str, object]) -> Mapping[str, object]: ...
-
-    @abstractmethod
-    def initialize(self, plan: Mapping[str, object], run_context: TrainingRunContext) -> None: ...
-
-    @abstractmethod
-    def train(self, plan: Mapping[str, object], run_context: TrainingRunContext) -> Mapping[str, object]: ...
-
-    @abstractmethod
-    def finalize(self, run_context: TrainingRunContext) -> Mapping[str, object]: ...
-
-    @abstractmethod
-    def interrupt(self, run_context: TrainingRunContext) -> None: ...
-
-    @abstractmethod
-    def close(self) -> None: ...
-
-
-class OpenVlaTrainerAdapter(TrainerAdapter):
-    """Production OpenVLA reference adapter; heavy imports occur only in train()."""
-
-    def __init__(self) -> None:
-        self._context: TrainingRunContext | None = None
-        self._closed = False
-
-    def capabilities(self) -> Mapping[str, object]:
-        return {
-            "id": "openvla-reference",
-            "version": TRAINER_ADAPTER_VERSION,
-            "modes": ("full", "peft"),
-            "peft_methods": ("lora", "quic"),
-            "lora_targets": ("all-linear",),
-            "quantization": ("none",),
-            "precision": ("bf16", "fp32"),
-            "output_kinds": ("full", "adapter"),
-            "network": "disabled",
-        }
-
-    def validate_profile(self, profile: Mapping[str, object]) -> None:
-        training = profile.get("training")
-        if not isinstance(training, dict) or training.get("mode") not in {"full", "peft"}:
-            raise TrainingRuntimeError("OpenVLA trainer received an unresolved training mode")
-
-    def resolve_plan(self, profile: Mapping[str, object], model: Mapping[str, object], dataset: Mapping[str, object]) -> Mapping[str, object]:
-        return {"profile": dict(profile), "model": dict(model), "dataset": dict(dataset)}
-
-    def preflight(self, plan: Mapping[str, object]) -> Mapping[str, object]:
-        capabilities = plan.get("capabilities")
-        if not isinstance(capabilities, dict) or capabilities.get("compatible") is not True:
-            raise TrainingRuntimeError("training plan is not capability-compatible")
-        return {"compatible": True, "issues": []}
-
-    def initialize(self, plan: Mapping[str, object], run_context: TrainingRunContext) -> None:
-        if self._context is not None:
-            raise TrainingRuntimeError("OpenVLA trainer may be initialized exactly once")
-        if os.environ.get("OVLAB_TRAINING_RUNTIME") != "isolated-container":
-            raise TrainingRuntimeError("OpenVLA training may run only in the isolated production training container")
-        if os.environ.get("HF_HUB_OFFLINE") != "1" or os.environ.get("TRANSFORMERS_OFFLINE") != "1":
-            raise TrainingRuntimeError("OpenVLA training requires HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1")
-        self._context = run_context
-
-    def train(self, plan: Mapping[str, object], run_context: TrainingRunContext) -> Mapping[str, object]:
-        if self._context is not run_context or self._closed:
-            raise TrainingRuntimeError("OpenVLA trainer is not initialized")
-        if plan["scientific"]["training"].get("peft", {}).get("method") == "quic":
-            from .training_quic import execute
-            return execute(plan, run_context)
-        return _execute_openvla_training(plan, run_context)
-
-    def finalize(self, run_context: TrainingRunContext) -> Mapping[str, object]:
-        if not run_context.staging_checkpoint.is_dir():
-            raise TrainingRuntimeError("trainer produced no final staging checkpoint")
-        return {"staging_checkpoint": str(run_context.staging_checkpoint), "status": "checkpointing"}
-
-    def interrupt(self, run_context: TrainingRunContext) -> None:
-        atomic_json(run_context.root / "result.json", {
-            "schema_version": TRAINING_RESULT_SCHEMA,
-            "run_id": run_context.run_id,
-            "status": "interrupted",
-            "failure": {"type": "KeyboardInterrupt", "message": "training interrupted"},
-        }, exclusive=False, mode=0o644)
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._context is not None:
-            self._context.close_count += 1
-        self._context = None
 
 
 class TrainingRunStore:
@@ -330,122 +216,6 @@ class TrainingRunStore:
         return {"schema_version": "ovlab.training-verification/v1", "run_id": run_id, "status": "verified", "verified_file_count": len(manifest.get("files", ()))}
 
 
-def _safetensors_header(path: Path) -> tuple[dict[str, object], int]:
-    with path.open("rb") as stream:
-        raw = stream.read(8)
-        if len(raw) != 8:
-            raise CheckpointBundleError(f"invalid safetensors header: {path.name}")
-        length = struct.unpack("<Q", raw)[0]
-        if length <= 0 or length > 128 * 1024 * 1024:
-            raise CheckpointBundleError(f"unsafe safetensors header length: {path.name}")
-        payload = stream.read(length)
-    try:
-        header = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise CheckpointBundleError(f"invalid safetensors JSON header: {path.name}") from exc
-    if not isinstance(header, dict):
-        raise CheckpointBundleError(f"safetensors header must be a mapping: {path.name}")
-    return header, 8 + length
-
-
-def _finite_tensor_payload(path: Path, dtype: str, start: int, end: int, data_offset: int) -> bool:
-    element_size = {"F32": 4, "F16": 2, "BF16": 2, "F64": 8}.get(dtype)
-    if element_size is None:
-        return True
-    if start < 0 or end < start or (end - start) % element_size:
-        raise CheckpointBundleError(f"malformed tensor offsets in {path.name}")
-    with path.open("rb") as stream:
-        stream.seek(data_offset + start)
-        remaining = end - start
-        while remaining:
-            block = stream.read(min(8 * 1024 * 1024, remaining))
-            if not block:
-                return False
-            remaining -= len(block)
-            if dtype == "F32":
-                if any((value & 0x7F800000) == 0x7F800000 for (value,) in struct.iter_unpack("<I", block)):
-                    return False
-            elif dtype == "F64":
-                if any((value & 0x7FF0000000000000) == 0x7FF0000000000000 for (value,) in struct.iter_unpack("<Q", block)):
-                    return False
-            elif dtype == "F16":
-                if any((value & 0x7C00) == 0x7C00 for (value,) in struct.iter_unpack("<H", block)):
-                    return False
-            elif dtype == "BF16":
-                if any((value & 0x7F80) == 0x7F80 for (value,) in struct.iter_unpack("<H", block)):
-                    return False
-    return True
-
-
-def inspect_safetensors(path: Path) -> list[dict[str, object]]:
-    header, offset = _safetensors_header(path)
-    tensors = []
-    for name, descriptor in sorted(header.items()):
-        if name == "__metadata__":
-            continue
-        if not isinstance(descriptor, dict):
-            raise CheckpointBundleError(f"invalid tensor descriptor {name!r}")
-        dtype, shape, offsets = descriptor.get("dtype"), descriptor.get("shape"), descriptor.get("data_offsets")
-        if not isinstance(dtype, str) or not isinstance(shape, list) or not isinstance(offsets, list) or len(offsets) != 2:
-            raise CheckpointBundleError(f"incomplete tensor descriptor {name!r}")
-        if any(type(dimension) is not int or dimension < 0 for dimension in shape):
-            raise CheckpointBundleError(f"invalid tensor shape {name!r}")
-        start, end = offsets
-        element_size = {"F32": 4, "F16": 2, "BF16": 2, "F64": 8}.get(dtype)
-        expected_bytes = None if element_size is None else math.prod(shape) * element_size
-        if (
-            type(start) is not int or type(end) is not int
-            or offset + end > path.stat().st_size
-            or (expected_bytes is not None and end - start != expected_bytes)
-            or not _finite_tensor_payload(path, dtype, start, end, offset)
-        ):
-            raise CheckpointBundleError(f"tensor {name!r} is malformed or non-finite")
-        tensors.append({"name": name, "dtype": dtype, "shape": shape, "byte_range": [start, end]})
-    if not tensors:
-        raise CheckpointBundleError("adapter checkpoint contains no tensors")
-    return tensors
-
-
-def _save_training_weights(model, weights, auxiliary, training):
-    model.save_pretrained(weights, safe_serialization=True)
-    if training['mode'] != 'peft' or training['peft']['method'] != 'lora':
-        return
-    # PEFT expands all-linear into architecture-specific names in memory and
-    # serializes that expansion. Retain it as evidence, while publishing the
-    # declared portable policy accepted by our checkpoint loader/finalizer.
-    path = weights / 'adapter_config.json'
-    config = json.loads(path.read_text())
-    targets = config.get('target_modules')
-    if targets != 'all-linear' and targets != ['all-linear']:
-        if not isinstance(targets, list) or not targets or any(not isinstance(x, str) or not x for x in targets):
-            raise TrainingRuntimeError('PEFT did not serialize valid all-linear targets')
-        atomic_json(auxiliary / 'lora-targets.json', {'target_policy': 'all-linear', 'resolved_targets': sorted(targets)})
-    config['target_modules'] = 'all-linear'
-    atomic_json(path, config, exclusive=False)
-
-
-def _validate_lora_staging(weights, training):
-    config_path = weights / "adapter_config.json"
-    candidates = sorted(weights.glob("*.safetensors"))
-    if not config_path.is_file() or len(candidates) != 1:
-        raise CheckpointBundleError("LoRA bundle requires adapter_config.json and one safetensors file")
-    adapter_config = json.loads(config_path.read_text(encoding="utf-8"))
-    if str(adapter_config.get("peft_type", "")).upper() != "LORA":
-        raise CheckpointBundleError("checkpoint is not a LoRA PEFT adapter")
-    expected = training.get("peft")
-    if not isinstance(expected, dict):
-        raise CheckpointBundleError("adapter plan lacks PEFT configuration")
-    if adapter_config.get("r") != expected.get("rank") or adapter_config.get("lora_alpha") != expected.get("alpha"):
-        raise CheckpointBundleError("adapter configuration does not match resolved LoRA plan")
-    targets = adapter_config.get("target_modules")
-    if targets != ["all-linear"] and targets != "all-linear":
-        raise CheckpointBundleError("adapter target modules do not match OpenVLA all-linear plan")
-    tensors = inspect_safetensors(candidates[0])
-    if any("lora_" not in str(item["name"]).lower() for item in tensors):
-        raise CheckpointBundleError("adapter contains tensors outside declared LoRA targets")
-    return adapter_config, tensors
-
-
 class CheckpointBundleStore:
     def __init__(self, model_data_root: str | Path):
         self.model_data_root = Path(model_data_root).expanduser().resolve()
@@ -495,14 +265,9 @@ class CheckpointBundleStore:
         if not weights.is_dir():
             raise CheckpointBundleError("staged checkpoint lacks weights-or-adapter")
         kind = str(output.get("output_kind"))
-        adapter_config: dict[str, object] | None = None
-        tensors: list[dict[str, object]] = []
-        if kind == "adapter":
-            if training.get("peft", {}).get("method") == "quic":
-                from .training_quic import validate_staged_adapter
-                adapter_config, tensors = validate_staged_adapter(weights, scientific, run_root=context.root)
-            else:
-                adapter_config, tensors = _validate_lora_staging(weights, training)
+        from .training_plugins import backend_for_plan
+        backend = backend_for_plan(plan)
+        adapter_config, tensors = backend.validate_staging(context)
         files, content_digest, total_size = inventory(staging)
         staged_result_path = context.root / "result.json"
         staged_result = (
@@ -520,7 +285,7 @@ class CheckpointBundleStore:
         semantics = {
             "schema_version": CHECKPOINT_SCHEMA,
             "kind": "peft_adapter" if kind == "adapter" else "full_checkpoint",
-            "output_format": "safetensors",
+            "output_format": backend.checkpoint_format(scientific),
             "base_checkpoint": base,
             "adapter": adapter_config,
             "planned_peft": training.get("peft") if kind == "adapter" else None,
@@ -529,7 +294,7 @@ class CheckpointBundleStore:
             "content_digest": content_digest,
             "processor": "inherited" if not processor.is_dir() else "bundled",
             "merge_status": "unmerged" if kind == "adapter" else "not_applicable",
-            "expected_loader": ("ovlab-openvla-quic" if training.get("peft", {}).get("method") == "quic" else "ovlab-openvla-peft") if kind == "adapter" else "ovlab-openvla-vanilla",
+            "expected_loader": backend.expected_loader(scientific),
         }
         checkpoint_id = identity("checkpoint", semantics, 32)
         final = self.root / checkpoint_id
@@ -696,20 +461,8 @@ class CheckpointBundleStore:
             if not path.is_file() or path.stat().st_size != entry["size"] or sha256_file(path) != entry["sha256"]:
                 raise CheckpointBundleError(f"checkpoint integrity failure: {entry['path']}")
         checkpoint = json.loads((root / "checkpoint.json").read_text(encoding="utf-8"))
-        if checkpoint.get("kind") == "peft_adapter":
-            weight_files = sorted((root / "weights-or-adapter").glob("*.safetensors"))
-            if checkpoint.get("expected_loader") == "ovlab-openvla-quic":
-                expected = {"adapter.safetensors"}
-                adapter = checkpoint.get("adapter") or {}
-                metadata = adapter.get("metadata") or {} if isinstance(adapter, dict) else {}
-                if isinstance(metadata, dict) and metadata.get("action_head") is not None:
-                    expected.add("action_head.safetensors")
-                if {path.name for path in weight_files} != expected:
-                    raise CheckpointBundleError("QuIC checkpoint has an invalid weight inventory")
-            elif len(weight_files) != 1:
-                raise CheckpointBundleError("adapter checkpoint has an invalid weight inventory")
-            for weight_file in weight_files:
-                inspect_safetensors(weight_file)
+        from .training_plugins import backend_for_checkpoint
+        backend_for_checkpoint(checkpoint).verify_checkpoint(root, checkpoint)
         return {
             "schema_version": "ovlab.checkpoint-verification/v1",
             "checkpoint_id": checkpoint_id,
@@ -719,266 +472,10 @@ class CheckpointBundleStore:
         }
 
 
-def _execute_openvla_training(plan: Mapping[str, object], context: TrainingRunContext) -> Mapping[str, object]:
-    """Run the pinned OpenVLA AutoClass training path without merging adapters."""
-    # Imports remain below the runtime gate so validate/plan/inspect stay dependency-light.
-    import gc
-    import hashlib
-    import numpy as np
-    import torch
-    from peft import LoraConfig, get_peft_model
-    from torch.optim import AdamW
-    from torch.utils.data import DataLoader
-    from transformers import AutoConfig, AutoImageProcessor, AutoModelForVision2Seq, AutoProcessor
-    from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
-    from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
-    from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
-    from prismatic.models.backbones.llm.prompting import PurePromptBuilder
-    from prismatic.util.data_utils import PaddedCollatorForActionPrediction
-    from prismatic.vla.action_tokenizer import ActionTokenizer
-    from prismatic.vla.datasets import RLDSBatchTransform, RLDSDataset
-    from prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics
-    from ovlab_openvla_common import (
-        cuda_allocator_snapshot, estimated_training_compute, parameter_inventory,
-        performance_sample, reset_cuda_peak,
-    )
 
-    if not torch.cuda.is_available():
-        raise TrainingRuntimeError("OpenVLA production training requires CUDA")
-    scientific = plan["scientific"]
-    execution = plan["execution"]
-    assert isinstance(scientific, dict) and isinstance(execution, dict)
-    profile = scientific["profile"]
-    training = scientific["training"]
-    assert isinstance(profile, dict) and isinstance(training, dict)
-    dataset_profile = profile["dataset"]
-    assert isinstance(dataset_profile, dict)
-    base_path = Path(os.environ.get("OVLAB_TRAINING_BASE_CHECKPOINT", "/checkpoints/base"))
-    data_root = Path(os.environ.get("OVLAB_TRAINING_DATA_ROOT", "/datasets/resolved"))
-    dataset_name = os.environ.get("OVLAB_TRAINING_DATASET_NAME")
-    if not base_path.is_dir() or not data_root.is_dir() or not dataset_name:
-        raise TrainingRuntimeError("training container mounts are incomplete")
-    torch.manual_seed(int(training["seed"]))
-    np.random.seed(int(training["seed"]) % (2**32))
-    torch.cuda.manual_seed_all(int(training["seed"]))
-    device = torch.device("cuda:0")
-    AutoConfig.register("openvla", OpenVLAConfig, exist_ok=True)
-    AutoImageProcessor.register(OpenVLAConfig, PrismaticImageProcessor, exist_ok=True)
-    AutoProcessor.register(OpenVLAConfig, PrismaticProcessor, exist_ok=True)
-    AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction, exist_ok=True)
-    dtype = torch.bfloat16 if training["precision"] == "bf16" else torch.float32
-    processor = AutoProcessor.from_pretrained(base_path, trust_remote_code=True, local_files_only=True)
-    model = AutoModelForVision2Seq.from_pretrained(
-        base_path, torch_dtype=dtype, low_cpu_mem_usage=True,
-        trust_remote_code=True, local_files_only=True,
-    ).to(device)
-    if bool(training["gradient_checkpointing"]):
-        model.gradient_checkpointing_enable()
-    initial_hashes: dict[str, str] = {}
-    if training["mode"] == "peft":
-        peft = training["peft"]
-        assert isinstance(peft, dict)
-        model = get_peft_model(model, LoraConfig(
-            r=int(peft["rank"]), lora_alpha=int(peft["alpha"]),
-            lora_dropout=float(peft["dropout"]), target_modules="all-linear",
-            init_lora_weights="gaussian", bias="none",
-        ))
-        for name, parameter in model.named_parameters():
-            if parameter.requires_grad:
-                initial_hashes[name] = hashlib.sha256(parameter.detach().cpu().float().numpy().tobytes()).hexdigest()
-    parameter_counts = parameter_inventory(model.named_parameters())
-    trainable = parameter_counts["trainable"]
-    frozen = parameter_counts["frozen"]
-    if trainable <= 0 or (training["mode"] == "peft" and frozen <= 0):
-        raise TrainingRuntimeError("resolved trainable/frozen parameter selection is invalid")
-    if training["mode"] == "peft" and parameter_counts["trainable_non_adapter"] != 0:
-        raise TrainingRuntimeError("LoRA training selected undeclared non-adapter parameters")
-    optimizer = AdamW((parameter for parameter in model.parameters() if parameter.requires_grad), lr=float(training["learning_rate"]))
-    action_tokenizer = ActionTokenizer(processor.tokenizer)
-    transform = RLDSBatchTransform(
-        action_tokenizer, processor.tokenizer,
-        image_transform=processor.image_processor.apply_transform,
-        prompt_builder_fn=PurePromptBuilder,
-    )
-    validation_dataset = None
-    if "partition" in dataset_profile:
-        from .training_data import make_partitioned_datasets
-        image_size = model.config.image_sizes[0]
-        resize = (image_size, image_size) if isinstance(image_size, int) else tuple(image_size)
-        dataset, validation_dataset, _ = make_partitioned_datasets(
-            data_root, dataset_name, dataset_profile["partition"], transform,
-            resize_resolution=resize, source_identity=scientific["dataset"],
-            manifest_path=context.root / "data-partition.json",
-        )
-    else:
-        dataset = RLDSDataset(
-            data_root, dataset_name, transform,
-            resize_resolution=tuple(model.config.image_sizes),
-            shuffle_buffer_size=max(100, int(training["per_device_batch_size"]) * 8),
-            image_aug=False,
-        )
-    collator = PaddedCollatorForActionPrediction(
-        processor.tokenizer.model_max_length, processor.tokenizer.pad_token_id, padding_side="right"
-    )
-    loader = DataLoader(dataset, batch_size=int(training["per_device_batch_size"]), num_workers=0, collate_fn=collator)
-    from ovlab_core.progress import ConsoleProgress
-    progress = ConsoleProgress("OpenVLA training", total=int(training["max_steps"]), unit="step")
-    metrics_path = context.root / "metrics.jsonl"
-    events_path = context.root / "events.jsonl"
-    steps = 0
-    accumulation_started = None
-    accumulation_tokens = 0
-    accumulation_examples = 0
-    accumulation_correct = 0
-    accumulation_targets = 0
-    from .training_evidence import action_token_counts, capture_data_flow
-    initial_memory = cuda_allocator_snapshot(torch, device)
-    run_peak_allocated = int(initial_memory.get("peak_allocated_bytes", 0))
-    run_peak_reserved = int(initial_memory.get("peak_reserved_bytes", 0))
-    optimizer.zero_grad(set_to_none=True)
-    model.train()
-    with progress:
-        for batch_index, batch in enumerate(loader):
-            if accumulation_started is None:
-                torch.cuda.synchronize()
-                memory_before = cuda_allocator_snapshot(torch, device)
-                reset_cuda_peak(torch, device)
-                accumulation_started = __import__("time").perf_counter_ns()
-            attention_mask = batch["attention_mask"]
-            accumulation_tokens += int(attention_mask.sum().item())
-            accumulation_examples += int(attention_mask.shape[0])
-            with torch.autocast("cuda", dtype=dtype, enabled=dtype == torch.bfloat16):
-                output = model(
-                    input_ids=batch["input_ids"].to(device),
-                    attention_mask=batch["attention_mask"].to(device),
-                    pixel_values=batch["pixel_values"].to(device, dtype=dtype),
-                    labels=batch["labels"].to(device),
-                )
-                loss = output.loss
-            if not torch.isfinite(loss):
-                raise TrainingRuntimeError(f"non-finite loss at microbatch {batch_index}")
-            if batch_index == 0:
-                atomic_json(context.root / "data-flow.json", capture_data_flow(
-                    batch, output, processor.tokenizer, dataset_records=len(dataset),
-                    pixel_dtype=dtype, optimizer=optimizer,
-                ), mode=0o644)
-            correct, target_count = action_token_counts(output, batch["labels"].to(device), action_tokenizer.action_token_begin_idx)
-            accumulation_correct += correct
-            accumulation_targets += target_count
-            (loss / int(training["gradient_accumulation_steps"])).backward()
-            if (batch_index + 1) % int(training["gradient_accumulation_steps"]) != 0:
-                continue
-            grad_norm = torch.nn.utils.clip_grad_norm_((parameter for parameter in model.parameters() if parameter.requires_grad), math.inf)
-            if not torch.isfinite(grad_norm):
-                raise TrainingRuntimeError(f"non-finite gradient norm at optimizer step {steps}")
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-            steps += 1
-            torch.cuda.synchronize()
-            elapsed_ms = (__import__("time").perf_counter_ns() - accumulation_started) / 1_000_000
-            memory_after = cuda_allocator_snapshot(torch, device)
-            run_peak_allocated = max(run_peak_allocated, int(memory_after.get("peak_allocated_bytes", 0)))
-            run_peak_reserved = max(run_peak_reserved, int(memory_after.get("peak_reserved_bytes", 0)))
-            compute = estimated_training_compute(
-                parameter_counts["total"], token_count=accumulation_tokens,
-                trainable_parameter_count=parameter_counts["trainable"],
-            )
-            metric = {
-                "schema_version": "ovlab.training-metric/v1",
-                "global_step": steps,
-                "optimizer_step": steps,
-                "timestamp_utc": _utc_now(),
-                "training_loss": float(loss.detach().cpu()),
-                "examples_seen": accumulation_examples,
-                "non_padding_tokens": accumulation_tokens,
-                "microbatches": int(training["gradient_accumulation_steps"]),
-                "action_token_correct": accumulation_correct,
-                "action_token_count": accumulation_targets,
-                "action_token_accuracy": accumulation_correct / accumulation_targets if accumulation_targets else None,
-                "learning_rate": float(training["learning_rate"]),
-                "gradient_norm": float(grad_norm.detach().cpu()),
-                "step_duration_ms": elapsed_ms,
-                "examples_per_second": accumulation_examples / (elapsed_ms / 1000.0),
-                "gpu_memory_allocated_bytes": memory_after.get("allocated_bytes"),
-                "gpu_memory_reserved_bytes": memory_after.get("reserved_bytes"),
-                "gpu_memory_peak_bytes": memory_after.get("peak_allocated_bytes"),
-                "gpu_memory_peak_reserved_bytes": memory_after.get("peak_reserved_bytes"),
-                "estimated_gflops": compute["estimated_gflops"],
-                "performance": performance_sample(
-                    phase="training_optimizer_step",
-                    parameter_counts=parameter_counts,
-                    memory_before=memory_before,
-                    memory_after=memory_after,
-                    compute=compute,
-                ),
-                "timing_method": "perf_counter_ns with torch.cuda.synchronize before and after",
-            }
-            TrainingRunStore._append(metrics_path, metric)
-            progress.advance(detail=f"loss={metric['training_loss']:.4f}")
-            accumulation_started = None
-            accumulation_tokens = 0
-            accumulation_examples = 0
-            accumulation_correct = 0
-            accumulation_targets = 0
-            if steps >= int(training["max_steps"]):
-                break
-        if steps != int(training["max_steps"]):
-            raise TrainingRuntimeError(f"dataset exhausted after {steps} optimizer steps")
-    validation = None
-    if validation_dataset is not None:
-        from .training_quic import _validation
-        validation_loader = DataLoader(validation_dataset, batch_size=int(training["per_device_batch_size"]), num_workers=0, collate_fn=collator)
-        validation = _validation(model, validation_loader, action_tokenizer, device=device, dtype=dtype,
-            max_batches=int(training.get("validation_batches", 1)), description="Held-out validation")
-    checkpoint = context.staging_checkpoint
-    weights = checkpoint / "weights-or-adapter"
-    processor_dir = checkpoint / "processor"
-    auxiliary = checkpoint / "auxiliary"
-    weights.mkdir(parents=True)
-    processor_dir.mkdir()
-    auxiliary.mkdir()
-    processor.save_pretrained(processor_dir)
-    _save_training_weights(model, weights, auxiliary, training)
-    save_dataset_statistics(dataset.dataset_statistics, auxiliary)
-    changed = 0
-    if training["mode"] == "peft":
-        for name, parameter in model.named_parameters():
-            if parameter.requires_grad:
-                final_hash = hashlib.sha256(parameter.detach().cpu().float().numpy().tobytes()).hexdigest()
-                changed += int(initial_hashes.get(name) != final_hash)
-        if changed <= 0:
-            raise TrainingRuntimeError("LoRA adapter tensors did not change from initialization")
-    result = {
-        "schema_version": TRAINING_RESULT_SCHEMA,
-        "run_id": context.run_id,
-        "status": "checkpointing",
-        "optimizer_steps": steps,
-        "trainable_parameter_count": trainable,
-        "frozen_parameter_count": frozen,
-        "total_parameter_count": parameter_counts["total"],
-        "adapter_parameter_count": parameter_counts["adapter"],
-        "trainable_adapter_parameter_count": parameter_counts["trainable_adapter"],
-        "changed_adapter_tensor_count": changed if training["mode"] == "peft" else None,
-        "peak_vram_bytes": run_peak_allocated,
-        "peak_reserved_vram_bytes": run_peak_reserved,
-        "performance": {
-            "schema_version": "ovlab.performance-summary/v1",
-            "parameter_counts": parameter_counts,
-            "cuda_allocator": {
-                "source": "pytorch-cuda-caching-allocator",
-                "peak_allocated_bytes": run_peak_allocated,
-                "peak_reserved_bytes": run_peak_reserved,
-                "qualification": "process allocator peak across model load and recorded optimizer steps; not whole-device NVML usage",
-            },
-            "estimated_compute_method": "dense-parameter-token-proxy/training-v1",
-        },
-        "checkpoint_id": None,
-        "failure": None,
-        "validation": validation,
-    }
-    atomic_json(context.root / "result.json", result, exclusive=False, mode=0o644)
-    TrainingRunStore._append(events_path, {"schema_version": "ovlab.training-event/v1", "state": "checkpointing", "timestamp": _utc_now(), "details": result})
-    del optimizer, loader, dataset, model, processor
-    gc.collect()
-    torch.cuda.empty_cache()
-    return result
+
+def __getattr__(name):
+    # Compatibility exports are supplied by a registered project, never by a
+    # model import in OVLAB's storage/orchestration layer.
+    from .training_plugins import extension_symbol
+    return extension_symbol("training_runs", name)

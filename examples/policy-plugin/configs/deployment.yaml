@@ -2,9 +2,9 @@ schema_version: ovlab.deployment/v1
 kind: deployment
 id: example-plugin
 components:
-  policy: policies/example-plugin.yaml
+  policy: plugin://example-policy/policy.yaml
 resources:
-  registry: resources/example-plugin.yaml
+  registry: plugin://example-policy/resources.yaml
 build: false
 runtime:
   gpu: null

@@ -40,4 +40,5 @@ configs/local/*.yaml
 
 # Materialized plugin sources and generated Compose plans
 /external/
+/plugins/.cache/
 /deploy/compose/.ovlab-*.json

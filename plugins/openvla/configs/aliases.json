@@ -1,0 +1,17 @@
+{
+  "ablations/openvla-quic-placement-smoke.yaml": "ablations/openvla-quic-placement-smoke.yaml",
+  "deploy/openvla-libero10.yaml": "deploy/openvla-libero10.yaml",
+  "deploy/openvla-oft-libero10.yaml": "deploy/openvla-oft-libero10.yaml",
+  "policies/openvla-lora/merged-libero10-4bit.yaml": "policies/openvla-lora/merged-libero10-4bit.yaml",
+  "policies/openvla-lora/merged-libero10-8bit.yaml": "policies/openvla-lora/merged-libero10-8bit.yaml",
+  "policies/openvla-lora/merged-libero10.yaml": "policies/openvla-lora/merged-libero10.yaml",
+  "policies/openvla-oft/libero10-native-4bit.yaml": "policies/openvla-oft/libero10-native-4bit.yaml",
+  "policies/openvla-oft/libero10-native-8bit.yaml": "policies/openvla-oft/libero10-native-8bit.yaml",
+  "policies/openvla-oft/libero10-native.yaml": "policies/openvla-oft/libero10-native.yaml",
+  "policies/openvla-quic/adapter-libero10.yaml": "policies/openvla-quic/adapter-libero10.yaml",
+  "policies/openvla-quic/quic-peft-bones.yaml": "policies/openvla-quic/quic-peft-bones.yaml",
+  "policies/openvla-quic/quic-wc-bones.yaml": "policies/openvla-quic/quic-wc-bones.yaml",
+  "policies/openvla-vanilla/4bit.yaml": "policies/openvla-vanilla/4bit.yaml",
+  "policies/openvla-vanilla/8bit.yaml": "policies/openvla-vanilla/8bit.yaml",
+  "policies/openvla-vanilla/base.yaml": "policies/openvla-vanilla/base.yaml"
+}

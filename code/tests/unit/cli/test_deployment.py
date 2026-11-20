@@ -312,7 +312,7 @@ def test_quantization_override_is_validated_and_recorded_in_plan():
             "experiments/evaluation/libero10-quic-adapter-rpc-smoke.yaml",
             quantization="4bit", env_file=ENV_FILE,
         )
-    with pytest.raises(ValueError, match="quantization must be one of"):
+    with pytest.raises(ValueError, match="does not support quantization"):
         deployment.plan(LORA, quantization="invalid", env_file=ENV_FILE)
 
 
@@ -357,6 +357,7 @@ def test_evaluation_offline_setting_is_resolved_from_yaml(tmp_path):
     repository = tmp_path / "repository"
     shutil.copytree(REPOSITORY / "configs", repository / "configs")
     shutil.copytree(REPOSITORY / "experiments", repository / "experiments")
+    shutil.copytree(REPOSITORY / "plugins", repository / "plugins", ignore=shutil.ignore_patterns('.cache', '__pycache__', '*.egg-info', 'build', 'dist'))
     environment_file = repository / "deploy/compose/.env"
     environment_file.parent.mkdir(parents=True)
     environment_file.write_text("")
@@ -689,9 +690,9 @@ def test_config_bundle_is_minimal_deterministic_and_read_only(tmp_path):
     assert "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml" in paths
     assert "benchmarks/libero/libero10-smoke.yaml" in paths
     assert "benchmarks/libero/libero10.yaml" in paths
-    assert "policies/openvla-lora/merged-libero10.yaml" in paths
+    assert "plugins/configs/openvla/policies/openvla-lora/merged-libero10.yaml" in paths
     assert "interfaces/actions/libero-osc-pose-v1.yaml" in paths
-    assert "resources/registry.yaml" in paths
+    assert "plugins/configs/openvla/resources/registry.yaml" in paths
     assert "profiles/libero-bench-egl.yaml" in paths
     assert "experiments/evaluation/libero10-openvla-oft-rpc-smoke.yaml" not in paths
 
@@ -726,7 +727,7 @@ def test_quantization_override_changes_materialized_policy_and_bundle_identity(t
         )
         assert policy["settings"]["runtime"]["quantization"] == "4bit"
 
-    assert (REPOSITORY / "configs/policies/openvla-lora/merged-libero10.yaml").read_text().find(
+    assert (REPOSITORY / "plugins/openvla/configs/policies/openvla-lora/merged-libero10.yaml").read_text().find(
         "quantization: none"
     ) >= 0
 
@@ -738,6 +739,7 @@ def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
     destination = copied / "configs"
     shutil.copytree(source, destination)
     shutil.copytree(REPOSITORY / "experiments", copied / "experiments")
+    shutil.copytree(REPOSITORY / "plugins", copied / "plugins", ignore=shutil.ignore_patterns('.cache', '__pycache__', '*.egg-info', 'build', 'dist'))
     builder = ConfigBundleBuilder(copied)
     before = builder.build(LORA, "profiles/libero-bench-egl.yaml")
     experiment = copied / "experiments/evaluation/libero10-lora-merged-rpc-smoke.yaml"
@@ -860,7 +862,7 @@ def test_experiment_bundle_rejects_inheritance_outside_experiments(tmp_path):
         'kind: experiment\n', encoding="utf-8"
     )
 
-    with pytest.raises(ValueError, match="extends escapes its root"):
+    with pytest.raises(ValueError, match="extends escapes"):
         ConfigBundleBuilder(repository).load_component(
             "experiments/evaluation/escape.yaml", "experiment"
         )

@@ -13,6 +13,7 @@ import pytest
 import ovlab_benchctl.checkpointing as checkpointing
 from ovlab_benchctl.checkpointing import CheckpointResolutionError
 from ovlab_benchctl.strict_yaml import load
+from ovlab_benchctl.training_composition import load_training_document
 from ovlab_benchctl.training_profiles import TrainingPlanner, TrainingProfile
 
 
@@ -23,6 +24,11 @@ PROFILE_PATH = ROOT / "experiments/training/openvla-libero10-quic-smoke.yaml"
 def _write_registry(repository: Path, selector: str | None, *, pinned: tuple[str, str] | None = None) -> None:
     registry = repository / "configs/resources/registry.yaml"
     registry.parent.mkdir(parents=True)
+    registrations = json.loads((ROOT / "plugins/registry.json").read_text())
+    registrations["plugins"]["openvla"]["source"]["path"] = str(ROOT / "plugins/openvla")
+    (repository / "plugins").mkdir()
+    (repository / "plugins/registry.json").write_text(json.dumps(registrations))
+
     revision = f"    revision: {selector}\n" if selector is not None else ""
     identity = ""
     if pinned is not None:
@@ -43,7 +49,7 @@ def _write_registry(repository: Path, selector: str | None, *, pinned: tuple[str
 
 
 def _profile(selector: str | None, pinned_revision: str | None = None) -> TrainingProfile:
-    document = load(PROFILE_PATH)
+    document = load_training_document(PROFILE_PATH)
     document["model"]["base_checkpoint"] = "scenario-model"
     document["model"].pop("revision", None)
     if selector is not None:
