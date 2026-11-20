@@ -32,6 +32,10 @@ experiments/
   `ovlab run --plan FILE` or `ovlab run FILE`; see the
   [workflow guide](../docs/EXPERIMENT_WORKFLOW.md).
 
+  - [`libero10-plugin-pipeline-smoke.yaml`](workflows/libero10-plugin-pipeline-smoke.yaml)
+    checks plugin training, checkpoint handoff, evaluation and reporting on one
+    24 GiB GPU: three QuIC steps, then one two-step rollout of the trained adapter.
+    Training reports are automatic; evaluation reporting is explicitly enabled.
   - [`libero10-quic-training-smoke.yaml`](workflows/libero10-quic-training-smoke.yaml)
     trains QuIC for three steps on one task and evaluates its own checkpoint for
     one task with a two-step episode limit.
