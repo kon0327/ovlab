@@ -176,6 +176,7 @@ def expand_projects(document, root, *, offline=False):
         if not isinstance(aliases, dict):
             raise ConfigSchemaError(f"plugin {name} configuration aliases must be a mapping")
         result["projects"][name] = {
+            "kind": manifest["kind"], "description": manifest.get("description", ""),
             "source_id": source_id, "manifest": manifest_name, "version": manifest["version"],
             "configs_root": config_root, "config_aliases": aliases,
             "capabilities": deepcopy(manifest.get("capabilities", {})),

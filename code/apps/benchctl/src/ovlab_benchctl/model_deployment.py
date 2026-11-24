@@ -131,7 +131,7 @@ class ModelDeployment:
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700",
             "--mount", docker_bind(state / "configs", "/opt/ovlab/configs"),
             "--mount", docker_bind(checkpoint_path, f"/checkpoints/resolved/{checkpoint_id}"),
-            "--health-cmd", f"ovlab service health --host 127.0.0.1 --port {port} --json",
+            "--health-cmd", f"ovlab _worker health --host 127.0.0.1 --port {port} --json",
             "--health-interval", "5s", "--health-timeout", "8s", "--health-start-period", f"{plan.readiness_timeout_s}s",
             "--health-retries", "3",
         ]
@@ -157,7 +157,7 @@ class ModelDeployment:
         env["OVLAB_LOCAL_PROFILE"] = "/opt/ovlab/configs/plugins/runtime-profile.yaml"
         for key, value in env.items():
             command += ["--env", f"{key}={value}"]
-        command += [image_id or plan.image, "service", "serve", f"/opt/ovlab/{plan.target}",
+        command += [image_id or plan.image, "deploy", "serve", f"/opt/ovlab/{plan.target}",
                     "--host", "0.0.0.0", "--port", port, "--persistent"]
         return command
 
@@ -333,9 +333,19 @@ class ModelDeployment:
                 raise ConfigCompatibilityError("deployment bundle contains an invalid file")
             if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
                 raise ConfigCompatibilityError(f"deployment config file changed: {item['path']}")
-        self._checked(["docker", "exec", record["container_name"], "ovlab", "service", "health",
+        self._checked(["docker", "exec", record["container_name"], "ovlab", "_worker", "health",
                        "--host", "127.0.0.1", "--port", str(record["container_port"]), "--json"])
         return {"deployment_id": record["deployment_id"], "verified": True, "status": "ready", "inference_performed": False}
+
+    def connection_endpoint(self, target):
+        """Resolve the verified published endpoint of a managed deployment."""
+        self.verify(target)
+        _, record = self._record(target)
+        port = record.get("port")
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ConfigCompatibilityError("deployment has no published TCP port; use a direct socket or TCP endpoint")
+        host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(record["host"], record["host"])
+        return {"host": host, "port": port}
 
     def stop(self, target, *, dry_run=False):
         record_path, record = self._record(target)

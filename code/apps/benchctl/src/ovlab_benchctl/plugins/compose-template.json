@@ -20,7 +20,7 @@
       ],
       "image": "${OVLAB_POLICY_IMAGE:-@IMAGE@}",
       "command": [
-        "service",
+        "deploy",
         "serve",
         "${OVLAB_EXPERIMENT_CONFIG:?experiment required}",
         "--socket",
@@ -72,7 +72,7 @@
         "test": [
           "CMD",
           "ovlab",
-          "service",
+          "_worker",
           "health",
           "--socket",
           "/run/ovlab/policy.sock",

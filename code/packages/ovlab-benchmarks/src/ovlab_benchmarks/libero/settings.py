@@ -37,6 +37,15 @@ class LiberoAdapterSettings:
     controller_configuration_override: Metadata | None = None
     metadata: Metadata = field(default_factory=dict)
 
+    def describe_capabilities(self, action_spec):
+        """Expose the benchmark boundary without starting a simulator.
+
+        The supplied experiment action spec is part of the common settings
+        protocol; LIBERO declares its own fixed native action interface.
+        """
+        from .adapter import configured_capabilities
+        return configured_capabilities(self)
+
     def __post_init__(self) -> None:
         suites = tuple(self.suite_names)
         cameras = tuple(self.camera_names)

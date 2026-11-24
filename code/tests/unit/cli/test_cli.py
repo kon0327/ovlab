@@ -84,8 +84,8 @@ def _run(*args, environment=None):
 @pytest.mark.parametrize("arguments", [
     ("--help",),
     ("--version",),
-    ("policy", "list", "--json"),
     ("plugin", "list", "--json"),
+    ("plugin", "check", "openvla", "--json"),
 ])
 def test_lightweight_commands_do_not_import_runtime_packages(arguments):
     invocation = "code=0; _parser().format_help()" if arguments == ("--help",) else f"code=main({list(arguments)!r})"
@@ -113,7 +113,7 @@ def test_help_and_version_have_stable_identity():
     assert help_result.returncode == 0
     assert "Config" not in help_result.stderr
     assert all(command in help_result.stdout for command in (
-        "config", "policy", "service", "connect", "run", "metrics",
+        "config", "plugin", "deploy", "run", "report",
         "dataset", "checkpoint",
     ))
     version = _run("--version")
@@ -220,14 +220,14 @@ def test_unified_run_rejects_missing_target_duplicate_modes_and_runtime_flags():
 
 @pytest.mark.parametrize("arguments", [
     ("config", "validate", "config.yaml"),
-    ("policy", "list"),
-    ("policy", "describe", "config.yaml"),
-    ("service", "serve", "config.yaml"),
-    ("service", "health", "--socket", "/tmp/policy.sock"),
-    ("connect", "config.yaml"),
+    ("plugin", "list"),
+    ("plugin", "inspect", "openvla"),
+    ("deploy", "serve", "config.yaml"),
+    ("_worker", "health", "--socket", "/tmp/policy.sock"),
+    ("deploy", "connect", "--experiment", "config.yaml"),
     ("eval", "run", "config.yaml"),
     ("run", "config.yaml"),
-    ("metrics", "recompute", "/runs/example"),
+    ("report", "recompute", "/runs/example"),
     ("report", "profiles"),
     ("report", "publish", "--run", "run-1"),
     ("report", "verify", "--run", "run-1"),
@@ -268,7 +268,7 @@ def test_structured_commands_share_detail_and_json_output_controls(arguments):
 
 def test_detail_and_json_are_mutually_exclusive():
     with pytest.raises(SystemExit):
-        _parser().parse_args(["policy", "list", "--detail", "--json"])
+        _parser().parse_args(["plugin", "list", "--detail", "--json"])
 
 
 @pytest.mark.parametrize("command", sorted(_SUMMARY_FIELDS))
@@ -319,19 +319,18 @@ def test_dataset_list_defaults_to_compact_rows_and_detail_preserves_document(tmp
     assert machine_document["result"] == detail_document
 
 
-def test_policy_list_uses_compact_rows_and_detail_retains_every_field():
-    compact = _run("policy", "list")
+def test_plugin_list_shows_projects_and_inspect_shows_their_variants():
+    compact = _run("plugin", "list")
     assert compact.returncode == 0 and compact.stderr == ""
-    assert all(header in compact.stdout for header in ("ID", "FAMILY", "CONFIG TYPE", "RUNTIME", "PROFILES", "SOURCES"))
-    assert "vanilla" in compact.stdout and "openvla_vanilla" in compact.stdout
-    assert "quic-peft" in compact.stdout and "experimental" in compact.stdout
-
-    detailed = _run("policy", "list", "--detail")
+    assert all(header in compact.stdout for header in ("ID", "KIND", "VERSION", "SOURCE", "LOCATION", "COMMIT", "VARIANTS"))
+    detailed = _run("plugin", "list", "--detail")
     document = json.loads(detailed.stdout)
-    assert detailed.returncode == 0 and detailed.stderr == ""
-    assert {row["id"] for row in document} == {
-        "vanilla", "lora", "openvla-oft", "quic-peft",
-    }
+    assert {row["id"] for row in document} == {"openvla", "openvla-oft", "openvla-quic"}
+    project = next(row for row in document if row["id"] == "openvla")
+    assert project["variants"] == ["vanilla", "lora"]
+    inspected = _run("plugin", "inspect", "openvla", "--json")
+    assert inspected.returncode == 0, inspected.stderr
+    assert {item["id"] for item in json.loads(inspected.stdout)["result"]["variants"]} == {"vanilla", "lora"}
 
 
 def test_compact_validation_and_empty_registry_outputs_are_operator_friendly(tmp_path):
@@ -601,21 +600,18 @@ def test_dataset_launcher_rejects_unsafe_name_before_filesystem_use(tmp_path):
     assert not (tmp_path / "escaped").exists()
 
 
-def test_policy_list_reports_current_profiles_sources_and_runtime_status():
+def test_plugin_inspect_reports_current_profiles_sources_and_runtime_status():
     from ovlab_benchctl.quic_experiments import PROFILES
-    result = _run("policy", "list", "--json")
+    result = _run("plugin", "inspect", "openvla-quic", "--json")
     assert result.returncode == 0 and result.stderr == ""
     payload = json.loads(result.stdout)
     assert payload["status"] == "success"
-    methods = {item["id"]: item for item in payload["result"]}
-    assert set(methods) == {"vanilla", "lora", "openvla-oft", "quic-peft"}
-    assert methods["quic-peft"]["supported_quic_profiles"] == [*PROFILES, "custom"]
-    assert methods["quic-peft"]["config_type"] == "openvla_quic"
-    assert methods["quic-peft"]["runtime_status"] == "experimental"
-    assert methods["quic-peft"]["source_repositories"] == ["external/openvla-quic", "external/quic-peft-vla"]
-    assert all("supported_quic_profiles" not in methods[name] for name in ("vanilla", "lora", "openvla-oft"))
-    assert all("quic_profile" not in item for item in methods.values())
-    human = _run("policy", "list")
+    method, = payload["result"]["variants"]
+    assert method["supported_quic_profiles"] == [*PROFILES, "custom"]
+    assert method["config_type"] == "openvla_quic"
+    assert method["runtime_status"] == "experimental"
+    assert method["source_repositories"] == ["external/openvla-quic", "external/quic-peft-vla"]
+    human = _run("plugin", "inspect", "openvla-quic")
     assert human.returncode == 0
     assert all(value in human.stdout for value in ("QP1", "QP2", "QP3", "QP4", "custom"))
     assert "QP0" not in human.stdout
@@ -634,7 +630,7 @@ def test_complete_quic_policy_can_be_validated_without_model_initialization():
 
 
 def test_json_success_and_failure_are_single_documents_with_stderr_purity():
-    success = _run("policy", "list", "--json")
+    success = _run("plugin", "list", "--json")
     assert success.stdout.count("\n") == 1 and success.stderr == ""
     assert set(json.loads(success.stdout)) == {"schema_version", "command", "status", "result", "errors"}
     failure = _run("config", "validate", "configs/does-not-exist.yaml", "--json")
@@ -1075,3 +1071,97 @@ def test_report_publish_maps_machine_output_into_reporting_container(tmp_path):
     assert arguments[arguments.index("--output") + 1] == "/var/lib/ovlab/exports/machine-report"
     invalid = _run("report", "publish", "run-1", "--output", str(tmp_path / "outside"), environment=env)
     assert invalid.returncode == 3 and "must be inside" in invalid.stderr
+
+
+@pytest.mark.parametrize("command", ["policy", "service", "connect", "metrics"])
+def test_removed_top_level_commands_are_rejected(command):
+    with pytest.raises(SystemExit):
+        _parser().parse_args([command])
+
+
+@pytest.mark.parametrize("arguments", [
+    ["deploy", "connect", "service-1", "--experiment", "eval.yaml", "--port", "8000"],
+    ["deploy", "connect", "--experiment", "eval.yaml", "--host", "localhost"],
+    ["deploy", "connect", "--experiment", "eval.yaml", "--port", "0"],
+    ["deploy", "serve", "eval.yaml", "--port", "65536"],
+])
+def test_deployment_endpoint_errors_are_rejected_before_loading_a_model(arguments):
+    from ovlab_benchctl.cli import CliUsageError
+    with pytest.raises(CliUsageError):
+        _dispatch(_parser().parse_args(arguments))
+
+
+def test_managed_deployment_connection_resolves_the_endpoint(monkeypatch):
+    from ovlab_benchctl.model_deployment import ModelDeployment
+    captured = {}
+    def connect(config, **kwargs):
+        captured.update(config=config, **kwargs)
+        return {"compatible": True}
+    monkeypatch.setattr(ModelDeployment, "connection_endpoint", lambda self, target: {"host": "localhost", "port": 8123})
+    from types import SimpleNamespace
+    monkeypatch.setattr(cli_module, "_application", lambda: SimpleNamespace(connect=connect))
+    result, _, _ = _dispatch(_parser().parse_args([
+        "deploy", "connect", "my-service", "--experiment", "eval.yaml",
+    ]))
+    assert captured == {"config": "eval.yaml", "host": "localhost", "port": 8123}
+    assert result == {"compatible": True, "deployment": "my-service"}
+
+
+@pytest.mark.parametrize("project", ["openvla", None])
+def test_project_build_selects_all_owned_recipes_including_training(monkeypatch, project):
+    from ovlab_benchctl import plugin_build
+    from ovlab_benchctl.policy_plugins import registry_document
+    captured = {}
+    def build(root, roles, **kwargs):
+        captured["roles"] = roles
+        return []
+    monkeypatch.setattr(plugin_build, "build_images", build)
+    _dispatch(_parser().parse_args(["plugin", "build", *([project] if project else []), "--dry-run"]))
+    registry = registry_document(REPOSITORY)
+    selected = {project} if project else set(registry["projects"])
+    assert set(captured["roles"]) == {name for name, recipe in registry["builds"].items()
+                                      if recipe.get("project") in selected}
+    assert "training-openvla" in captured["roles"]
+    assert "benchmark" not in captured["roles"]
+
+
+def test_report_recompute_is_read_only_in_the_reporting_image_without_exports(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    log = tmp_path / "docker-arguments.txt"
+    docker = binaries / "docker"
+    docker.write_text('#!/bin/sh\nif [ "${1:-}" = image ]; then echo canonical-readonly-reporting-v2; exit 0; fi\nprintf "%s\\n" "$@" > "$OVLAB_FAKE_DOCKER_LOG"\n')
+    docker.chmod(0o755)
+    runs = tmp_path / "data/runs"
+    runs.mkdir(parents=True)
+    result = _run("report", "recompute", str(runs / "run-1"), "--json", environment={
+        "PATH": f"{binaries}:{os.environ['PATH']}",
+        "OVLAB_DATA_ROOT": str(runs.parent), "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_EXPORTS_ROOT": str(tmp_path / "exports"),
+        "OVLAB_CONFIGS_ROOT": str(tmp_path / "nonexistent-configs"),
+        "OVLAB_FAKE_DOCKER_LOG": str(log), "OVLAB_REPORTING_RUNTIME": "docker",
+    })
+    assert result.returncode == 0, result.stderr
+    arguments = log.read_text().splitlines()
+    assert arguments[-4:] == ["report", "recompute", "/var/lib/ovlab/runs/run-1", "--json"]
+    mounts = [argument for argument in arguments if argument.startswith("type=bind,")]
+    assert mounts == [f"type=bind,source={runs},target=/var/lib/ovlab/runs,readonly"]
+    assert arguments[arguments.index("--network") + 1] == "none"
+    assert not (tmp_path / "exports").exists()
+
+
+def test_report_recompute_rejects_old_images_before_starting_a_container(tmp_path):
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    docker = binaries / "docker"
+    docker.write_text('#!/bin/sh\nif [ "${1:-}" = image ]; then echo canonical-readonly-reporting-v1; exit 0; fi\nexit 99\n')
+    docker.chmod(0o755)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    result = _run("report", "recompute", "run-1", environment={
+        "PATH": f"{binaries}:{os.environ['PATH']}", "OVLAB_RUNS_ROOT": str(runs),
+        "OVLAB_REPORTING_RUNTIME": "docker",
+    })
+    assert result.returncode == ExitCode.RUNTIME
+    assert "needs rebuilding" in result.stderr
+    assert "bash deploy/scripts/build-images.sh reporting" in result.stderr

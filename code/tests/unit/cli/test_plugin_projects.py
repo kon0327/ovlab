@@ -239,3 +239,32 @@ def test_flat_layout_plugin_control_code_is_available_in_frozen_worker(project, 
         )
         result = subprocess.run([sys.executable, '-c', script], env=env, text=True, capture_output=True)
         assert result.returncode == 0, result.stderr
+
+
+def test_project_check_rejects_missing_declared_configuration_template(project):
+    from ovlab_benchctl.plugin_catalog import check_project
+    root, source = project
+    manifest_path = source / 'plugin.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault('configs', {})['templates'] = {'evaluate': ['missing.yaml']}
+    manifest_path.write_text(json.dumps(manifest))
+    register_project(root, str(source))
+    with pytest.raises(ConfigReferenceError, match='missing its evaluate template'):
+        check_project(root, 'example-policy')
+
+
+def test_plugin_cli_selection_uses_project_identity_not_variant_or_policy_type(project, monkeypatch):
+    from ovlab_benchctl import cli
+    from ovlab_benchctl.plugin_catalog import check_project, list_projects
+    root, source = project
+    manifest_path = source / 'plugin.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['plugins']['example_policy']['id'] = 'constant-variant'
+    manifest_path.write_text(json.dumps(manifest))
+    register_project(root, str(source))
+    monkeypatch.setenv('OVLAB_ROOT', str(root))
+    assert list_projects(root)[0]['id'] == 'example-policy'
+    assert check_project(root, 'example-policy')['model_loaded'] is False
+    for invalid in ('constant-variant', 'example_policy'):
+        with pytest.raises(ConfigReferenceError, match='unknown plugin project'):
+            cli._dispatch(cli._parser().parse_args(['plugin', 'inspect', invalid]))

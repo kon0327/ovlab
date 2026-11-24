@@ -25,7 +25,7 @@ def _docker(command, **kwargs):
     contracts = {
         "ovlab-benchmark-libero:local": "native-run-config-bundle-v3",
         "ovlab-policy-openvla:local": "resolved-checkpoint-quantization-config-bundle-v2",
-        "ovlab-reporting:local": "canonical-readonly-reporting-v1",
+        "ovlab-reporting:local": "canonical-readonly-reporting-v2",
     }
     assert command[1:3] == ["image", "inspect"]
     assert command[4] == '{{ json .Config.Labels }}'

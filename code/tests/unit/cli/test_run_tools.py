@@ -123,12 +123,12 @@ def test_offline_recomputation_preserves_trace_and_complete_results(completed_ru
 
 @pytest.mark.parametrize(("arguments", "expected"), [
     (("run", "--verify"), "verified"),
-    (("metrics", "recompute"), True),
+    (("report", "recompute"), True),
 ])
 def test_run_tools_json_subprocess_contract(completed_run, arguments, expected):
     completed = subprocess.run(
         [str(REPOSITORY / "ovlab"), *arguments, str(completed_run), "--json"],
-        cwd=REPOSITORY, env={**os.environ, "OVLAB_RUNS_ROOT": str(completed_run.parent)}, text=True,
+        cwd=REPOSITORY, env={**os.environ, "OVLAB_RUNS_ROOT": str(completed_run.parent), "OVLAB_REPORTING_RUNTIME": "host"}, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
     assert completed.returncode == 0 and completed.stderr == ""

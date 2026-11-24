@@ -3,7 +3,7 @@ name: ovlab-transport-smoke
 services:
   policy:
     image: ovlab-transport-smoke:local
-    command: [service, serve, examples/experiments/mock-smoke.yaml, --socket, /run/ovlab/policy.sock]
+    command: [deploy, serve, examples/experiments/mock-smoke.yaml, --socket, /run/ovlab/policy.sock]
     user: "10001:10001"
     read_only: true
     network_mode: none
@@ -14,7 +14,7 @@ services:
     volumes:
       - rpc:/run/ovlab
     healthcheck:
-      test: [CMD, ovlab, service, health, --socket, /run/ovlab/policy.sock, --json]
+      test: [CMD, ovlab, _worker, health, --socket, /run/ovlab/policy.sock, --json]
       interval: 1s
       timeout: 2s
       retries: 20
@@ -22,7 +22,7 @@ services:
 
   benchmark:
     image: ovlab-transport-smoke:local
-    command: [connect, examples/experiments/mock-smoke.yaml, --json]
+    command: [deploy, connect, --experiment, examples/experiments/mock-smoke.yaml, --json]
     user: "10001:10001"
     read_only: true
     network_mode: none

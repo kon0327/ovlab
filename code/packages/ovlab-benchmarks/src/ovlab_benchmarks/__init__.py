@@ -3,6 +3,7 @@
 from .adapter import BenchmarkAdapter
 from .contracts import BenchmarkActionRequest, BenchmarkResetResult, BenchmarkStepResult, TaskDescriptor
 from .errors import BenchmarkAdapterError, BenchmarkLifecycleError, BenchmarkStepError
+from .settings import BenchmarkSettings
 
 __all__ = [
     "BenchmarkActionRequest",
@@ -12,5 +13,6 @@ __all__ = [
     "BenchmarkResetResult",
     "BenchmarkStepError",
     "BenchmarkStepResult",
+    "BenchmarkSettings",
     "TaskDescriptor",
 ]

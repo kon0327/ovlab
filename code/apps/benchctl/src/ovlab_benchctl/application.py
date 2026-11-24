@@ -18,7 +18,6 @@ from ovlab_core.experiment_scope import ExperimentScope
 
 from .policy_plugins import with_registry
 
-from .catalog import registered_policies
 from .errors import ConfigCompatibilityError, ConfigReferenceError
 from .models import MockPolicySettings, ResolvedExperimentConfig
 from .resolver import ConfigResolver
@@ -337,40 +336,6 @@ class OvlabApplication:
         value = self.resolve(config, mode=mode)
         return _plain(value.document() if isinstance(value, ResolvedExperimentConfig) else value)
 
-    @staticmethod
-    def policy_list() -> list[dict[str, object]]:
-        return registered_policies()
-
-    @with_registry
-    def policy_describe(self, config: str | Path) -> dict[str, object]:
-        path = self._config_path(config)
-        header = load(path)
-        from .policy_plugins import plugin_for_document, call_plugin
-        plugin = plugin_for_document(header.get("kind"), self.repository_root)
-        if plugin:
-            document = self.resolver.load_component(self._relative(path), header["kind"])
-            return call_plugin(plugin, "describe_document", document)
-        resolved = self.resolve(path, mode="descriptor")
-        if not isinstance(resolved, ResolvedExperimentConfig):
-            raise ConfigCompatibilityError("policy describe requires an experiment or plugin descriptor")
-        policy = resolved.scientific_config["components"]["policy"]
-        settings = policy["settings"]
-        from .policy_plugins import plugin_for_type
-        return {
-            "method": policy["type"],
-            "family": ("mock" if policy["type"] == "mock" else plugin_for_type(policy["type"], self.repository_root).descriptor["family"]),
-            "artifact": {"checkpoint_id": settings.get("checkpoint_id", "unavailable")},
-            "capabilities": {
-                "action_spec": _action_spec(resolved.action_spec),
-                "input": settings["input"],
-            },
-            "readiness": {"runtime_ready": policy["type"] != "mock", "provider_loaded": False},
-            "profile": None,
-            "scientific_config_hash": resolved.scientific_config_hash,
-            "execution_config_hash": resolved.execution_config_hash,
-            "unavailable_fields": [],
-        }
-
     def default_socket(self, config: str | Path) -> Path:
         configured = self.environment.get("OVLAB_POLICY_SOCKET")
         if configured:
@@ -535,21 +500,29 @@ class OvlabApplication:
             )
         return {**result, "ready": True, "prediction_count": 0, "trace_created": False}
 
-    def connect(self, config: str | Path, *, socket_path: str | Path | None = None) -> dict[str, object]:
+    def connect(self, config: str | Path, *, socket_path: str | Path | None = None,
+                host: str = "127.0.0.1", port: int | None = None) -> dict[str, object]:
         from ovlab_core import negotiate_capabilities
         from ovlab_core.contracts import RunContext, RunId
-        from ovlab_remote_policy import RemotePolicyAdapter, UnixPolicyClient
-        from ovlab_benchmarks.libero import LiberoAdapterSettings, configured_capabilities
+        from ovlab_remote_policy import RemotePolicyAdapter, TcpPolicyClient, UnixPolicyClient
 
         resolved = self._resolved_experiment(config)
-        if not isinstance(resolved.benchmark_settings, LiberoAdapterSettings):
-            raise ConfigCompatibilityError("connect requires a configured isolated runtime policy and benchmark")
-        socket = Path(socket_path) if socket_path is not None else self.default_socket(config)
-        policy = RemotePolicyAdapter(UnixPolicyClient(socket))
+        describe = getattr(resolved.benchmark_settings, "describe_capabilities", None)
+        if not callable(describe):
+            raise ConfigCompatibilityError("benchmark settings must implement describe_capabilities(action_spec) for deployment checks")
+        benchmark_capabilities = describe(resolved.action_spec)
+        if socket_path is not None and port is not None:
+            raise ConfigCompatibilityError("connect requires either a Unix socket or TCP endpoint")
+        if port is not None:
+            client = TcpPolicyClient(host, port)
+        else:
+            socket = Path(socket_path) if socket_path is not None else self.default_socket(config)
+            client = UnixPolicyClient(socket)
+        policy = RemotePolicyAdapter(client)
         context = RunContext(RunId(f"connect-{uuid.uuid4().hex}"), time.time_ns(), resolved.experiment_id, 0)
         try:
             policy_capabilities = policy.initialize(context)
-            report = negotiate_capabilities(configured_capabilities(resolved.benchmark_settings), policy_capabilities)
+            report = negotiate_capabilities(benchmark_capabilities, policy_capabilities)
             handshake = policy.handshake
             return {
                 "policy": handshake.get("model_identity"),

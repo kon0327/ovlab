@@ -207,7 +207,7 @@ class TrainingDeployment:
             plugin_role=selected_finalizer["role"],
         )
         reporting_image, reporting_digest = self._docker_image(
-            "OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "canonical-readonly-reporting-v1"
+            "OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "canonical-readonly-reporting-v2"
         )
         datasets = DatasetStore(self.model_data_root)
         dataset_profile = profile.document["dataset"]

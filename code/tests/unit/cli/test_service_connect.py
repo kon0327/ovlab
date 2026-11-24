@@ -13,7 +13,6 @@ import time
 from helpers.contexts import make_run_context
 from helpers.mock_policy import MockPolicy
 from ovlab_benchctl.application import OvlabApplication
-from ovlab_benchmarks.libero import configured_capabilities
 from ovlab_core.contracts import ObservationRequirements, PolicyCapabilities
 from ovlab_policy_sdk import PolicyAdapter
 from ovlab_remote_policy import UnixPolicyClient
@@ -148,7 +147,7 @@ class App:
     def serve(self, config, socket_path=None):
         PolicyService(socket_path, MockPolicy(), identity_provider=OvlabApplication._identity_provider).serve()
 cli._application = lambda: App()
-raise SystemExit(cli.main(["service", "serve", "ignored.yaml", "--socket", {str(socket)!r}]))
+raise SystemExit(cli.main(["deploy", "serve", "ignored.yaml", "--socket", {str(socket)!r}]))
 '''
     process = subprocess.Popen(
         [sys.executable, "-c", script], cwd=REPOSITORY, env=os.environ.copy(),
@@ -187,7 +186,7 @@ class _HandshakeOnlyPolicy(PolicyAdapter):
 
 
 def _policy_capabilities(resolved, *, compatible=True):
-    benchmark = configured_capabilities(resolved.benchmark_settings)
+    benchmark = resolved.benchmark_settings.describe_capabilities(resolved.action_spec)
     images = benchmark.observation_spec.images
     action = benchmark.action_spec
     if not compatible:
@@ -241,3 +240,47 @@ def test_connect_reports_capability_incompatibility_structurally(tmp_path):
     assert any(item["code"] == "ACTION_DIMENSION_MISMATCH" for item in result["compatibility_issues"])
     assert adapter.predict_count == 0
     assert not socket.exists() and not thread.is_alive()
+
+
+def test_connect_uses_generic_benchmark_capabilities_over_tcp_and_keeps_service_ready(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from ovlab_remote_policy import TcpPolicyClient
+
+    app = OvlabApplication(REPOSITORY, environment={**os.environ, "OVLAB_LOCAL_PROFILE": str(_profile(tmp_path))})
+    config = "examples/experiments/mock-smoke.yaml"
+    resolved = app.resolve(config, mode="runtime")
+    capabilities = resolved.benchmark_settings.describe_capabilities(resolved.action_spec)
+    adapter = _HandshakeOnlyPolicy(_policy_capabilities(resolved))
+    # A third-party settings object needs only the control protocol, no LIBERO type.
+    generic = SimpleNamespace(describe_capabilities=lambda action_spec: capabilities)
+    monkeypatch.setattr(app, "_resolved_experiment", lambda _config: replace(resolved, benchmark_settings=generic))
+    with socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM) as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        port = reserve.getsockname()[1]
+    service = PolicyService(tmp_path / "unused.sock", adapter, identity_provider=app._identity_provider,
+                            listen_address=("127.0.0.1", port), persistent=True)
+    thread = threading.Thread(target=service.serve)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                client = TcpPolicyClient("127.0.0.1", port, request_timeout_s=0.1)
+                client.connect()
+                client.close_socket()
+                break
+            except ConnectionRefusedError:
+                if not thread.is_alive() or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.005)
+        result = app.connect(config, host="127.0.0.1", port=port)
+        assert result["compatible"] is True
+        assert result["prediction_count"] == 0 and result["trace_created"] is False
+        assert adapter.predict_count == 0 and thread.is_alive()
+        assert app.service_health(host="127.0.0.1", port=port)["ready"] is True
+        assert not (tmp_path / "unused.sock").exists()
+    finally:
+        service._shutdown.set()
+        thread.join(timeout=3)
+    assert not thread.is_alive()

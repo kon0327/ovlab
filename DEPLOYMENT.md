@@ -117,10 +117,13 @@ policy = RemotePolicyAdapter(client)
 ```
 
 Closing a client session releases its episode and keeps the deployed model loaded.
-The internal service commands also support TCP diagnostics:
+Use a deployment ID to verify service identity and readiness. To check its
+capabilities against an explicit evaluation configuration:
 
 ```bash
-ovlab service health --host 127.0.0.1 --port 8000 --json
+ovlab deploy verify SERVICE_ID
+ovlab deploy connect SERVICE_ID --experiment EVAL.yaml --json
+ovlab deploy connect --host 127.0.0.1 --port 8000 --experiment EVAL.yaml --json
 ```
 
 Evaluation continues to use private AF_UNIX connections between its policy and

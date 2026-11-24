@@ -160,7 +160,7 @@ checkpoint finalizer. Persistent model services use `ovlab deploy`; see
 Set `OVLAB_LOCAL_PROFILE` to a gitignored machine profile when resolving a
 machine-local checkpoint path. Installing `ovlab-benchctl` exposes the same command as the
 `ovlab` console entrypoint. Complete command, output, exit-code, foreground
-service, cleanup, and QuIC-skeleton behavior is documented in the
+service, cleanup, and plugin inspection behavior is documented in the
 [`OVLAB CLI guide`](code/apps/benchctl/CLI_README.md).
 
 Report generation, offline viewing, integrity verification, isolated/grouped exports,

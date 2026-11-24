@@ -163,3 +163,14 @@ def test_explicit_plugin_paths_cover_model_deployment_and_training():
     assert resolve_config_path("plugin://openvla-quic/train/default.yaml", ROOT, "experiments/training").is_file()
     assert not (ROOT / "configs/training").exists()
     assert not list((ROOT / "experiments").glob("*.yaml"))
+
+
+def test_connection_endpoint_verifies_identity_and_uses_published_port(deployment):
+    owner, docker = deployment
+    plan = owner.plan("configs/.tests/deploy/openvla.yaml", port=8123)
+    docker.plan = plan
+    owner.run(plan)
+    assert owner.connection_endpoint("test-openvla") == {"host": "127.0.0.1", "port": 8123}
+    docker.running = False
+    with pytest.raises(ConfigCompatibilityError, match="not running"):
+        owner.connection_endpoint("test-openvla")

@@ -5,10 +5,14 @@ The migration uses `/home/kony/dissertation/quic-petf-mpv/MIGRATE.md` and the
 experimental dense token OpenVLA adapter backend into OVLAB's existing offline
 training, immutable checkpoint and policy-service lifecycle.
 
+Current configuration and runnable examples follow the
+[model plugin contract](POLICY_PLUGINS.md). Historical validation below records
+the original migration; the old preset collections are no longer shipped.
+
 ## Ownership
 
 ```text
-OVLAB configuration / trainer / policy wrapper
+OVLAB orchestrator -> plugins/openvla-quic + declared integration support
     -> external/openvla-quic (standalone OpenVLA model, loader, neutral provider)
         -> external/quic-peft-vla (portable PyTorch method)
 
@@ -25,8 +29,9 @@ explicitly before the fork. Its determinant C1–C3 compounds, Cayley bases, inj
 adapter-only artifacts and in-memory merge know nothing about OVLAB,
 Transformers, OpenVLA, TFDS or LIBERO. The OpenVLA fork supplies the host
 identity and a model-level adapter API. Named QP profiles and A1–A9 target
-resolution now live in `ovlab_benchctl/quic_experiments.py`, beside OVLAB's
-experiment hierarchy and ablation workflow. The fork also has its own explicit
+resolution live in the plugin-side support module
+`plugins/_shared/openvla-support/src/ovlab_openvla_training/quic_experiments.py`.
+Experiment hierarchy and generic ablation orchestration remain in OVLAB. The fork also has its own explicit
 standalone CLI, tuner, verified episode-data interface, optional RLDS preparation
 and HTTP deployment; none requires OVLAB or a benchmark simulator. The
 standalone JSON schema uses exact target names and adapter parameters, without
@@ -60,11 +65,11 @@ defaults. Training profiles now accept bounded relative `extends`; mappings
 deep-merge and sequences replace their parent, just like experiment components.
 
 ```bash
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml --verify
-./ovlab train ablate validate --suite configs/ablations/openvla-quic-placement-smoke.yaml
-./ovlab train ablate plan --suite configs/ablations/openvla-quic-placement-smoke.yaml
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml --verify
+./ovlab train ablate validate --suite configs/ablations/my-study.yaml
+./ovlab train ablate plan --suite configs/ablations/my-study.yaml
 ./ovlab train ablate materialize \
-  --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+  --suite configs/ablations/my-study.yaml \
   --output /tmp/ovlab-quic-review
 ```
 
@@ -74,11 +79,12 @@ network access. Materialization writes resolved profiles and commands. Use
 --output NEW_DIRECTORY` to execute sequentially through the existing isolated
 trainer, independent finalizer and reporting owner.
 
-The example suite changes only placement and explicit target selectors (A1,
-A3, A9); host identity, preprocessing, data partition, seed, optimizer, number
-of steps and resource settings remain shared. Undeclared differences and
-scientifically duplicate variants fail validation. These profiles are bounded
-smoke recipes, not claims about research-quality training budgets.
+The `configs/ablations/my-study.yaml` path above denotes a user-created suite,
+not a shipped preset. Compose it from `plugin://openvla-quic/train/default.yaml`
+and explicit dataset/model selections; see [ablation composition](ABLATIONS.md).
+A suite must keep host identity, preprocessing, partition, optimization budget
+and resources shared except for its declared factors. Undeclared differences
+and scientifically duplicate variants fail validation.
 
 Training resolves targets and parameter budgets before loading dense weights,
 checks exact identity logits, freezes the host, checks all adapter gradients
@@ -111,9 +117,9 @@ statistics; use the new train-only fitting option for a vanilla host. Importing
 an arbitrary historical normalization sidecar remains unsupported.
 
 ```bash
-./ovlab run experiments/training/openvla-libero10-quic-smoke.yaml
+./ovlab run examples/experiments/plugin-pipeline-smoke.yaml
 ./ovlab train ablate run \
-  --suite configs/ablations/openvla-quic-placement-smoke.yaml \
+  --suite configs/ablations/my-study.yaml \
   --fit-action-normalization --output /tmp/my-fitted-quic-ablation
 ```
 
@@ -126,8 +132,9 @@ The resulting `fitted-action-normalization.json` and `normalization.json` are
 saved in the run and bundled checkpoint. The adapter binds the exact contract
 digest into its host identity; serving restores the same frozen statistics
 directly from the verified adapter. Ablation variants must agree on the fitted
-statistics and split manifest. The supplied
-`openvla-vanilla-libero10-quic-smoke.yaml` declares train-only fitting explicitly.
+statistics and split manifest. The plugin
+[training example](../plugins/openvla-quic/examples/train.yaml) demonstrates
+train-only fitting with an explicit dataset and normalization key.
 
 Reference full/LoRA profiles may opt into the partition workflow with
 `action_normalization: train-q99`; these statistics are fitted only on selected
@@ -143,9 +150,10 @@ Teacher-forced action-token CE, accuracy, normalized decoded L1 and invalid
 token rate are offline diagnostics. Rollout tasks, initial states, horizons,
 seeds, success and action metrics remain in OVLAB benchmark/protocol configs.
 The RPC provider returns actions through an explicit configured codec, with
-the gripper conversion applied once. Use the supplied adapter experiment
-template with hashes from the finalized artifact. Its placeholder hashes
-deliberately prevent accidental use as an evaluated result.
+the gripper conversion applied once. Use `checkpoint_from` to bind the finalized training artifact, as shown in the
+[pipeline example](../examples/experiments/plugin-pipeline-smoke.yaml). The
+plugin policy template omits adapter identity; standalone evaluation requires
+an explicit adapter path and verified hashes. No dummy identity is supplied.
 
 ## Images, progress and evidence
 
@@ -167,7 +175,7 @@ against the profile cap. The LoRA reference estimate remains separate.
 
 ## Validation scope and remaining work
 
-Validation on 2026-10-15:
+Historical validation on 2026-10-15:
 
 - OVLAB unit/contract/mock-integration regression: 702 passed, 6 skipped in the
   dependency-light `ovlab-tester` environment.
@@ -208,15 +216,17 @@ remain correct. No 7B weights are loaded by these checks.
 
 Numerical tests and the completed 7B smoke establish training and artifact
 wiring, not policy quality. Paired standalone/provider traces and benchmark
-rollouts remain unverified. The source's earlier A1/A3/A9 results remain
+rollouts were not verified in that original migration. A later real plugin
+pipeline smoke on 2026-11-20 completed training, checkpoint handoff, one bounded
+LIBERO rollout and both reports, including integrity checks; this remains
+integration evidence rather than a policy-quality evaluation. The source's earlier A1/A3/A9 results remain
 source-project evidence.
 
 This integration supports dense ordinary Linear and Conv2d targets and
 adapter-only artifacts. The
-[LoRA coverage experiment](QUIC_LORA_COVERAGE.md) supplies staged smoke and
-deep recipes for LIBERO-10, Object, Spatial and Goal. Its full-coverage recipe
-has passed configuration validation; the GPU smoke and deep training require
-a CUDA runtime and rebuilt training/finalizer images. Earlier CUDA evidence
+[LoRA coverage guide](QUIC_LORA_COVERAGE.md) explains how to define a user study
+without putting an ablation matrix into plugin defaults. Such studies require
+their own profiles, a CUDA runtime and compatible training/finalizer images. Earlier CUDA evidence
 above covers the earlier bounded target recipes.
 
 Quantized training/hosts, active LoRA modules, OpenVLA-OFT hosts,

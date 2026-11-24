@@ -138,7 +138,7 @@ class ComposeDeployment:
                 ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"))
 
     def _image_contract(self, role):
-        return {"benchmark": "native-run-config-bundle-v3", "reporting": "canonical-readonly-reporting-v1"}.get(role, self._POLICY_CONTRACT)
+        return {"benchmark": "native-run-config-bundle-v3", "reporting": "canonical-readonly-reporting-v2"}.get(role, self._POLICY_CONTRACT)
 
     def _policy_document(self, plan):
         builder = ConfigBundleBuilder(self.repository_root)

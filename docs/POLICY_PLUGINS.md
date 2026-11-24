@@ -161,13 +161,22 @@ from image contexts.
 
 ```bash
 ./ovlab plugin list --json
-./ovlab plugin inspect my-model-policy
-./ovlab plugin sync my-model-policy --dry-run
-./ovlab plugin sync my-model-policy
-./ovlab plugin sync my-model-policy --offline
-./ovlab plugin build my-model-policy --dry-run
-./ovlab plugin build my-model-policy
+./ovlab plugin inspect my-model
+./ovlab plugin check my-model
+./ovlab plugin sync my-model --dry-run
+./ovlab plugin sync my-model
+./ovlab plugin sync my-model --offline
+./ovlab plugin build my-model --dry-run
+./ovlab plugin build my-model
 ```
+
+These selectors are project IDs from the registry, not variant IDs or policy
+types. `list` shows projects; `inspect` includes all their policy variants,
+capabilities, configuration templates and source identities. `check` loads only
+SDK control entrypoints and checks declared template files without constructing
+an adapter or loading weights. It does not prove that runtime dependencies or
+checkpoint contents are ready; validate a completed experiment and use
+`deploy verify`/`deploy connect` for a running service.
 
 `sync` verifies origin, revision and cleanliness and refuses to replace dirty or
 unmanaged destinations. Edited local snapshots are preserved. A changed Git pin
@@ -188,11 +197,11 @@ and atomic publication and retains rollback data while replacing local snapshots
 
 `bash deploy/scripts/build-images.sh ROLE ...` builds any registered role, including
 infrastructure, policy, training and finalizer roles; with no roles it builds all.
-The `plugin build` command selects policy images. Add `--config TARGET` when the
+The `plugin build PROJECT` command selects all image recipes owned by that project, including policy, training and finalizer images. Add `--config TARGET` when the
 image should include an explicit experiment/deployment configuration closure:
 
 ```bash
-./ovlab plugin build my-model-policy --config configs/deploy/my-service.yaml
+./ovlab plugin build my-model --config configs/deploy/my-service.yaml
 ```
 
 Plugin defaults and user overrides resolve through the same bounded inheritance
@@ -388,7 +397,7 @@ when installing the local plugin against the resolved dependency lock. Copy
 source from `external/<source-id>`. Install OVLAB contracts, SDK, RPC and CLI, and
 install the plugin package. Model-specific dependencies belong to this image.
 
-Policy images must provide `ovlab service serve` and `ovlab service health`, run
+Policy images must provide `ovlab deploy serve` and `ovlab _worker health`, run
 as UID/GID `10001`, support the mounted `/opt/ovlab/configs` bundle, and declare:
 
 ```dockerfile

@@ -417,7 +417,7 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
         contract = (
             "native-run-config-bundle-v3"
             if image == "ovlab-benchmark-libero:local"
-            else "canonical-readonly-reporting-v1"
+            else "canonical-readonly-reporting-v2"
             if image == "ovlab-reporting:local"
             else "resolved-checkpoint-v1"
         )
@@ -441,7 +441,7 @@ def test_old_benchmark_worker_requires_only_the_benchmark_rebuild():
     def inspect(command, **kwargs):
         image = command[-1]
         contract = ("resolved-checkpoint-config-bundle-v2" if image == "ovlab-benchmark-libero:local"
-                    else "canonical-readonly-reporting-v1" if image == "ovlab-reporting:local"
+                    else "canonical-readonly-reporting-v2" if image == "ovlab-reporting:local"
                     else "resolved-checkpoint-quantization-config-bundle-v2")
         return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "policy-openvla")}}))
     deployment = ComposeDeployment(REPOSITORY, runner=inspect)
@@ -461,7 +461,7 @@ def test_preflight_accepts_compatible_images_without_source_tree_lock():
         contract = (
             "resolved-checkpoint-quantization-config-bundle-v2"
             if image == "ovlab-policy-openvla:local"
-            else "canonical-readonly-reporting-v1"
+            else "canonical-readonly-reporting-v2"
             if image == "ovlab-reporting:local"
             else "native-run-config-bundle-v3"
         )

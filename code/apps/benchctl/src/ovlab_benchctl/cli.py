@@ -84,7 +84,7 @@ class _RootParser(argparse.ArgumentParser):
         arguments = list(sys.argv[1:] if args is None else args)
         if (len(arguments) > 1 and arguments[0] == "report"
                 and not arguments[1].startswith("-")
-                and arguments[1] not in {"auto", "generate", "publish", "verify", "profiles", "export"}):
+                and arguments[1] not in {"auto", "generate", "publish", "verify", "profiles", "export", "recompute"}):
             arguments.insert(1, "auto")
         return super().parse_args(arguments, namespace)
 
@@ -122,28 +122,21 @@ def _parser() -> argparse.ArgumentParser:
     resolve.add_argument("--mode", choices=("descriptor", "runtime"), default="descriptor")
     resolve.add_argument("--format", choices=("yaml", "json"), default="yaml")
 
-    policy = commands.add_parser("policy", help="inspect registered policy identities")
-    policy_commands = policy.add_subparsers(dest="policy_command", required=True)
-    listing = policy_commands.add_parser("list", help="list policy variants without loading providers")
-    _output_options(listing)
-    describe = policy_commands.add_parser("describe", help="describe a configured policy without loading it")
-    describe.add_argument("config")
-    _output_options(describe)
-
-    plugin = commands.add_parser("plugin", help="inspect, sync and build registered model plugins")
+    plugin = commands.add_parser("plugin", help="register, inspect, check, sync and build plugin projects")
     plugin_commands = plugin.add_subparsers(dest="plugin_command", required=True)
     register = plugin_commands.add_parser("register", help="register a standalone local or pinned Git plugin project")
     register.add_argument("source", help="local project directory or Git repository URL")
     register.add_argument("--commit", help="full immutable Git commit for a remote project")
-    register.add_argument("--registry", help="destination project registry (default configs/plugins/registry.json)")
+    register.add_argument("--registry", help="destination user registry (default configs/plugins/registry.json)")
     register.add_argument("--dry-run", action="store_true")
     _output_options(register)
-    for name, help_text in (("list", "list plugin registrations without model imports"), ("inspect", "inspect one plugin and source identities"), ("sync", "materialize registered sources into external/"), ("build", "build plugin images from registered recipes")):
+    for name, help_text in (("list", "list registered projects without model imports"), ("inspect", "inspect project variants, capabilities and sources"), ("check", "check project templates and SDK control API without loading a model"), ("sync", "materialize development sources into external/"), ("build", "build project images from registered recipes")):
         command = plugin_commands.add_parser(name, help=help_text)
-        if name != "list": command.add_argument("plugin", nargs="?" if name in {"sync", "build"} else None, help="plugin ID or policy type; omit to select all")
+        if name != "list": command.add_argument("plugin", nargs="?" if name in {"sync", "build"} else None, help="plugin project ID" + ("; omit to select all" if name in {"sync", "build"} else ""))
         command.add_argument("--registry", help="registry JSON path (also OVLAB_PLUGIN_REGISTRY)")
-        if name in {"sync", "build"}:
+        if name in {"check", "sync", "build"}:
             command.add_argument("--offline", action="store_true")
+        if name in {"sync", "build"}:
             command.add_argument("--dry-run", action="store_true")
         if name == "build":
             command.add_argument("--config", help="experiment/deployment configuration to resolve and include in the image")
@@ -154,26 +147,6 @@ def _parser() -> argparse.ArgumentParser:
             sources.add_argument("--workspace-sources", dest="isolated_sources", action="store_false",
                                  help="sync and build from the development external/ workspace")
         _output_options(command)
-
-    service = commands.add_parser("service", help="run an isolated policy service")
-    service_commands = service.add_subparsers(dest="service_command", required=True)
-    serve = service_commands.add_parser("serve", help="serve one policy over an AF_UNIX socket or TCP port")
-    serve.add_argument("config")
-    serve.add_argument("--socket")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int)
-    serve.add_argument("--persistent", action="store_true", help="keep the model ready between client sessions")
-    _output_options(serve)
-    health = service_commands.add_parser("health", help="probe protocol readiness without model inference")
-    transport = health.add_mutually_exclusive_group(required=True)
-    transport.add_argument("--socket")
-    transport.add_argument("--port", type=int)
-    health.add_argument("--host", default="127.0.0.1")
-    _output_options(health)
-
-    connect = commands.add_parser("connect", help="probe policy handshake and capability compatibility")
-    connect.add_argument("config")
-    _output_options(connect)
 
     experiment = commands.add_parser("experiment", help="plan and run hierarchical YAML or JSON experiments")
     experiment_commands = experiment.add_subparsers(dest="experiment_command", required=True)
@@ -192,7 +165,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluation = commands.add_parser("eval", help="run, inspect, and verify evaluation experiments")
     eval_commands = evaluation.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_commands.add_parser("run", help="run one experiment through Docker Compose")
-    eval_run.add_argument("target", metavar="TARGET", help="evaluation YAML name/path in experiments/evaluation")
+    eval_run.add_argument("target", metavar="TARGET", help="evaluation configuration path or plugin:// reference")
     eval_run.add_argument(
         "--renderer", choices=("egl", "glfw"),
         help="override deployment.renderer from the experiment",
@@ -214,10 +187,26 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("target", help="evaluation run path, ID, or hash")
         _output_options(command)
 
-    deploy = commands.add_parser("deploy", help="build and run persistent model services")
+    deploy = commands.add_parser("deploy", help="run, connect to and verify model services")
     deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
+    serve = deploy_commands.add_parser("serve", help="serve a configured policy in the foreground")
+    serve.add_argument("config", help="deployment/evaluation configuration path or plugin:// reference")
+    transport = serve.add_mutually_exclusive_group()
+    transport.add_argument("--socket")
+    transport.add_argument("--port", type=int)
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--persistent", action="store_true", help="keep the model ready between client sessions")
+    _output_options(serve)
+    connect = deploy_commands.add_parser("connect", help="check a running policy against an experiment without inference")
+    connect.add_argument("target", nargs="?", help="managed deployment ID or configuration; omit for a direct endpoint")
+    connect.add_argument("--experiment", required=True, help="evaluation configuration defining the expected interface")
+    transport = connect.add_mutually_exclusive_group()
+    transport.add_argument("--socket", help="direct Unix socket; defaults to the experiment socket")
+    transport.add_argument("--port", type=int, help="direct TCP endpoint")
+    connect.add_argument("--host", help="TCP host (default: 127.0.0.1)")
+    _output_options(connect)
     deploy_run = deploy_commands.add_parser("run", help="build a policy image and start a model service")
-    deploy_run.add_argument("target", help="deployment YAML name/path in configs/deploy")
+    deploy_run.add_argument("target", help="deployment configuration path or plugin:// reference")
     deploy_run.add_argument("--profile", help="local checkpoint profile (overrides OVLAB_LOCAL_PROFILE)")
     deploy_run.add_argument("--quantization", help="quantization profile supported by the selected plugin")
     deploy_run.add_argument("--port", type=int, help="override the published model RPC port")
@@ -231,6 +220,15 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--dry-run", action="store_true")
         _output_options(command)
 
+    worker = commands.add_parser("_worker", help=argparse.SUPPRESS)
+    worker_commands = worker.add_subparsers(dest="worker_command", required=True)
+    health = worker_commands.add_parser("health", help="internal policy protocol readiness probe")
+    transport = health.add_mutually_exclusive_group(required=True)
+    transport.add_argument("--socket")
+    transport.add_argument("--port", type=int)
+    health.add_argument("--host", default="127.0.0.1")
+    _output_options(health)
+
     run = commands.add_parser("_native-run", help=argparse.SUPPRESS)
     run.add_argument("target", nargs="?", help="evaluation YAML in experiments/evaluation, or 'inspect'/'verify'")
     run.add_argument("path", nargs="?", help="RUN_PATH, RUN_ID, or RUN_HASH for inspect or verify")
@@ -241,18 +239,15 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true")
     _output_options(run)
 
-    metrics = commands.add_parser("metrics", help="offline metric operations")
-    metrics_commands = metrics.add_subparsers(dest="metrics_command", required=True)
-    recompute = metrics_commands.add_parser("recompute", help="recompute metrics from immutable traces")
-    recompute.add_argument("run_path", metavar="RUN_PATH_OR_REFERENCE")
-    _output_options(recompute)
-
     report = commands.add_parser(
         "report", help="create and verify reports and exports",
-        usage="%(prog)s RUN_OR_EXPERIMENT_ID [--detail | --json]\n       %(prog)s {publish,profiles,verify} ...",
+        usage="%(prog)s RUN_OR_EXPERIMENT_ID [--detail | --json]\n       %(prog)s {publish,profiles,verify,recompute} ...",
         epilog="Export a run or experiment automatically: ovlab report RUN_OR_EXPERIMENT_ID",
     )
-    report_commands = report.add_subparsers(dest="report_command", required=True, metavar="{publish,profiles,verify}")
+    report_commands = report.add_subparsers(dest="report_command", required=True, metavar="{publish,profiles,verify,recompute}")
+    recompute = report_commands.add_parser("recompute", help="audit recorded episode metrics by recomputing from immutable traces")
+    recompute.add_argument("run_path", metavar="RUN", help="evaluation run ID, path or hash")
+    _output_options(recompute)
     auto = report_commands.add_parser("auto", help="export a run or all runs in an experiment")
     auto.add_argument("reference", help="run ID, run hash, or completed experiment ID")
     _output_options(auto)
@@ -309,7 +304,7 @@ def _parser() -> argparse.ArgumentParser:
     # Compatibility entry points remain available to existing workflows, while
     # the public interface automatically selects exports via `report TARGET`.
     report_commands._choices_actions = [action for action in report_commands._choices_actions
-                                        if action.dest in {"publish", "profiles", "verify"}]
+                                        if action.dest in {"publish", "profiles", "verify", "recompute"}]
 
     data = commands.add_parser(
         "data", help="list, archive, and safely delete runs, reports, and exports"
@@ -463,7 +458,7 @@ def _parser() -> argparse.ArgumentParser:
     # Phase-specific parsers remain private worker interfaces. Public execution
     # always uses the experiment owner, including one-phase configurations.
     commands._choices_actions = [action for action in commands._choices_actions
-                                 if action.dest not in {"eval", "train", "experiment", "export", "_native-run"}]
+                                 if action.dest not in {"eval", "train", "experiment", "export", "_native-run", "_worker"}]
     return parser
 
 
@@ -479,8 +474,8 @@ def _application():
 def _command_name(args) -> str:
     parts = [args.command]
     for name in (
-        "config_command", "policy_command", "plugin_command", "service_command", "experiment_command", "eval_command", "deploy_command",
-        "metrics_command", "report_command", "export_command",
+        "config_command", "plugin_command", "worker_command", "experiment_command", "eval_command", "deploy_command",
+        "report_command", "export_command",
         "data_command", "dataset_command", "train_command", "ablate_command", "checkpoint_command",
     ):
         value = getattr(args, name, None)
@@ -650,20 +645,13 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("scientific hash", ("scientific_config_hash",)),
         ("execution hash", ("execution_config_hash",)),
     ),
-    "policy describe": (
-        ("method", ("method",)), ("family", ("family",)),
-        ("checkpoint", ("artifact.checkpoint_id", "artifact.id")),
-        ("runtime ready", ("readiness.runtime_ready",)),
-        ("implementation", ("readiness.implementation_status",)),
-        ("scientific hash", ("scientific_config_hash",)),
-        ("execution hash", ("execution_config_hash",)),
-    ),
-    "service serve": (("socket", ("socket",)), ("closed", ("closed",))),
-    "service health": (
+    "plugin check": (("plugin", ("id",)), ("valid", ("valid",)), ("checks", ("checks",)), ("runtime tested", ("runtime_tested",))),
+    "deploy serve": (("socket", ("socket",)), ("closed", ("closed",))),
+    "_worker health": (
         ("state", ("state",)), ("ready", ("ready",)),
         ("protocol", ("protocol_version",)), ("predictions", ("prediction_count",)),
     ),
-    "connect": (
+    "deploy connect": (
         ("compatible", ("compatible",)), ("protocol", ("protocol_version",)),
         ("policy", ("policy",)), ("action horizon", ("minimum_action_horizon",)),
         ("compatibility issues", ("compatibility_issues",)),
@@ -705,7 +693,7 @@ _SUMMARY_FIELDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("episodes", ("verified_episode_count",)), ("files", ("verified_file_count",)),
         ("failure", ("failure_type",)),
     ),
-    "metrics recompute": (
+    "report recompute": (
         ("results agree", ("all_results_agree",)), ("episodes", ("episode_count",)),
         ("trace modified", ("original_trace_modified",)), ("metric API", ("metric_api",)),
     ),
@@ -915,12 +903,20 @@ def _compact(command: str, result) -> str:
             if check["remedy"]:
                 lines.append(f"  Fix: {check['remedy']}")
         return "\n".join(lines)
-    if command in {"policy list", "plugin list"}:
+    if command == "plugin list":
         return _table(result, (
-            ("ID", ("id",)), ("FAMILY", ("family",)),
-            ("CONFIG TYPE", ("config_type",)), ("RUNTIME", ("runtime_status",)),
-            ("PROFILES", ("supported_profiles",)), ("SOURCES", ("source_repositories",)),
-        ), empty="No policy variants found.")
+            ("ID", ("id",)), ("KIND", ("kind",)), ("VERSION", ("version",)),
+            ("SOURCE", ("source.kind",)), ("LOCATION", ("source.url", "source.path")),
+            ("COMMIT", ("source.commit",)), ("VARIANTS", ("variants",)),
+        ), empty="No plugin projects found.")
+    if command == "plugin inspect":
+        lines = ["\n".join(f"{label}  {_scalar(result[label])}" for label in ("id", "kind", "version", "source", "capabilities"))]
+        lines.append(_table(result["variants"], (
+            ("VARIANT", ("id",)), ("CONFIG TYPE", ("config_type",)), ("RUNTIME", ("runtime_status",)),
+            ("PROFILES", ("supported_profiles", "supported_quic_profiles", "deployment.profile")),
+            ("QUANTIZATION", ("deployment.quantization",)),
+        ), empty="No policy variants found."))
+        return "\n\n".join(lines)
     if command == "data list":
         rows = result.get("items", ()) if isinstance(result, dict) else ()
         return _table(rows, (
@@ -1063,6 +1059,11 @@ def _confirm_data_operation(args, preview: dict[str, object]) -> bool:
     return sys.stdin.readline().strip() == phrase
 
 
+def _validate_port(port):
+    if port is not None and not 1 <= port <= 65535:
+        raise CliUsageError("port must be in 1..65535")
+
+
 def _dispatch(args):
     for name, value in vars(args).copy().items():
         if name.startswith("_pos_") and value is not None:
@@ -1110,61 +1111,40 @@ def _dispatch(args):
             from .plugin_projects import register_project
             return register_project(_repository_root(), args.source, commit=args.commit,
                                     registry_path=args.registry, dry_run=args.dry_run), args.json, None
-        from .policy_plugins import registered_plugins
-        from .plugin_sources import inspect_sources, sync_sources
+        from .plugin_catalog import check_project, inspect_project, list_projects, project_roles, project_sources
+        from .plugin_sources import sync_sources
         from .plugin_build import build_images
-        from .policy_plugins import registry_scope
+        from .policy_plugins import registry_document, registry_scope
         root = _repository_root()
         values = dict(os.environ)
         if args.registry:
             path = Path(args.registry).expanduser()
             values["OVLAB_PLUGIN_REGISTRY"] = str(path if path.is_absolute() else root / path)
         with registry_scope(root, values, offline=getattr(args, "offline", False) or getattr(args, "dry_run", False)):
-            plugins = registered_plugins(root)
             selection = getattr(args, "plugin", None)
-            selected = [p for p in plugins if selection in (p.descriptor["id"], p.descriptor["config_type"], p.descriptor.get("project"))] if selection else plugins
-            if selection and not selected: raise CliUsageError(f"unknown plugin {selection!r}")
-            sources = list(dict.fromkeys(name for p in selected for name in p.descriptor.get("sources", [])))
-            if args.plugin_command == "list": result = [p.descriptor for p in selected]
+            if args.plugin_command == "list":
+                result = list_projects(root)
             elif args.plugin_command == "inspect":
-                from .policy_plugins import registry_document
-                registry = registry_document(root)
-                project = selected[0].descriptor.get("project")
-                result = {"plugin": selected[0].descriptor, "variants": [p.descriptor for p in selected],
-                          "project": registry.get("projects", {}).get(project),
-                          "sources": inspect_sources(root, sources)}
-            elif args.plugin_command == "sync": result = sync_sources(root, sources if selection else None, offline=args.offline, dry_run=args.dry_run)
+                result = inspect_project(root, selection)
+            elif args.plugin_command == "check":
+                result = check_project(root, selection)
             else:
-                roles = list(dict.fromkeys(p.descriptor["deployment"]["role"] for p in selected if "deployment" in p.descriptor))
-                if selection and not roles: raise CliUsageError(f"plugin {selection!r} has no runnable image recipe")
-                result = build_images(root, roles, offline=args.offline, dry_run=args.dry_run,
-                                      isolated_sources=args.isolated_sources, config=args.config,
-                                      execution_profile=args.execution_profile)
+                registry = registry_document(root)
+                if args.plugin_command == "sync":
+                    sources = project_sources(registry, selection) if selection else None
+                    result = sync_sources(root, sources, offline=args.offline, dry_run=args.dry_run)
+                else:
+                    roles = project_roles(registry, selection)
+                    if selection and not roles:
+                        raise CliUsageError(f"plugin project {selection!r} has no runnable image recipe")
+                    result = build_images(root, roles, offline=args.offline, dry_run=args.dry_run,
+                                          isolated_sources=args.isolated_sources, config=args.config,
+                                          execution_profile=args.execution_profile) if roles else []
             return result, args.json, None
-    if args.command == "policy":
-        if args.policy_command == "list":
-            from .catalog import registered_policies
-            result = registered_policies()
-        else:
-            result = _application().policy_describe(args.config)
-        return result, args.json, None
-    if args.command == "service":
-        if args.service_command == "health":
-            options = {"host": args.host, "port": args.port} if args.port is not None else {}
-            return _application().service_health(args.socket, **options), args.json, None
-        previous = _install_interrupt_handlers()
-        try:
-            if args.socket and args.port is not None:
-                raise CliUsageError("service serve accepts either --socket or --port")
-            if args.port is not None and not 1 <= args.port <= 65535:
-                raise CliUsageError("service port must be in 1..65535")
-            options = {"host": args.host, "port": args.port, "persistent": args.persistent} if args.port is not None or args.persistent else {}
-            result = _application().serve(args.config, socket_path=args.socket, **options)
-        finally:
-            _restore_handlers(previous)
-        return result, args.json, None
-    if args.command == "connect":
-        return _application().connect(args.config), args.json, None
+    if args.command == "_worker":
+        _validate_port(args.port)
+        options = {"host": args.host, "port": args.port} if args.port is not None else {}
+        return _application().service_health(args.socket, **options), args.json, None
     if args.command == "run":
         from .experiment_workflow import ExperimentWorkflow
         workflow = ExperimentWorkflow(_repository_root())
@@ -1212,6 +1192,31 @@ def _dispatch(args):
             _restore_handlers(previous)
         return result, args.json, None
     if args.command == "deploy":
+        if args.deploy_command == "serve":
+            _validate_port(args.port)
+            previous = _install_interrupt_handlers()
+            try:
+                options = {"host": args.host, "port": args.port, "persistent": args.persistent} if args.port is not None or args.persistent else {}
+                result = _application().serve(args.config, socket_path=args.socket, **options)
+            finally:
+                _restore_handlers(previous)
+            return result, args.json, None
+        if args.deploy_command == "connect":
+            _validate_port(args.port)
+            if args.target and any(value is not None for value in (args.socket, args.port, args.host)):
+                raise CliUsageError("deploy connect accepts a managed deployment or a direct endpoint, not both")
+            if args.host is not None and args.port is None:
+                raise CliUsageError("deploy connect --host requires --port")
+            options = {"socket_path": args.socket} if args.socket is not None else {}
+            if args.port is not None:
+                options = {"host": args.host or "127.0.0.1", "port": args.port}
+            if args.target:
+                from .model_deployment import ModelDeployment
+                options = ModelDeployment(_repository_root()).connection_endpoint(args.target)
+            result = _application().connect(args.experiment, **options)
+            if args.target:
+                result["deployment"] = args.target
+            return result, args.json, None
         from .model_deployment import ModelDeployment
         deployment = ModelDeployment(_repository_root())
         if args.deploy_command == "run":
@@ -1258,13 +1263,13 @@ def _dispatch(args):
                 if tracking:
                     result["wandb"] = tracking
         return result, args.json, None
-    if args.command == "metrics":
-        return _application().recompute_metrics(args.run_path), args.json, None
     if args.command == "report":
         if args.report_command == "auto":
             from .report_auto import generate_report
             return generate_report(args.reference, repository_root=_repository_root()), args.json, None
         app = _application()
+        if args.report_command == "recompute":
+            return app.recompute_metrics(args.run_path), args.json, None
         if args.report_command == "profiles":
             return app.report_profiles(), args.json, None
         if args.report_command == "publish":

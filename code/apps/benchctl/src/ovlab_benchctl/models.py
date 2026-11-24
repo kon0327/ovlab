@@ -7,7 +7,7 @@ from typing import Mapping
 import os
 import uuid
 
-from ovlab_benchmarks.libero import LiberoAdapterSettings
+from ovlab_benchmarks import BenchmarkSettings
 from ovlab_core.contracts import ActionSpec, Metadata, normalize_metadata
 from ovlab_runner import (
     ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
@@ -28,6 +28,28 @@ class MockBenchmarkSettings:
     image_shape: tuple[int, int, int]
     proprioception_name: str
     privileged_signals_enabled: bool
+
+    def describe_capabilities(self, action_spec):
+        """Describe the test benchmark without constructing a test provider."""
+        from ovlab_core.contracts import (
+            OVLAB_CONTRACT_VERSION, BenchmarkCapabilities, ColorSpace,
+            ImageEncoding, ImageObservationSpec, ObservationSpec,
+            ProprioceptiveObservationSpec, SignalAccess, SignalRegistry, SignalSpec,
+        )
+        signals = [SignalSpec("benchmark.task_success", "bool", (), "", SignalAccess.EVALUATION_ONLY,
+                              "Authoritative terminal task success")]
+        if self.privileged_signals_enabled:
+            signals.append(SignalSpec("hidden_target", "float32", (2,), "m", SignalAccess.PRIVILEGED,
+                                      "Privileged target position"))
+        return BenchmarkCapabilities(
+            "mock-benchmark", "1.0.0", OVLAB_CONTRACT_VERSION,
+            ObservationSpec(
+                images=(ImageObservationSpec(self.camera_name, (self.image_shape,), "uint8", (ImageEncoding.RAW,), (ColorSpace.RGB,)),),
+                proprioception=(ProprioceptiveObservationSpec(self.proprioception_name, ((2,),), "float32", ("rad", "rad")),),
+            ),
+            action_spec, SignalRegistry(tuple(signals)), True, False,
+            self.privileged_signals_enabled, ("mock-suite",),
+        )
 
     def __post_init__(self) -> None:
         for name in ("task_count", "maximum_episode_steps"):
@@ -137,7 +159,7 @@ class ReportingSettings:
 @dataclass(frozen=True, slots=True)
 class ResolvedExperimentConfig:
     experiment_id: str
-    benchmark_settings: LiberoAdapterSettings | MockBenchmarkSettings
+    benchmark_settings: BenchmarkSettings
     policy_settings: object
     action_spec: ActionSpec
     metric_settings: MetricSetSettings

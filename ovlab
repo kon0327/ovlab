@@ -377,7 +377,7 @@ fi
 # Present report and export through one command while keeping older container
 # images compatible with their existing `report publish` and `export` entry points.
 if [[ "${1:-}" == "report" && "${2:-}" != "" ]]; then
-    if [[ "${2:-}" == "auto" || ( "${2:-}" != -* && "${2:-}" != "generate" && "${2:-}" != "publish" && "${2:-}" != "verify" && "${2:-}" != "profiles" && "${2:-}" != "export" ) ]]; then
+    if [[ "${2:-}" == "auto" || ( "${2:-}" != -* && "${2:-}" != "generate" && "${2:-}" != "publish" && "${2:-}" != "verify" && "${2:-}" != "profiles" && "${2:-}" != "export" && "${2:-}" != "recompute" ) ]]; then
         # Selection runs on the host; each export still runs in the isolated image.
         exec "$python_executable" -m ovlab_benchctl.cli "$@"
     fi
@@ -432,7 +432,7 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
             echo "ovlab: canonical run source directory does not exist: $runs_root" >&2
             exit 4
         fi
-        if [[ ! -d "$configs_root" ]]; then
+        if [[ ! -d "$configs_root" && "${2:-}" != "recompute" ]]; then
             echo "ovlab: portable config directory does not exist: $configs_root" >&2
             exit 3
         fi
@@ -441,6 +441,14 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
             echo "ovlab: reporting image is unavailable: $reporting_image" >&2
             echo "ovlab: build it with: bash deploy/scripts/build-images.sh reporting" >&2
             exit 6
+        fi
+        if [[ "${1:-}" == "report" && "${2:-}" == "recompute" ]]; then
+            reporting_contract="$(docker image inspect --format '{{ index .Config.Labels "io.github.ovlab.deployment.contract" }}' "$reporting_image")"
+            if [[ "$reporting_contract" != "canonical-readonly-reporting-v2" ]]; then
+                echo "ovlab: reporting image needs rebuilding for report recompute: $reporting_image" >&2
+                echo "ovlab: build it with: bash deploy/scripts/build-images.sh reporting" >&2
+                exit 6
+            fi
         fi
         if [[ "${1:-}" == "report" && "${2:-}" == "profiles" ]]; then
             echo "ovlab: reporting: using isolated image $reporting_image (read-only registry)." >&2
@@ -454,28 +462,22 @@ if [[ "${1:-}" == "report" || "${1:-}" == "export" ]]; then
         verification_kind=""
         if [[ "${1:-}" == "report" && "${2:-}" == "verify" ]]; then
             verification_kind="report"
+        elif [[ "${1:-}" == "report" && "${2:-}" == "recompute" ]]; then
+            verification_kind="metrics"
         elif [[ "${1:-}" == "export" && "${2:-}" == "verify" ]]; then
             verification_kind="export"
         fi
         if [[ -n "$verification_kind" ]]; then
             verification_mounts=(
-                --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly"
                 --mount "type=bind,source=$runs_root,target=/var/lib/ovlab/runs,readonly"
             )
-            if [[ "$verification_kind" == "report" ]]; then
+            if [[ "$verification_kind" != "metrics" ]]; then
                 if [[ ! -d "$exports_root" ]]; then
                     echo "ovlab: report export directory does not exist: $exports_root" >&2
                     exit 4
                 fi
                 verification_mounts+=(
-                    --mount "type=bind,source=$exports_root,target=/var/lib/ovlab/exports,readonly"
-                )
-            else
-                if [[ ! -d "$exports_root" ]]; then
-                    echo "ovlab: export directory does not exist: $exports_root" >&2
-                    exit 4
-                fi
-                verification_mounts+=(
+                    --mount "type=bind,source=$configs_root,target=/opt/ovlab/configs,readonly"
                     --mount "type=bind,source=$exports_root,target=/var/lib/ovlab/exports,readonly"
                 )
             fi

@@ -107,7 +107,7 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
         expected_contract = (
             "resolved-checkpoint-quantization-config-bundle-v2"
             if name in {"Dockerfile.openvla", "Dockerfile.openvla-oft"}
-            else "canonical-readonly-reporting-v1"
+            else "canonical-readonly-reporting-v2"
             if name == "Dockerfile.reporting"
             else "native-run-config-bundle-v3"
         )
@@ -160,7 +160,8 @@ def test_compose_is_socket_only_offline_and_least_privilege(deployment_workspace
             assert service["environment"]["OVLAB_PLUGIN_REGISTRY"] == "/opt/ovlab/configs/plugins/registry.json"
         assert policy["environment"]["HF_HUB_OFFLINE"] == "1"
         assert policy["environment"]["TRANSFORMERS_OFFLINE"] == "1"
-        assert policy["healthcheck"]["test"][:3] == ["CMD", "ovlab", "service"]
+        assert policy["command"][:2] == ["deploy", "serve"]
+        assert policy["healthcheck"]["test"][:4] == ["CMD", "ovlab", "_worker", "health"]
         assert all(mount["read_only"] for mount in policy["volumes"] if isinstance(mount, dict))
         assert benchmark["environment"]["MUJOCO_GL"] == "egl"
         assert list(benchmark["depends_on"].values())[0]["condition"] == "service_healthy"

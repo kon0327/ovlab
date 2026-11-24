@@ -62,6 +62,7 @@ replacement, so it lists only the example plugin.
 export OVLAB_PLUGIN_REGISTRY="$PWD/examples/policy-plugin/registry.json"
 ./ovlab plugin list
 ./ovlab plugin inspect example-policy
+./ovlab plugin check example-policy
 ./ovlab plugin sync example-policy
 ./ovlab plugin build example-policy --dry-run
 ./ovlab plugin build example-policy
@@ -84,7 +85,6 @@ export OVLAB_MODEL_DATA_ROOT="${TMPDIR:-/tmp}/ovlab-plugin-demo"
   --profile configs/local/example-plugin.yaml --dry-run
 ./ovlab deploy run example-plugin --offline \
   --profile configs/local/example-plugin.yaml
-./ovlab service health --host 127.0.0.1 --port 8123 --json
 ./ovlab deploy verify example-plugin
 ./ovlab deploy stop example-plugin
 ```

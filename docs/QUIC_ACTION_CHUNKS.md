@@ -15,28 +15,34 @@ model:
     hidden_dim: 512
 ```
 
-The comparable LIBERO10 smoke pair is the token baseline
-`experiments/training/quic/action-chunks/libero10-token-smoke.yaml`
-(head disabled) and `experiments/training/quic/action-chunks/libero10-h8-smoke.yaml`
-(head enabled). An H=1 continuous-head control is also available at
-`experiments/training/quic/action-chunks/libero10-h1-smoke.yaml`.
-They keep batch 4, accumulation 4, a 5% whole episode validation partition,
-train-only fitted normalization, three optimizer updates and the 24 GiB budget.
-They are configurations, not evidence of a successful GPU run.
+Create a user profile from the plugin's one training example:
 
 ```bash
-./ovlab run experiments/training/quic/action-chunks/libero10-h8-smoke.yaml --json
+cp plugins/openvla-quic/examples/train.yaml experiments/my-chunk-train.yaml
 ```
 
-Rebuild the OpenVLA QuIC training, policy and dataset/finalizer images from these sources
-before using container entry points:
+Add `model.action_head` as above, retain explicit dataset/normalization choices,
+and set a trainable-parameter budget that includes the head, for example
+`training.peft.max_trainable_parameters: 3000000` for the default small adapter
+and the H=8/width=512 head. Choose optimizer steps and resource limits for your
+study and hardware. Omit the head for a token baseline; set `horizon: 1` for a
+continuous single-action control. These are user configurations, not shipped
+smoke presets or evidence of model quality.
 
 ```bash
-bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic dataset
+./ovlab run experiments/my-chunk-train.yaml --plan
+./ovlab run experiments/my-chunk-train.yaml
 ```
- The existing coverage study launcher validates token
-cross entropy and is intended for the token profiles; run chunk profiles through
-`ovlab run` directly.
+
+Build compatible plugin-owned policy, training and finalizer roles before
+container execution:
+
+```bash
+bash deploy/scripts/build-images.sh policy-openvla-quic training-openvla-quic finalizer-openvla-quic
+```
+
+The old recipe-specific coverage launcher has been removed. Select chunk
+profiles explicitly through `ovlab run`; see the [training guide](../TRAINING.md).
 
 ## Model and optimizer
 
