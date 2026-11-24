@@ -1,7 +1,7 @@
 """Stable public API for synchronous in-process OVLAB execution."""
 
 from .artifacts import FilesystemRunArtifactStore, InMemoryRunArtifactStore, RunArtifactStore, TraceCodec
-from .connection import ConnectionReport
+from .connection import ConnectionReport, preflight_components
 from .configuration import RunConfigurationSnapshot
 from .errors import (
     ArtifactError, ConnectionError, ExperimentExecutionError, RecorderError,
@@ -30,7 +30,7 @@ from .runner import ExperimentRunner
 
 __all__ = [
     "ActionExecutionMode", "ActionExecutionPolicy", "ArtifactError", "ArtifactStoreSettings",
-    "ConnectionError", "ConnectionReport", "DeterministicClock", "EpisodeErrorPolicy",
+    "ConnectionError", "ConnectionReport", "preflight_components", "DeterministicClock", "EpisodeErrorPolicy",
     "EpisodeRecorder", "ExperimentExecutionError", "ExperimentPlan", "ExperimentRunner",
     "FilesystemRunArtifactStore", "InMemoryRunArtifactStore", "MetricAvailabilityPolicy",
     "MetricRecomputationError", "ProvenanceSnapshot", "RecorderError", "RecorderState", "RunArtifactStore", "RunnerError",

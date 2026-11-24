@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Protocol
 
 if TYPE_CHECKING:
-    from ovlab_core.contracts import ActionSpec, PolicyCapabilities
+    from ovlab_core.contracts import ActionSpec, BenchmarkContext, PolicyCapabilities
     from .adapter import PolicyAdapter
 
 
@@ -111,3 +111,32 @@ class PolicyPlugin(ABC):
     def accepts_capabilities(self, capabilities: PolicyCapabilities) -> bool:
         """Compatibility hook for older direct identity-provider callers."""
         return False
+
+
+class PolicyPluginV2(PolicyPlugin):
+    """Policy API using canonical peer descriptions instead of benchmark YAML.
+
+    This additive contract leaves v1 integrations unchanged until the composition
+    root and every selected integration migrate together. Standalone serving
+    passes ``None`` and validates its explicit input/action contract separately;
+    it must not invent benchmark qualification from a normalization key.
+    """
+
+    api_version = "2"
+
+    @abstractmethod
+    def resolve_settings(self, doc: dict, benchmark_context: BenchmarkContext | None, action_spec: ActionSpec,
+                         checkpoints: Mapping, devices: Mapping, *,
+                         repository_root: Path, environment: Mapping[str, str]) -> PolicySettings:
+        """Resolve model settings without reading a peer's configuration schema."""
+
+    @abstractmethod
+    def describe_capabilities(self, settings: PolicySettings) -> PolicyCapabilities:
+        """Describe policy inputs/actions without constructing or loading a model."""
+
+    def validate_observation(self, doc: dict, benchmark_context: BenchmarkContext) -> None:
+        """Validate named inputs and plugin-owned methodological constraints."""
+
+    def deployment_context(self, policy: dict, deployment: dict) -> None:
+        """Standalone serving has no benchmark peer or scientific task identity."""
+        return None

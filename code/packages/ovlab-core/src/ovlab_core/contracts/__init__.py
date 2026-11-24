@@ -32,6 +32,7 @@ from .observation import (
     ProprioceptiveObservation,
 )
 from .signals import SignalAccess, SignalRegistry, SignalSpec, SignalValue
+from .peer import BenchmarkContext, BenchmarkIdentity, BenchmarkResolutionContext, BenchmarkTaskSetIdentity
 from .trace import EpisodeTerminalStatus, EpisodeTrace
 from .version import OVLAB_CONTRACT_VERSION, OVLAB_VERSION
 
@@ -43,6 +44,10 @@ __all__ = [
     "ActionRepresentation",
     "ActionSpec",
     "BenchmarkCapabilities",
+    "BenchmarkContext",
+    "BenchmarkIdentity",
+    "BenchmarkResolutionContext",
+    "BenchmarkTaskSetIdentity",
     "ColorSpace",
     "ContractCompatibilityError",
     "ContractError",

@@ -2,6 +2,7 @@
 from importlib import import_module
 
 _EXPORTS = {'PolicyPlugin': ('.plugin', 'PolicyPlugin'),
+ 'PolicyPluginV2': ('.plugin', 'PolicyPluginV2'),
  'PolicyPluginValidationError': ('.plugin', 'PolicyPluginValidationError'),
  'PolicyPluginCompatibilityError': ('.plugin', 'PolicyPluginCompatibilityError'),
  'PolicyPluginReferenceError': ('.plugin', 'PolicyPluginReferenceError'),
@@ -12,7 +13,7 @@ _EXPORTS = {'PolicyPlugin': ('.plugin', 'PolicyPlugin'),
  'PolicyLifecycleError': ('.errors', 'PolicyLifecycleError')}
 
 __all__ = [
-    "PolicyPlugin", "PolicyPluginValidationError", "PolicyPluginCompatibilityError", "PolicyPluginReferenceError",
+    "PolicyPlugin", "PolicyPluginV2", "PolicyPluginValidationError", "PolicyPluginCompatibilityError", "PolicyPluginReferenceError",
     "PolicyAdapter",
     "PolicyAdapterError",
     "PolicyCapabilities",

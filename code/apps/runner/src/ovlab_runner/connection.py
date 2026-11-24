@@ -38,9 +38,14 @@ class ConnectionReport:
 def connect_components(plan, benchmark, policy, metric_registry) -> ConnectionReport:
     benchmark_caps = benchmark.initialize(plan.run_context)
     policy_caps = policy.initialize(plan.run_context)
+    return preflight_components(plan, benchmark_caps, policy_caps, benchmark.list_tasks(), metric_registry)
+
+
+def preflight_components(plan, benchmark_caps, policy_caps, task_catalog, metric_registry) -> ConnectionReport:
+    """Check declared boundaries without initializing an adapter or simulator."""
     compatibility = negotiate_capabilities(benchmark_caps, policy_caps)
     compatibility.require_compatible()
-    tasks_by_id = {task.task_id: task for task in benchmark.list_tasks()}
+    tasks_by_id = {task.task_id: task for task in task_catalog}
     missing_tasks = [str(task_id) for task_id in plan.selected_task_ids if task_id not in tasks_by_id]
     if missing_tasks:
         raise ConnectionError(f"selected benchmark tasks do not exist: {', '.join(missing_tasks)}")
