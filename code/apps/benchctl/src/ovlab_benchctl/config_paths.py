@@ -6,7 +6,7 @@ from pathlib import Path
 def resolve_config_path(reference: str | Path, repository_root: Path, section: str) -> Path:
     from .config_references import ConfigReferences
     root = repository_root.expanduser().resolve()
-    if str(reference).startswith(("plugin:", "ovlab:")):
+    if str(reference).startswith(("plugin:", "module:", "ovlab:")):
         return ConfigReferences(root).source(str(reference))
     path = Path(reference).expanduser()
     if path.is_absolute():

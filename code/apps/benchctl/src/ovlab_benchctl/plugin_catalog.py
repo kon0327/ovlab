@@ -36,16 +36,53 @@ def project_sources(document, project):
     return list(dict.fromkeys(sources))
 
 
-def list_projects(root):
+def _catalog(root):
+    from .extensions import ExtensionCatalog
+    from .plugin_projects import read_document
+    from .policy_plugins import registry_path
+    path = registry_path(root)
+    if read_document(path).get("schema_version") == "ovlab.extensions/v1":
+        return ExtensionCatalog(root, registry_path=path)
+    return None
+
+
+def list_projects(root, *, category="plugin"):
+    catalog = _catalog(root)
+    if catalog is not None:
+        rows = []
+        for row in catalog.list_projects():
+            if row.get("category") not in {category, None}:
+                continue
+            row["kind"] = "unknown"
+            row["variants"] = []
+            if row.get("status") == "available":
+                manifest = catalog.project_manifest(row["id"])
+                row["kind"] = ",".join(dict.fromkeys(item["kind"] for item in manifest["providers"].values())) or "configuration"
+                row["variants"] = [item.get("id", name) for name, item in manifest["providers"].items()]
+            rows.append(row)
+        return rows
+    if category != "plugin":
+        return []
     document = registry_document(root)
-    return [{
-        "id": name, "kind": metadata.get("kind", "policy"), "version": metadata["version"],
-        "source": deepcopy(document["sources"][metadata["source_id"]]),
-        "variants": [item["id"] for item in document["plugins"].values() if item.get("project") == name],
-    } for name, metadata in document.get("projects", {}).items()]
+    return [{"id": name, "kind": metadata.get("kind", "policy"), "version": metadata["version"],
+             "source": deepcopy(document["sources"][metadata["source_id"]]),
+             "variants": [item["id"] for item in document["plugins"].values() if item.get("project") == name]}
+            for name, metadata in document.get("projects", {}).items()]
 
 
-def inspect_project(root, name):
+def inspect_project(root, name, *, category="plugin"):
+    catalog = _catalog(root)
+    if catalog is not None:
+        manifest = catalog.project_manifest(name)
+        if manifest["category"] != category:
+            raise ConfigReferenceError(f"project {name} is not a {category}")
+        metadata = catalog.project_metadata(name)
+        variants = [{"id": local_id, **deepcopy(item), "provider_ref": f"{category}:{item['kind']}:{name}/{local_id}"}
+                    for local_id, item in manifest["providers"].items()]
+        return {**metadata, "kind": ",".join(dict.fromkeys(item["kind"] for item in variants)) or "configuration",
+                "source": deepcopy(catalog.document["projects"][name]["source"]),
+                "variants": variants, "sources": [{"id": key, "selection": value}
+                                                       for key, value in catalog.project_sources(name).items()]}
     document = registry_document(root)
     variants = project_plugins(root, name, registry=document)
     metadata = document["projects"][name]
@@ -55,7 +92,31 @@ def inspect_project(root, name):
             "sources": inspect_sources(root, project_sources(document, name), registry=document)}
 
 
-def check_project(root, name):
+def check_project(root, name, *, category="plugin"):
+    from .strict_yaml import load
+    catalog = _catalog(root)
+    if catalog is not None:
+        info = inspect_project(root, name, category=category)
+        checked_templates = []
+        for paths in info["config_templates"].values():
+            for relative in paths:
+                reference = f"{category}://{name}/{relative}"
+                path = catalog.config_path(reference)
+                if not path.is_file():
+                    raise ConfigReferenceError(f"{category} {name} is missing its configuration template: {relative}")
+                load(path)
+                checked_templates.append(reference)
+        variants = []
+        for item in info["variants"]:
+            if item["kind"] != "policy":
+                raise ConfigCompatibilityError(f"SDK control checking is not supported yet for {category}/{item['kind']}")
+            from ovlab_policy_sdk.plugin import PolicyPlugin
+            implementation = catalog.load_provider(item["provider_ref"], expected_kind="policy", api_version="1", contract=PolicyPlugin)
+            variants.append({"id": item["id"], "config_type": item["config_type"], "api_version": implementation.api_version})
+        return {"id": name, "valid": True, "category": category, "kind": info["kind"],
+                "checks": ["manifest", "configuration_templates", *(["sdk_control_api"] if variants else [])],
+                "templates": checked_templates, "variants": variants, "runtime_tested": False,
+                "model_loaded": False}
     document = registry_document(root)
     plugins = project_plugins(root, name, registry=document)
     metadata = document["projects"][name]
@@ -63,18 +124,16 @@ def check_project(root, name):
         raise ConfigCompatibilityError(f"policy plugin {name} declares no policy variants")
     project = project_root(name, root, document)
     configs = _inside(project, metadata["configs_root"], "plugin configuration root")
-    from .strict_yaml import load
     checked_templates = []
-    for category, paths in metadata.get("config_templates", {}).items():
+    for template_category, paths in metadata.get("config_templates", {}).items():
         for relative in paths:
             path = _inside(configs, relative, "plugin configuration template")
             if not path.is_file():
-                raise ConfigReferenceError(f"plugin {name} is missing its {category} template: {relative}")
+                raise ConfigReferenceError(f"plugin {name} is missing its {template_category} template: {relative}")
             load(path)
             checked_templates.append(f"plugin://{name}/{relative}")
     variants = [{"id": plugin.descriptor["id"], "config_type": plugin.descriptor["config_type"],
                  "api_version": plugin.implementation.api_version} for plugin in plugins]
     return {"id": name, "valid": True, "kind": metadata.get("kind", "policy"),
             "checks": ["manifest", "configuration_templates", "sdk_control_api"],
-            "templates": checked_templates, "variants": variants,
-            "runtime_tested": False, "model_loaded": False}
+            "templates": checked_templates, "variants": variants, "runtime_tested": False, "model_loaded": False}

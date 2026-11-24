@@ -1,7 +1,5 @@
 {
-  "schema_version": "ovlab.plugin/v1",
-  "api_version": "1",
-  "kind": "policy",
+  "schema_version": "ovlab.extension/v1",
   "version": "0.2.0",
   "id": "openvla",
   "description": "OpenVLA policy, full and LoRA training integration for OVLAB.",
@@ -17,8 +15,76 @@
       "path": "../_shared/openvla-support"
     }
   },
-  "plugins": {
-    "openvla_vanilla": {
+  "builds": {
+    "policy-openvla": {
+      "dockerfile": "docker/Dockerfile.openvla",
+      "image": "ovlab-policy-openvla:local",
+      "sources": [
+        "openvla",
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/openvla.pylock.toml",
+        "locks/openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "training-openvla": {
+      "dockerfile": "docker/Dockerfile.training-openvla",
+      "image": "ovlab-training-openvla:local",
+      "sources": [
+        "openvla",
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/training-runtime-base.pylock.toml",
+        "locks/training-runtime-base.requirements.txt",
+        "locks/training-openvla.pylock.toml",
+        "locks/training-openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "finalizer-openvla": {
+      "dockerfile": "docker/Dockerfile.finalizer",
+      "image": "ovlab-finalizer-openvla:local",
+      "sources": [
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/finalizer.pylock.toml",
+        "locks/finalizer.requirements.txt"
+      ]
+    }
+  },
+  "configs": {
+    "root": "configs",
+    "checkpoints": [
+      "registry/default.yaml"
+    ],
+    "templates": {
+      "evaluate": [
+        "evaluate/default.yaml"
+      ],
+      "train": [
+        "train/default.yaml"
+      ]
+    }
+  },
+  "capabilities": {
+    "policy": {
+      "supported": true
+    },
+    "training": {
+      "supported": true
+    }
+  },
+  "category": "plugin",
+  "providers": {
+    "vanilla": {
+      "kind": "policy",
+      "api_version": "1",
       "config_type": "openvla_vanilla",
       "id": "vanilla",
       "family": "openvla",
@@ -131,9 +197,51 @@
       },
       "control_sources": [
         "openvla-support"
-      ]
+      ],
+      "training": {
+        "entrypoint": "ovlab_openvla_training.plugin:plugin",
+        "implementations": [
+          "openvla-reference"
+        ],
+        "expected_loaders": [
+          "ovlab-openvla-vanilla",
+          "ovlab-openvla-peft"
+        ],
+        "images": {
+          "openvla-reference": {
+            "role": "training-openvla",
+            "image": "ovlab-training-openvla:local",
+            "image_env": "OVLAB_TRAINING_IMAGE"
+          }
+        },
+        "modules": {
+          "training_runs": "ovlab_openvla_training.training_runs",
+          "training_data": "ovlab_openvla_training.training_data",
+          "training_evidence": "ovlab_openvla_training.training_evidence",
+          "training_quic": "ovlab_openvla_training.training_quic",
+          "quic_experiments": "ovlab_openvla_training.quic_experiments",
+          "checkpoint_preparation": "ovlab_openvla_training.checkpoint_preparation",
+          "workflow_checkpoints": "ovlab_openvla_training.workflow_checkpoints"
+        },
+        "finalizer": {
+          "role": "finalizer-openvla",
+          "image": "ovlab-finalizer-openvla:local",
+          "image_env": "OVLAB_FINALIZER_IMAGE"
+        }
+      },
+      "preparation": {
+        "entrypoint": "ovlab_openvla_training.plugin:preparer",
+        "expected_loaders": [
+          "ovlab-openvla-peft"
+        ],
+        "converter_version": "ovlab-dense-inference/v1",
+        "image_capability_label": "io.github.ovlab.checkpoint-preparation",
+        "image_capability": "lora-merge-v1"
+      }
     },
-    "openvla_lora_merged": {
+    "lora": {
+      "kind": "policy",
+      "api_version": "1",
       "config_type": "openvla_lora_merged",
       "id": "lora",
       "family": "lora",
@@ -256,112 +364,47 @@
       },
       "control_sources": [
         "openvla-support"
-      ]
-    }
-  },
-  "builds": {
-    "policy-openvla": {
-      "dockerfile": "docker/Dockerfile.openvla",
-      "image": "ovlab-policy-openvla:local",
-      "sources": [
-        "openvla",
-        "openvla-support"
       ],
-      "locks": [
-        "locks/openvla.pylock.toml",
-        "locks/openvla.requirements.txt",
-        "locks/flash-attn.pylock.toml",
-        "locks/flash-attn.requirements.txt"
-      ]
-    },
-    "training-openvla": {
-      "dockerfile": "docker/Dockerfile.training-openvla",
-      "image": "ovlab-training-openvla:local",
-      "sources": [
-        "openvla",
-        "openvla-support"
-      ],
-      "locks": [
-        "locks/training-runtime-base.pylock.toml",
-        "locks/training-runtime-base.requirements.txt",
-        "locks/training-openvla.pylock.toml",
-        "locks/training-openvla.requirements.txt",
-        "locks/flash-attn.pylock.toml",
-        "locks/flash-attn.requirements.txt"
-      ]
-    },
-    "finalizer-openvla": {
-      "dockerfile": "docker/Dockerfile.finalizer",
-      "image": "ovlab-finalizer-openvla:local",
-      "sources": [
-        "openvla-support"
-      ],
-      "locks": [
-        "locks/finalizer.pylock.toml",
-        "locks/finalizer.requirements.txt"
-      ]
-    }
-  },
-  "configs": {
-    "root": "configs",
-    "checkpoints": [
-      "registry/default.yaml"
-    ],
-    "templates": {
-      "evaluate": [
-        "evaluate/default.yaml"
-      ],
-      "train": [
-        "train/default.yaml"
-      ]
-    }
-  },
-  "capabilities": {
-    "policy": {
-      "supported": true
-    },
-    "training": {
-      "supported": true
-    }
-  },
-  "training": {
-    "entrypoint": "ovlab_openvla_training.plugin:plugin",
-    "implementations": [
-      "openvla-reference"
-    ],
-    "expected_loaders": [
-      "ovlab-openvla-vanilla",
-      "ovlab-openvla-peft"
-    ],
-    "images": {
-      "openvla-reference": {
-        "role": "training-openvla",
-        "image": "ovlab-training-openvla:local",
-        "image_env": "OVLAB_TRAINING_IMAGE"
+      "training": {
+        "entrypoint": "ovlab_openvla_training.plugin:plugin",
+        "implementations": [
+          "openvla-reference"
+        ],
+        "expected_loaders": [
+          "ovlab-openvla-vanilla",
+          "ovlab-openvla-peft"
+        ],
+        "images": {
+          "openvla-reference": {
+            "role": "training-openvla",
+            "image": "ovlab-training-openvla:local",
+            "image_env": "OVLAB_TRAINING_IMAGE"
+          }
+        },
+        "modules": {
+          "training_runs": "ovlab_openvla_training.training_runs",
+          "training_data": "ovlab_openvla_training.training_data",
+          "training_evidence": "ovlab_openvla_training.training_evidence",
+          "training_quic": "ovlab_openvla_training.training_quic",
+          "quic_experiments": "ovlab_openvla_training.quic_experiments",
+          "checkpoint_preparation": "ovlab_openvla_training.checkpoint_preparation",
+          "workflow_checkpoints": "ovlab_openvla_training.workflow_checkpoints"
+        },
+        "finalizer": {
+          "role": "finalizer-openvla",
+          "image": "ovlab-finalizer-openvla:local",
+          "image_env": "OVLAB_FINALIZER_IMAGE"
+        }
+      },
+      "preparation": {
+        "entrypoint": "ovlab_openvla_training.plugin:preparer",
+        "expected_loaders": [
+          "ovlab-openvla-peft"
+        ],
+        "converter_version": "ovlab-dense-inference/v1",
+        "image_capability_label": "io.github.ovlab.checkpoint-preparation",
+        "image_capability": "lora-merge-v1"
       }
-    },
-    "modules": {
-      "training_runs": "ovlab_openvla_training.training_runs",
-      "training_data": "ovlab_openvla_training.training_data",
-      "training_evidence": "ovlab_openvla_training.training_evidence",
-      "training_quic": "ovlab_openvla_training.training_quic",
-      "quic_experiments": "ovlab_openvla_training.quic_experiments",
-      "checkpoint_preparation": "ovlab_openvla_training.checkpoint_preparation",
-      "workflow_checkpoints": "ovlab_openvla_training.workflow_checkpoints"
-    },
-    "finalizer": {
-      "role": "finalizer-openvla",
-      "image": "ovlab-finalizer-openvla:local",
-      "image_env": "OVLAB_FINALIZER_IMAGE"
     }
-  },
-  "preparation": {
-    "entrypoint": "ovlab_openvla_training.plugin:preparer",
-    "expected_loaders": [
-      "ovlab-openvla-peft"
-    ],
-    "converter_version": "ovlab-dense-inference/v1",
-    "image_capability_label": "io.github.ovlab.checkpoint-preparation",
-    "image_capability": "lora-merge-v1"
   }
 }

@@ -31,7 +31,7 @@ def deployment_workspace(tmp_path_factory):
     shutil.copytree(ROOT / "deploy/compose", root / "deploy/compose")
     (root / "configs/plugins").mkdir(parents=True)
     registry = json.loads((ROOT / "plugins/registry.json").read_text())
-    for entry in registry["plugins"].values():
+    for entry in registry["projects"].values():
         entry["source"]["path"] = str(ROOT / entry["source"]["path"])
     (root / "configs/plugins/registry.json").write_text(json.dumps(registry))
     write_evaluation_fixtures(root, root / "configs/.packaging")

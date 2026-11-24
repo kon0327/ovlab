@@ -95,7 +95,7 @@ def _strings(value, label):
     return value
 
 
-def expand_projects(document, root, *, offline=False):
+def expand_projects(document, root, *, offline=False, catalog=None):
     """Convert compact project registrations into the common runtime registry."""
     registrations = document.get("plugins", {})
     if not isinstance(registrations, dict):
@@ -112,9 +112,12 @@ def expand_projects(document, root, *, offline=False):
         if set(registration) - {"source", "manifest", "offline"} or type(registration.get("offline", False)) is not bool:
             raise ConfigSchemaError(f"plugin {name} has invalid project registration fields")
         source = deepcopy(_source(registration["source"]))
-        project = acquire_project(root, name, source, offline=offline or registration.get("offline", False))
+        project = (catalog.project_root(name) if catalog is not None else
+                   acquire_project(root, name, source, offline=offline or registration.get("offline", False)))
         manifest_name = registration.get("manifest", "plugin.json")
         manifest = read_document(_inside(project, manifest_name, "plugin manifest"))
+        from .extension_compat import policy_manifest
+        manifest = policy_manifest(manifest)
         if (manifest.get("schema_version") != "ovlab.plugin/v1" or manifest.get("api_version") != "1"
                 or manifest.get("kind") != "policy" or manifest.get("id") != name):
             raise ConfigSchemaError(f"plugin {name} requires a matching policy manifest with SDK API 1")
@@ -263,6 +266,12 @@ def control_source_root(name, root, registry, *, acquire=True):
 
 def register_project(root, location, *, commit=None, registry_path=None, dry_run=False):
     """Add a complete project after validating its manifest and registrations."""
+    candidate = Path(location).expanduser()
+    candidate = candidate if candidate.is_absolute() else Path(root) / candidate
+    for manifest_name in ('extension.json', 'plugin.json'):
+        manifest_path = candidate / manifest_name
+        if manifest_path.is_file() and read_document(manifest_path).get('schema_version') == 'ovlab.extension/v1':
+            return register_extension_project(root, location, commit=commit, registry_path=registry_path, dry_run=dry_run)
     root = Path(root).resolve()
     path = Path(location).expanduser()
     local = path if path.is_absolute() else root / path
@@ -322,3 +331,63 @@ def register_project(root, location, *, commit=None, registry_path=None, dry_run
     return {"project": name, "registry": str(target), "source": source,
             "policy_types": [key for key, value in expanded["plugins"].items() if value.get("project") == name],
             "side_effects_performed": not dry_run}
+
+
+def register_extension_project(root, location, *, commit=None, registry_path=None,
+                               dry_run=False, category='plugin'):
+    """Register one explicitly acquired project in the shared extension registry."""
+    from .extensions import ExtensionCatalog, acquire_manifest, registry_path as default_registry
+    root = Path(root).resolve()
+    local = Path(location).expanduser()
+    local = local if local.is_absolute() else root / local
+    manifest_name = 'extension.json'
+    if local.is_dir() and commit is None:
+        if not (local / manifest_name).is_file() and (local / 'plugin.json').is_file():
+            manifest_name = 'plugin.json'
+        manifest = read_document(local / manifest_name)
+        if manifest.get('schema_version') != 'ovlab.extension/v1':
+            if category == 'plugin':
+                return register_project(root, location, registry_path=registry_path, dry_run=dry_run)
+            raise ConfigSchemaError('module registration requires an ovlab.extension/v1 manifest')
+        source = {'kind': 'local', 'path': str(local.resolve())}
+    else:
+        source = {'kind': 'git', 'url': str(location), 'commit': commit}
+        _source(source)
+        if dry_run:
+            return {'project': None, 'source': source, 'category': category,
+                    'action': 'acquire-manifest-and-register', 'side_effects_performed': False}
+        _, manifest = acquire_manifest(root, source, manifest_name)
+    name = manifest.get('id')
+    if manifest.get('category') != category:
+        raise ConfigCompatibilityError(f'expected a {category} project, found {manifest.get("category")!r}')
+    target = Path(registry_path).expanduser() if registry_path else root / 'configs/extensions/registry.json'
+    target = target if target.is_absolute() else root / target
+    document = read_document(target) if target.is_file() else read_document(default_registry(root))
+    if document.get('schema_version') != 'ovlab.extensions/v1':
+        raise ConfigCompatibilityError('extension registration requires an ovlab.extensions/v1 registry')
+    registration = {'source': source, 'manifest': manifest_name}
+    existing = document['projects'].get(name)
+    if existing is not None:
+        prior = deepcopy(existing)
+        if prior.get('source', {}).get('kind') == source['kind'] == 'local':
+            original = Path(prior['source']['path']).expanduser()
+            prior['source']['path'] = str((original if original.is_absolute() else root / original).resolve())
+        if prior != registration:
+            raise ConfigCompatibilityError(f'extension {name} is already registered with another source')
+    document['projects'][name] = existing or registration
+    catalog = ExtensionCatalog(root, document=document)
+    checked = catalog.project_manifest(name)
+    if not dry_run:
+        import os
+        import tempfile
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(prefix='.extension-registry-', dir=target.parent)
+        try:
+            with os.fdopen(descriptor, 'w') as stream:
+                json.dump(document, stream, indent=2)
+                stream.write('\n')
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    return {'project': name, 'category': category, 'registry': str(target), 'source': source,
+            'providers': list(checked['providers']), 'side_effects_performed': not dry_run}

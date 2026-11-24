@@ -1,7 +1,5 @@
 {
-  "schema_version": "ovlab.plugin/v1",
-  "api_version": "1",
-  "kind": "policy",
+  "schema_version": "ovlab.extension/v1",
   "version": "0.2.0",
   "id": "openvla-quic",
   "description": "OpenVLA-QuIC policy and adapter training integration for OVLAB.",
@@ -23,8 +21,76 @@
       "path": "../_shared/openvla-support"
     }
   },
-  "plugins": {
-    "openvla_quic": {
+  "builds": {
+    "policy-openvla-quic": {
+      "dockerfile": "docker/Dockerfile.openvla-quic",
+      "image": "ovlab-policy-openvla-quic:local",
+      "sources": [
+        "openvla-quic",
+        "quic-peft-vla",
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/quic-openvla.pylock.toml",
+        "locks/quic-openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "training-openvla-quic": {
+      "dockerfile": "docker/Dockerfile.training-openvla-quic",
+      "image": "ovlab-training-openvla-quic:local",
+      "sources": [
+        "openvla-quic",
+        "quic-peft-vla",
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/quic-openvla.pylock.toml",
+        "locks/quic-openvla.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    },
+    "finalizer-openvla-quic": {
+      "dockerfile": "docker/Dockerfile.finalizer",
+      "image": "ovlab-finalizer-openvla-quic:local",
+      "sources": [
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/finalizer.pylock.toml",
+        "locks/finalizer.requirements.txt"
+      ]
+    }
+  },
+  "configs": {
+    "root": "configs",
+    "checkpoints": [
+      "registry/default.yaml"
+    ],
+    "templates": {
+      "evaluate": [
+        "evaluate/default.yaml"
+      ],
+      "train": [
+        "train/default.yaml"
+      ]
+    }
+  },
+  "capabilities": {
+    "policy": {
+      "supported": true
+    },
+    "training": {
+      "supported": true
+    }
+  },
+  "category": "plugin",
+  "providers": {
+    "quic-peft": {
+      "kind": "policy",
+      "api_version": "1",
       "config_type": "openvla_quic",
       "id": "quic-peft",
       "family": "openvla_quic",
@@ -156,102 +222,37 @@
       "artifact_forms": [
         "merged_full_weights",
         "multiplicative_adapter"
-      ]
-    }
-  },
-  "builds": {
-    "policy-openvla-quic": {
-      "dockerfile": "docker/Dockerfile.openvla-quic",
-      "image": "ovlab-policy-openvla-quic:local",
-      "sources": [
-        "openvla-quic",
-        "quic-peft-vla",
-        "openvla-support"
       ],
-      "locks": [
-        "locks/quic-openvla.pylock.toml",
-        "locks/quic-openvla.requirements.txt",
-        "locks/flash-attn.pylock.toml",
-        "locks/flash-attn.requirements.txt"
-      ]
-    },
-    "training-openvla-quic": {
-      "dockerfile": "docker/Dockerfile.training-openvla-quic",
-      "image": "ovlab-training-openvla-quic:local",
-      "sources": [
-        "openvla-quic",
-        "quic-peft-vla",
-        "openvla-support"
-      ],
-      "locks": [
-        "locks/quic-openvla.pylock.toml",
-        "locks/quic-openvla.requirements.txt",
-        "locks/flash-attn.pylock.toml",
-        "locks/flash-attn.requirements.txt"
-      ]
-    },
-    "finalizer-openvla-quic": {
-      "dockerfile": "docker/Dockerfile.finalizer",
-      "image": "ovlab-finalizer-openvla-quic:local",
-      "sources": [
-        "openvla-support"
-      ],
-      "locks": [
-        "locks/finalizer.pylock.toml",
-        "locks/finalizer.requirements.txt"
-      ]
-    }
-  },
-  "configs": {
-    "root": "configs",
-    "checkpoints": [
-      "registry/default.yaml"
-    ],
-    "templates": {
-      "evaluate": [
-        "evaluate/default.yaml"
-      ],
-      "train": [
-        "train/default.yaml"
-      ]
-    }
-  },
-  "capabilities": {
-    "policy": {
-      "supported": true
-    },
-    "training": {
-      "supported": true
-    }
-  },
-  "training": {
-    "entrypoint": "ovlab_openvla_training.plugin:plugin",
-    "implementations": [
-      "openvla-quic"
-    ],
-    "expected_loaders": [
-      "ovlab-openvla-quic"
-    ],
-    "images": {
-      "openvla-quic": {
-        "role": "training-openvla-quic",
-        "image": "ovlab-training-openvla-quic:local",
-        "image_env": "OVLAB_TRAINING_QUIC_IMAGE"
+      "training": {
+        "entrypoint": "ovlab_openvla_training.plugin:plugin",
+        "implementations": [
+          "openvla-quic"
+        ],
+        "expected_loaders": [
+          "ovlab-openvla-quic"
+        ],
+        "images": {
+          "openvla-quic": {
+            "role": "training-openvla-quic",
+            "image": "ovlab-training-openvla-quic:local",
+            "image_env": "OVLAB_TRAINING_QUIC_IMAGE"
+          }
+        },
+        "modules": {
+          "training_runs": "ovlab_openvla_training.training_runs",
+          "training_data": "ovlab_openvla_training.training_data",
+          "training_evidence": "ovlab_openvla_training.training_evidence",
+          "training_quic": "ovlab_openvla_training.training_quic",
+          "quic_experiments": "ovlab_openvla_training.quic_experiments",
+          "checkpoint_preparation": "ovlab_openvla_training.checkpoint_preparation",
+          "workflow_checkpoints": "ovlab_openvla_training.workflow_checkpoints"
+        },
+        "finalizer": {
+          "role": "finalizer-openvla-quic",
+          "image": "ovlab-finalizer-openvla-quic:local",
+          "image_env": "OVLAB_FINALIZER_QUIC_IMAGE"
+        }
       }
-    },
-    "modules": {
-      "training_runs": "ovlab_openvla_training.training_runs",
-      "training_data": "ovlab_openvla_training.training_data",
-      "training_evidence": "ovlab_openvla_training.training_evidence",
-      "training_quic": "ovlab_openvla_training.training_quic",
-      "quic_experiments": "ovlab_openvla_training.quic_experiments",
-      "checkpoint_preparation": "ovlab_openvla_training.checkpoint_preparation",
-      "workflow_checkpoints": "ovlab_openvla_training.workflow_checkpoints"
-    },
-    "finalizer": {
-      "role": "finalizer-openvla-quic",
-      "image": "ovlab-finalizer-openvla-quic:local",
-      "image_env": "OVLAB_FINALIZER_QUIC_IMAGE"
     }
   }
 }

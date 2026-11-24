@@ -1,7 +1,5 @@
 {
-  "schema_version": "ovlab.plugin/v1",
-  "api_version": "1",
-  "kind": "policy",
+  "schema_version": "ovlab.extension/v1",
   "version": "0.2.0",
   "id": "openvla-oft",
   "description": "OpenVLA-OFT policy integration for OVLAB.",
@@ -17,8 +15,46 @@
       "path": "../_shared/openvla-support"
     }
   },
-  "plugins": {
-    "openvla_oft": {
+  "builds": {
+    "policy-openvla-oft": {
+      "dockerfile": "docker/Dockerfile.openvla-oft",
+      "image": "ovlab-policy-openvla-oft:local",
+      "sources": [
+        "openvla-oft",
+        "openvla-support"
+      ],
+      "locks": [
+        "locks/openvla-oft.pylock.toml",
+        "locks/openvla-oft.requirements.txt",
+        "locks/flash-attn.pylock.toml",
+        "locks/flash-attn.requirements.txt"
+      ]
+    }
+  },
+  "configs": {
+    "root": "configs",
+    "checkpoints": [
+      "registry/default.yaml"
+    ],
+    "templates": {
+      "evaluate": [
+        "evaluate/default.yaml"
+      ]
+    }
+  },
+  "capabilities": {
+    "policy": {
+      "supported": true
+    },
+    "training": {
+      "supported": false
+    }
+  },
+  "category": "plugin",
+  "providers": {
+    "openvla-oft": {
+      "kind": "policy",
+      "api_version": "1",
       "config_type": "openvla_oft",
       "id": "openvla-oft",
       "family": "openvla_oft",
@@ -132,41 +168,6 @@
       "control_sources": [
         "openvla-support"
       ]
-    }
-  },
-  "builds": {
-    "policy-openvla-oft": {
-      "dockerfile": "docker/Dockerfile.openvla-oft",
-      "image": "ovlab-policy-openvla-oft:local",
-      "sources": [
-        "openvla-oft",
-        "openvla-support"
-      ],
-      "locks": [
-        "locks/openvla-oft.pylock.toml",
-        "locks/openvla-oft.requirements.txt",
-        "locks/flash-attn.pylock.toml",
-        "locks/flash-attn.requirements.txt"
-      ]
-    }
-  },
-  "configs": {
-    "root": "configs",
-    "checkpoints": [
-      "registry/default.yaml"
-    ],
-    "templates": {
-      "evaluate": [
-        "evaluate/default.yaml"
-      ]
-    }
-  },
-  "capabilities": {
-    "policy": {
-      "supported": true
-    },
-    "training": {
-      "supported": false
     }
   }
 }

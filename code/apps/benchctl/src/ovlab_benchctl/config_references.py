@@ -34,6 +34,19 @@ class ConfigReferences:
             roots.update({path.name: path.resolve() for path in frozen.iterdir() if path.is_dir()})
         return roots
 
+    def module_roots(self):
+        from .extensions import ExtensionCatalog
+        from .policy_plugins import registry_path
+        roots = {}
+        path = registry_path(self.repository_root)
+        from .plugin_projects import read_document
+        if read_document(path).get("schema_version") == "ovlab.extensions/v1":
+            roots = ExtensionCatalog(self.repository_root, registry_path=path).config_roots(category="module")
+        frozen = self.config_root / "modules/configs"
+        if self.is_frozen and frozen.is_dir():
+            roots.update({path.name: path.resolve() for path in frozen.iterdir() if path.is_dir()})
+        return roots
+
     @staticmethod
     def _uri(reference, scheme):
         parsed = urlsplit(reference)
@@ -53,12 +66,25 @@ class ConfigReferences:
         return name, relative
 
     @classmethod
+    def module_parts(cls, reference):
+        name, relative = cls._uri(reference, "module")
+        if not relative:
+            raise ConfigReferenceError(f"invalid module configuration path: {reference}")
+        return name, relative
+
+    @classmethod
     def builtin_parts(cls, reference):
         name, relative = cls._uri(reference, "ovlab")
         return name + ("/" + relative if relative else "")
 
     def source(self, reference):
         reference = str(reference)
+        if reference.startswith("module:"):
+            name, relative = self.module_parts(reference)
+            roots = self.module_roots()
+            if name not in roots:
+                raise ConfigReferenceError(f"unknown module configuration owner: {name}")
+            return self.inside(roots[name] / relative, roots[name], "module configuration")
         if reference.startswith("plugin:"):
             from .policy_plugins import plugin_config_path
             name, relative = self.plugin_parts(reference)
@@ -75,6 +101,8 @@ class ConfigReferences:
             raise ConfigReferenceError(f"configuration reference must be relative: {reference}")
         if path.parts[:2] == ("plugins", "configs") and len(path.parts) > 3:
             return self.source("plugin://" + path.parts[2] + "/" + "/".join(path.parts[3:]))
+        if path.parts[:2] == ("modules", "configs") and len(path.parts) > 3:
+            return self.source("module://" + path.parts[2] + "/" + "/".join(path.parts[3:]))
         if path.parts and path.parts[0] == "ovlab":
             return self.source("ovlab://" + "/".join(path.parts[1:]))
         reference = reference.removeprefix("configs/")
@@ -103,6 +131,9 @@ class ConfigReferences:
 
     def origin(self, path):
         path = Path(path).resolve()
+        for root in self.module_roots().values():
+            if path.is_relative_to(root):
+                return root
         frozen = self._frozen_reference(path)
         if frozen:
             return frozen[1]
@@ -118,6 +149,9 @@ class ConfigReferences:
 
     def reference(self, path):
         path = Path(path).resolve()
+        for name, root in self.module_roots().items():
+            if path.is_relative_to(root):
+                return f"module://{name}/{path.relative_to(root).as_posix()}"
         frozen = self._frozen_reference(path)
         if frozen:
             name, _, relative = frozen
@@ -136,6 +170,9 @@ class ConfigReferences:
 
     def portable(self, reference):
         reference = str(reference)
+        if reference.startswith("module:"):
+            name, relative = self.module_parts(reference)
+            return f"modules/configs/{name}/{relative}"
         if reference.startswith("plugin:"):
             name, relative = self.plugin_parts(reference)
             return f"plugins/configs/{name}/{relative}"
@@ -145,6 +182,9 @@ class ConfigReferences:
 
     def bundle_path(self, path):
         reference = self.reference(path)
+        if reference.startswith("module:"):
+            name, relative = self.module_parts(reference)
+            return f"modules/configs/{name}/{relative}"
         if reference.startswith("plugin:"):
             name, relative = self.plugin_parts(reference)
             return f"plugins/configs/{name}/{relative}"
@@ -155,7 +195,7 @@ class ConfigReferences:
     def parent(self, path, reference):
         if not isinstance(reference, str) or not reference:
             raise ConfigReferenceError(f"{path}.extends must be a non-empty relative path or configuration URI")
-        if reference.startswith(("plugin:", "ovlab:")):
+        if reference.startswith(("plugin:", "module:", "ovlab:")):
             return self.source(reference)
         if Path(reference).is_absolute() or "://" in reference:
             raise ConfigReferenceError(f"{path}.extends must be relative or an explicit configuration URI")

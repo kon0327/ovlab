@@ -38,7 +38,7 @@ def workspace(tmp_path):
     (root / "experiments").mkdir()
     shutil.copytree(REPOSITORY / "config", root / "config")
     registry = json.loads((REPOSITORY / "plugins/registry.json").read_text())
-    for entry in registry["plugins"].values():
+    for entry in registry["projects"].values():
         entry["source"]["path"] = str(REPOSITORY / entry["source"]["path"])
     (root / "configs/plugins/registry.json").write_text(json.dumps(registry))
     return root
@@ -193,6 +193,7 @@ def test_merged_weights_cannot_be_configured_as_vanilla(workspace, tmp_path):
     experiment = scenario(workspace, model="lora")
     policy = resolver(workspace).load_component("plugin://openvla/policy/lora.yaml", "policy")
     policy["type"] = "openvla_vanilla"
+    policy["provider"] = "plugin:policy:openvla/vanilla"
     write(workspace, "configs/policy/local.yaml", policy)
     with pytest.raises(ConfigCompatibilityError, match="cannot be classified.*Vanilla"):
         resolve(workspace, experiment, tmp_path)

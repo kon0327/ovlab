@@ -137,7 +137,7 @@ class ConfigResolver:
         execution_profile: str | Path | None = None,
         environment=None,
     ) -> ResolvedExperimentConfig:
-        experiment_path = (self.references.source(str(experiment)) if str(experiment).startswith(("plugin:", "ovlab:"))
+        experiment_path = (self.references.source(str(experiment)) if str(experiment).startswith(("plugin:", "module:", "ovlab:"))
                            else Path(experiment))
         if not experiment_path.is_absolute(): experiment_path = self.repository_root / experiment_path
         self.references.origin(experiment_path)
@@ -157,7 +157,7 @@ class ConfigResolver:
         registry_path = self._root_reference(experiment_doc["resources"]["registry"], "resources.registry")
         registry = self._load_composed(registry_path, "resource_registry")
         profile_path = (self.references.source(str(local_profile))
-                        if str(local_profile).startswith(("ovlab:", "plugin:")) else Path(local_profile))
+                        if str(local_profile).startswith(("ovlab:", "plugin:", "module:")) else Path(local_profile))
         if not profile_path.is_absolute(): profile_path = self.repository_root / profile_path
         profile = load(profile_path.resolve()); validate(profile, str(profile_path), "local_profile")
 
@@ -239,7 +239,7 @@ class ConfigResolver:
                 "egl": "ovlab://profiles/egl.yaml",
                 "glfw": "ovlab://profiles/glfw.yaml",
             }[configured_renderer]
-            if str(reference).startswith(("ovlab:", "plugin:")):
+            if str(reference).startswith(("ovlab:", "plugin:", "module:")):
                 execution_profile_path = self._root_reference(str(reference), "execution_profile")
             elif Path(reference).is_absolute():
                 execution_profile_path = Path(reference)
@@ -268,7 +268,7 @@ class ConfigResolver:
         benchmark = self._benchmark(components["benchmark"], protocol, renderer)
         from .policy_plugins import plugin_for_type, call_plugin
         if components["policy"]["type"] != "mock":
-            plugin = plugin_for_type(components["policy"]["type"], self.repository_root)
+            plugin = plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider"))
             resources.update(call_plugin(plugin, "runtime_resources", components["policy"], self.repository_root, values))
         policy = self._policy(components["policy"], components["benchmark"], action_spec, resolved_checkpoints, devices, environment=values)
         metrics = self._metrics(components["metrics"])
@@ -337,7 +337,7 @@ class ConfigResolver:
         deployment = experiment.get("deployment")
         if deployment is not None:
             from .policy_plugins import plugin_for_type
-            expected_profile = plugin_for_type(components["policy"]["type"], self.repository_root).descriptor.get("deployment", {}).get("profile")
+            expected_profile = plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider")).descriptor.get("deployment", {}).get("profile")
             if expected_profile is None:
                 raise ConfigCompatibilityError(
                     f"policy type {components['policy']['type']!r} has no deployment profile"
@@ -355,7 +355,7 @@ class ConfigResolver:
             raise ConfigCompatibilityError("action interface differs from LiberoBenchmarkAdapter's verified ActionSpec")
         if components["policy"]["type"] != "mock":
             from .policy_plugins import plugin_for_type, call_plugin
-            call_plugin(plugin_for_type(components["policy"]["type"], self.repository_root), "validate_observation", components["policy"], components["benchmark"])
+            call_plugin(plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider")), "validate_observation", components["policy"], components["benchmark"])
 
     @staticmethod
     def _action_spec(doc):
@@ -428,7 +428,7 @@ class ConfigResolver:
             return MockPolicySettings(settings["horizon"], settings["deterministic"], settings["input"]["camera"], settings["input"]["proprioception"], action_spec, settings["raw_output"]["enabled"])
         from .policy_plugins import plugin_for_type, call_plugin
         values = dict(os.environ if environment is None else environment)
-        resolved = call_plugin(plugin_for_type(doc["type"], self.repository_root), "resolve_settings", doc, benchmark_doc, action_spec, checkpoints, devices, repository_root=self.repository_root, environment=values)
+        resolved = call_plugin(plugin_for_type(doc["type"], self.repository_root, provider=doc.get("provider")), "resolve_settings", doc, benchmark_doc, action_spec, checkpoints, devices, repository_root=self.repository_root, environment=values)
         if type(getattr(resolved, "record_raw_output", None)) is not bool:
             raise ConfigCompatibilityError(f"plugin {doc['type']} settings must expose boolean record_raw_output")
         return resolved

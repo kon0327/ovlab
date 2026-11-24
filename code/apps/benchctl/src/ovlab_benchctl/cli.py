@@ -148,6 +148,19 @@ def _parser() -> argparse.ArgumentParser:
                                  help="sync and build from the development external/ workspace")
         _output_options(command)
 
+    module = commands.add_parser("module", help="register, inspect and check functionality modules")
+    module_commands = module.add_subparsers(dest="module_command", required=True)
+    for operation in ("list", "inspect", "check", "register"):
+        command = module_commands.add_parser(operation)
+        if operation == "register":
+            command.add_argument("source")
+            command.add_argument("--commit")
+            command.add_argument("--dry-run", action="store_true")
+        elif operation != "list":
+            command.add_argument("module")
+        command.add_argument("--registry")
+        _output_options(command)
+
     experiment = commands.add_parser("experiment", help="plan and run hierarchical YAML or JSON experiments")
     experiment_commands = experiment.add_subparsers(dest="experiment_command", required=True)
     for operation in ("plan", "run"):
@@ -474,7 +487,7 @@ def _application():
 def _command_name(args) -> str:
     parts = [args.command]
     for name in (
-        "config_command", "plugin_command", "worker_command", "experiment_command", "eval_command", "deploy_command",
+        "config_command", "plugin_command", "module_command", "worker_command", "experiment_command", "eval_command", "deploy_command",
         "report_command", "export_command",
         "data_command", "dataset_command", "train_command", "ablate_command", "checkpoint_command",
     ):
@@ -903,13 +916,13 @@ def _compact(command: str, result) -> str:
             if check["remedy"]:
                 lines.append(f"  Fix: {check['remedy']}")
         return "\n".join(lines)
-    if command == "plugin list":
+    if command in {"plugin list", "module list"}:
         return _table(result, (
             ("ID", ("id",)), ("KIND", ("kind",)), ("VERSION", ("version",)),
             ("SOURCE", ("source.kind",)), ("LOCATION", ("source.url", "source.path")),
             ("COMMIT", ("source.commit",)), ("VARIANTS", ("variants",)),
         ), empty="No plugin projects found.")
-    if command == "plugin inspect":
+    if command in {"plugin inspect", "module inspect"}:
         lines = ["\n".join(f"{label}  {_scalar(result[label])}" for label in ("id", "kind", "version", "source", "capabilities"))]
         lines.append(_table(result["variants"], (
             ("VARIANT", ("id",)), ("CONFIG TYPE", ("config_type",)), ("RUNTIME", ("runtime_status",)),
@@ -1106,6 +1119,25 @@ def _dispatch(args):
             return json.dumps(document, sort_keys=True, separators=(",", ":")), False, "raw"
         from .strict_yaml import dumps
         return dumps(document), False, "raw"
+    if args.command == "module":
+        from .plugin_catalog import list_projects, inspect_project, check_project
+        from .plugin_projects import register_extension_project
+        from .policy_plugins import registry_scope
+        root = _repository_root()
+        values = dict(os.environ)
+        if args.registry:
+            values["OVLAB_EXTENSION_REGISTRY"] = args.registry
+        with registry_scope(root, values):
+            if args.module_command == "register":
+                result = register_extension_project(root, args.source, commit=args.commit,
+                    registry_path=args.registry, dry_run=args.dry_run, category="module")
+            elif args.module_command == "list":
+                result = list_projects(root, category="module")
+            elif args.module_command == "inspect":
+                result = inspect_project(root, args.module, category="module")
+            else:
+                result = check_project(root, args.module, category="module")
+        return result, args.json, None
     if args.command == "plugin":
         if args.plugin_command == "register":
             from .plugin_projects import register_project
@@ -1119,7 +1151,7 @@ def _dispatch(args):
         values = dict(os.environ)
         if args.registry:
             path = Path(args.registry).expanduser()
-            values["OVLAB_PLUGIN_REGISTRY"] = str(path if path.is_absolute() else root / path)
+            values["OVLAB_EXTENSION_REGISTRY"] = str(path if path.is_absolute() else root / path)
         with registry_scope(root, values, offline=getattr(args, "offline", False) or getattr(args, "dry_run", False)):
             selection = getattr(args, "plugin", None)
             if args.plugin_command == "list":

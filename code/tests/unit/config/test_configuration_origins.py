@@ -65,7 +65,7 @@ def test_partial_model_evaluation_defaults_are_validated_after_user_composition(
     (root / "configs").mkdir()
     (root / "plugins/registry.json").write_text((ROOT / "plugins/registry.json").read_text())
     registration = json.loads((root / "plugins/registry.json").read_text())
-    for name, entry in registration["plugins"].items():
+    for name, entry in registration["projects"].items():
         entry["source"]["path"] = str(ROOT / "plugins" / name)
     (root / "plugins/registry.json").write_text(json.dumps(registration))
     builder = ConfigBundleBuilder(root)
@@ -107,7 +107,7 @@ def test_frozen_model_bundle_contains_shared_control_code_and_builtin_closure(tm
     (root / "plugins").mkdir()
     shutil.copytree(ROOT / "config", root / "config")
     registration = json.loads((ROOT / "plugins/registry.json").read_text())
-    for name, entry in registration["plugins"].items():
+    for name, entry in registration["projects"].items():
         entry["source"]["path"] = str(ROOT / "plugins" / name)
     (root / "plugins/registry.json").write_text(json.dumps(registration))
     scenario = root / "configs/evaluate.yaml"

@@ -76,7 +76,7 @@ class ModelDeployment:
         doc = builder.load_component(reference, "deployment")
         policy = builder.load_component(doc["components"]["policy"], "policy")
         from .policy_plugins import plugin_for_type
-        deployment = plugin_for_type(policy["type"], self.repository_root).descriptor.get("deployment", {})
+        deployment = plugin_for_type(policy["type"], self.repository_root, provider=policy.get("provider")).descriptor.get("deployment", {})
         role = deployment.get("role")
         if role is None:
             raise ConfigCompatibilityError("deployment requires a production policy")
@@ -98,7 +98,7 @@ class ModelDeployment:
             profile = str(profile.resolve())
         normalized = {**doc, "effective_quantization": effective, "published_port": selected_port}
         return ModelDeploymentPlan(
-            doc["id"], (reference if reference.startswith(("plugin:", "ovlab:")) else f"configs/{reference}"), role, doc.get("image", deployment["image"]), doc.get("build", True),
+            doc["id"], (reference if reference.startswith(("plugin:", "module:", "ovlab:")) else f"configs/{reference}"), role, doc.get("image", deployment["image"]), doc.get("build", True),
             settings.get("host", "127.0.0.1"), selected_port, settings.get("container_port", 8000),
             settings.get("restart", "unless-stopped"), settings.get("readiness_timeout_s", 900),
             doc.get("runtime", {}).get("gpu", "all" if deployment.get("gpu", True) else None), effective, selected, offline, profile,
@@ -113,7 +113,7 @@ class ModelDeployment:
         document = builder.load_component(plan.target.removeprefix("configs/"), "deployment")
         policy = builder.load_component(document["components"]["policy"], "policy")
         policy["settings"]["runtime"]["quantization"] = plan.quantization
-        mounts = call_plugin(plugin_for_type(policy["type"], self.repository_root), "runtime_mounts",
+        mounts = call_plugin(plugin_for_type(policy["type"], self.repository_root, provider=policy.get("provider")), "runtime_mounts",
                              policy, self.repository_root, self.environment)
         return validate_runtime_mounts(mounts, check_files=check_files)
 
@@ -399,7 +399,7 @@ def resolve_policy_service(application, path):
         checkpoints[key] = resolved
     from .policy_plugins import plugin_for_type, call_plugin
     settings = policy["settings"]
-    context = call_plugin(plugin_for_type(policy["type"], resolver.repository_root), "deployment_context", policy, doc)
+    context = call_plugin(plugin_for_type(policy["type"], resolver.repository_root, provider=policy.get("provider")), "deployment_context", policy, doc)
     action = resolver.load_component(settings["action"]["action_interface"], "action_interface")
     typed = resolver._policy(policy, context, resolver._action_spec(action), checkpoints, local["devices"], environment=env)
     return SimpleNamespace(policy_type=policy["type"], policy_settings=typed, experiment_id=doc["id"], protocol_settings=SimpleNamespace(base_seed=0))

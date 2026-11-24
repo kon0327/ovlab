@@ -2,6 +2,7 @@
 schema_version: "0.1.0"
 kind: "policy"
 type: "openvla_oft"
+provider: "plugin:policy:openvla-oft/openvla-oft"
 settings:
   checkpoint_id: "openvla-oft-7b-finetuned-libero-10"
   processor_id: "openvla-oft-7b-finetuned-libero-10"

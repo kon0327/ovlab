@@ -84,7 +84,7 @@ def test_bundle_contains_project_code_configs_and_resolves_without_original_proj
     (root / "examples").mkdir()
     shutil.copytree(ROOT / "config", root / "config")
     registry = json.loads((ROOT / "plugins/registry.json").read_text())
-    for item in registry["plugins"].values():
+    for item in registry["projects"].values():
         item["source"]["path"] = str(ROOT / item["source"]["path"])
     (root / "configs/plugins/registry.json").write_text(json.dumps(registry))
     (root / "examples/eval.yaml").write_text(dumps({

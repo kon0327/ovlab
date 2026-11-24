@@ -317,7 +317,7 @@ class ExperimentWorkflow:
         self._cancelled = threading.Event()
 
     def _spec_path(self, reference: str | Path) -> Path:
-        if str(reference).startswith(("plugin:", "ovlab:")):
+        if str(reference).startswith(("plugin:", "module:", "ovlab:")):
             return self.bundle.references.source(str(reference))
         path = Path(reference).expanduser()
         if path.is_absolute():
@@ -371,7 +371,7 @@ class ExperimentWorkflow:
         return self.bundle.load_component(reference, "experiment", validate_document=False)
 
     def _profile_path(self, reference, phase):
-        if str(reference).startswith(("plugin:", "ovlab:")):
+        if str(reference).startswith(("plugin:", "module:", "ovlab:")):
             candidate = self.bundle.references.source(str(reference))
         else:
             path = Path(reference).expanduser()
@@ -392,8 +392,8 @@ class ExperimentWorkflow:
             from .schema import header, mapping
             from .policy_plugins import plugin_for_type, call_plugin
             header(document, reference, "policy", typed=True)
-            mapping(document, reference, required=("schema_version", "kind", "type", "settings"))
-            call_plugin(plugin_for_type(document["type"], self.repository_root),
+            mapping(document, reference, required=("schema_version", "kind", "type", "settings"), optional=("provider",))
+            call_plugin(plugin_for_type(document["type"], self.repository_root, provider=document.get("provider")),
                         "validate_checkpoint_template", document, reference)
         else:
             validate(document, reference, kind, repository_root=self.repository_root)

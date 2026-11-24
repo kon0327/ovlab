@@ -128,7 +128,7 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
             raise ConfigReferenceError("image configuration must be an experiment or deployment")
         document = builder.load_component(reference, kind)
         policy = builder.load_component(document["components"]["policy"], "policy")
-        configured_role = plugin_for_type(policy["type"], root).descriptor.get("deployment", {}).get("role")
+        configured_role = plugin_for_type(policy["type"], root, provider=policy.get("provider")).descriptor.get("deployment", {}).get("role")
         if configured_role not in selected:
             raise ConfigCompatibilityError("selected image roles do not provide the configured policy")
         selected = [role for role in selected if role == configured_role or not registry["builds"][role].get("project")]

@@ -28,7 +28,7 @@ _OFFLINE = ContextVar("ovlab_plugin_project_offline", default=False)
 @contextmanager
 def registry_scope(repository_root, environment=None, *, offline=None):
     token = _ROOT.set(repository_root or _ROOT.get())
-    override = _REGISTRY.set(environment.get("OVLAB_PLUGIN_REGISTRY")) if environment is not None else None
+    override = _REGISTRY.set(environment.get("OVLAB_EXTENSION_REGISTRY") or environment.get("OVLAB_PLUGIN_REGISTRY")) if environment is not None else None
     network = _OFFLINE.set(offline) if offline is not None else None
     try:
         yield
@@ -57,10 +57,13 @@ def _root(repository_root=None):
 def registry_path(repository_root=None):
     root = _root(repository_root)
     selected = _REGISTRY.get()
-    configured = os.environ.get("OVLAB_PLUGIN_REGISTRY") if selected is _UNSET else selected
+    configured = (os.environ.get("OVLAB_EXTENSION_REGISTRY") or os.environ.get("OVLAB_PLUGIN_REGISTRY")) if selected is _UNSET else selected
     if configured:
         path = Path(configured).expanduser()
         return path if path.is_absolute() else root / path
+    neutral = root / "configs/extensions/registry.json"
+    if neutral.is_file():
+        return neutral
     local = root / "configs/plugins/registry.json"
     if local.is_file():
         return local
@@ -87,6 +90,9 @@ def registry_document(repository_root=None, *, document=None, offline=None):
             document = json.loads(path.read_text(), object_pairs_hook=_unique)
         except (OSError, ValueError) as exc:
             raise ConfigSchemaError(f"cannot read plugin registry {path}: {exc}") from exc
+    if isinstance(document, dict) and document.get("schema_version") == "ovlab.extensions/v1":
+        from .extension_compat import expand_extension_registry
+        document = expand_extension_registry(document, _root(repository_root))
     if isinstance(document, dict) and document.get("schema_version") == "ovlab.plugins/v2":
         from .plugin_projects import expand_projects
         document = expand_projects(document, _root(repository_root), offline=_OFFLINE.get() if offline is None else offline)
@@ -377,10 +383,19 @@ def registered_plugins(repository_root=None):
     return [LoadedPolicyPlugin(deepcopy(d), root, document) for d in document["plugins"].values()]
 
 
-def plugin_for_type(config_type, repository_root=None):
-    for plugin in registered_plugins(repository_root):
-        if plugin.descriptor["config_type"] == config_type:
-            return plugin
+def plugin_for_type(config_type, repository_root=None, *, provider=None):
+    plugins = registered_plugins(repository_root)
+    if provider is not None:
+        owners = [plugin for plugin in plugins if plugin.descriptor.get("provider_ref") == provider]
+        if len(owners) == 1 and owners[0].descriptor["config_type"] != config_type:
+            raise ConfigCompatibilityError(f"policy type {config_type!r} differs from its selected provider {provider}")
+    matches = [plugin for plugin in plugins
+               if plugin.descriptor["config_type"] == config_type
+               and (provider is None or plugin.descriptor.get("provider_ref") == provider)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ConfigSchemaError(f"ambiguous policy type {config_type!r}; select its qualified provider")
     raise ConfigSchemaError(f"unknown policy type {config_type!r}; register its plugin first")
 
 

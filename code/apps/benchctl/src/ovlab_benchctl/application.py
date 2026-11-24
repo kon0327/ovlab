@@ -140,7 +140,7 @@ class OvlabApplication:
     def _config_path(self, config: str | Path) -> Path:
         from .config_references import ConfigReferences
         references = ConfigReferences(self.repository_root, self.config_root)
-        if str(config).startswith(("plugin:", "ovlab:")):
+        if str(config).startswith(("plugin:", "module:", "ovlab:")):
             path = references.source(str(config))
             if not path.is_file():
                 raise ConfigReferenceError(f"configuration does not exist: {config}")

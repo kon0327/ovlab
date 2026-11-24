@@ -166,7 +166,12 @@ def validate_benchmark(doc, path):
 
 def validate_policy(doc, path):
     header(doc, path, "policy", typed=True)
-    mapping(doc, path, required=("schema_version", "kind", "type", "settings"), optional=("extends",))
+    mapping(doc, path, required=("schema_version", "kind", "type", "settings"), optional=("extends", "provider"))
+    if "provider" in doc:
+        from .extensions import ProviderRef
+        selected = ProviderRef.parse(doc["provider"])
+        if selected.category != "plugin" or selected.kind != "policy":
+            raise ConfigSchemaError(f"{path}.provider must select a policy plugin")
     if doc["type"] == "mock":
         settings = mapping(doc["settings"], f"{path}.settings", required=(
             "horizon", "deterministic", "input", "action", "raw_output"))
@@ -183,7 +188,7 @@ def validate_policy(doc, path):
         exact_type(raw["enabled"], bool, f"{path}.settings.raw_output.enabled")
         return
     from .policy_plugins import plugin_for_type, call_plugin
-    call_plugin(plugin_for_type(doc["type"]), "validate_policy", doc, path)
+    call_plugin(plugin_for_type(doc["type"], provider=doc.get("provider")), "validate_policy", doc, path)
 
 
 def validate_action_interface(doc, path):
