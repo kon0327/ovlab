@@ -187,3 +187,5 @@ for this preparation. Recheck current workloads before future runtime smoke.
 ## Implementation evidence
 
 Phase 1 adds the shared catalog and migrates the in-tree policy manifests without changing their runtime SDK. The broad CLI/config/deployment regression run passed 617 tests; a provider-aware adjustment to the artifact classification test was verified by the subsequent 19-test review run. A separate 64-test run passed registration/Git cache/origin, configuration and canonical CPU run/report/metric checks. Benchmark SDK files are prepared separately and are not part of this phase.
+
+Phase 2 freezes the selected neutral lock beside its portable runtime locations, prunes unrelated policy declarations, validates cached origins and closes project/control-source host fallback. Targeted build/config regressions: 125 passed. Second review, relocation and closed-module-bundle checks: 24 passed. Large runtime data remains external; only selected control code/configuration is bundled.

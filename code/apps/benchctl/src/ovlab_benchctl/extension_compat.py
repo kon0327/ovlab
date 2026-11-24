@@ -36,6 +36,10 @@ def expand_extension_registry(document, root):
     """Adapt available policy registrations; unrelated unavailable projects stay lazy."""
     from .extensions import ExtensionCatalog
     from .plugin_projects import expand_projects
+    from pathlib import Path
+    if (Path(root) / "configs/.ovlab-bundle.json").is_file():
+        from .plugin_projects import read_document
+        return read_document(Path(root) / "configs/plugins/registry.json")
     catalog = ExtensionCatalog(root, document=document)
     infrastructure = deepcopy(document.get("infrastructure", {}))
     selected = {}

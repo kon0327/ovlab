@@ -205,7 +205,7 @@ class ConfigBundleBuilder:
         policy_doc = self.load_component(policy_ref, "policy")
         plugin = registry_snapshot["plugins"].get(policy_doc["type"], {})
         project_ids = {Path(reference).parts[2] for reference in selected
-                       if Path(reference).parts[:2] == ("plugins", "configs") and len(Path(reference).parts) > 3}
+                       if Path(reference).parts[:2] in {("plugins", "configs"), ("modules", "configs")} and len(Path(reference).parts) > 3}
         if plugin.get("project"):
             project_ids.add(plugin["project"])
         # A selected catalog may contain artifact metadata validated by another
@@ -216,9 +216,18 @@ class ConfigBundleBuilder:
             owner = checkpoint_validator(entry, self.repository_root, registry=registry_snapshot)
             if owner is not None and owner.descriptor.get("project"):
                 project_ids.add(owner.descriptor["project"])
+        from .plugin_projects import read_document
+        from .policy_plugins import registry_path
+        registration = read_document(registry_path(self.repository_root))
+        catalog = None
+        if registration.get("schema_version") == "ovlab.extensions/v1":
+            from .extensions import ExtensionCatalog
+            catalog = ExtensionCatalog(self.repository_root, document=registration)
         for project_id in sorted(project_ids):
-            project_root = Path(plugin_project_root(project_id, self.repository_root)).resolve()
-            candidates = [project_root / name for name in ("plugin.json", "pyproject.toml")]
+            category = catalog.project_manifest(project_id)["category"] if catalog else "plugin"
+            project_root = (catalog.project_root(project_id) if catalog else Path(plugin_project_root(project_id, self.repository_root))).resolve()
+            manifest_name = catalog.project_metadata(project_id)["manifest"] if catalog else "plugin.json"
+            candidates = [project_root / name for name in (manifest_name, "pyproject.toml")]
             if (project_root / "src").is_dir():
                 candidates.extend((project_root / "src").rglob("*"))
             # Flat and mixed-layout projects can also expose root modules or
@@ -233,7 +242,7 @@ class ConfigBundleBuilder:
                     raise ValueError(f"plugin control source cannot be a symlink: {source}")
                 if not source.is_file() or "__pycache__" in source.parts or source.suffix in {".pyc", ".pyo"}:
                     continue
-                relative = f"plugins/projects/{project_id}/{source.relative_to(project_root).as_posix()}"
+                relative = f"{category}s/projects/{project_id}/{source.relative_to(project_root).as_posix()}"
                 selected.add(relative)
                 extra_sources[relative] = source
 
@@ -275,6 +284,42 @@ class ConfigBundleBuilder:
         for source_id in control_sources:
             if registry_snapshot["sources"][source_id]["kind"] == "local":
                 registry_snapshot["sources"][source_id]["path"] = f"configs/plugins/sources/{source_id}"
+        # Keep only declarations whose code/resources belong to this run.
+        registry_snapshot["projects"] = {name: value for name, value in registry_snapshot.get("projects", {}).items() if name in project_ids}
+        registry_snapshot["plugins"] = {name: value for name, value in registry_snapshot["plugins"].items()
+                                        if value.get("project") in project_ids or value is plugin}
+        registry_snapshot["builds"] = {name: value for name, value in registry_snapshot["builds"].items()
+                                       if value.get("project") in project_ids or not value.get("project")}
+        kept_sources = {source for value in registry_snapshot["plugins"].values() for source in value.get("sources", [])}
+        kept_sources.update(source for value in registry_snapshot["builds"].values() for source in value.get("sources", []))
+        registry_snapshot["sources"] = {name: value for name, value in registry_snapshot["sources"].items() if name in kept_sources}
+        for name, value in registry_snapshot["sources"].items():
+            if value["kind"] != "local" or name in control_sources:
+                continue
+            owner = next((project_id for project_id, metadata in registry_snapshot["projects"].items()
+                          if metadata["source_id"] == name), None)
+            value["path"] = f"configs/plugins/projects/{owner}" if owner else f"external/{name}"
+        if catalog is not None:
+            refs = [value["provider_ref"] for value in registry_snapshot["plugins"].values() if value.get("provider_ref")]
+            config_refs = [f"{Path(reference).parts[0][:-1]}://{Path(reference).parts[2]}/{'/'.join(Path(reference).parts[3:])}"
+                           for reference in selected if Path(reference).parts[:2] in {("plugins", "configs"), ("modules", "configs")}]
+            snapshot = catalog.snapshot(provider_refs=refs, config_refs=config_refs)
+            portable_locations = {"projects": {}, "sources": {}}
+            for project_id, value in snapshot.lock["projects"].items():
+                portable_locations["projects"][project_id] = f"configs/{value['category']}s/projects/{project_id}"
+                portable_locations["sources"][f"{project_id}/self"] = portable_locations["projects"][project_id]
+                for source_name in catalog.project_manifest(project_id).get("sources", {}):
+                    if source_name in control_sources:
+                        portable_locations["sources"][f"{project_id}/{source_name}"] = f"configs/plugins/sources/{source_name}"
+            selected_registration = {**registration, "projects": {name: value for name, value in registration["projects"].items() if name in project_ids}}
+            selected_registration = deepcopy(selected_registration)
+            for project_id, value in selected_registration["projects"].items():
+                if value["source"]["kind"] == "local":
+                    value["source"]["path"] = portable_locations["projects"][project_id]
+            for reference, value in (("extensions/registry.json", selected_registration),
+                                     ("extensions/lock.json", {"lock": snapshot.lock, "locations": portable_locations})):
+                selected.add(reference)
+                overlays[reference] = json.dumps(value, sort_keys=True, indent=2) + "\n"
         gpu = experiment_document.get("runtime", {}).get("gpu", "all" if plugin.get("deployment", {}).get("gpu", True) else None)
         runtime_profile = "plugins/runtime-profile.yaml"
         selected.add(runtime_profile)

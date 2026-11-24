@@ -91,3 +91,50 @@ def test_git_cache_verifies_origin_and_preserves_unregistered_edits(tmp_path):
 def test_invalid_typed_bindings_are_rejected(value):
     with pytest.raises(ConfigSchemaError):
         ProviderRef.parse(value)
+
+
+def test_frozen_catalog_uses_only_locked_locations_and_rejects_missing_code(tmp_path):
+    import shutil
+    from ovlab_benchctl.errors import ConfigReferenceError
+    source = project(tmp_path / 'host')
+    registration = document(sample=source)
+    catalog = ExtensionCatalog(tmp_path / 'host', document=registration)
+    snapshot = catalog.snapshot(project_ids=['sample'])
+    worker = tmp_path / 'worker'
+    configs = worker / 'configs'
+    bundled = configs / 'modules/projects/sample'
+    shutil.copytree(source, bundled)
+    shutil.copytree(source / 'configs', configs / 'modules/configs/sample')
+    (configs / 'extensions').mkdir()
+    (configs / '.ovlab-bundle.json').write_text('{}')
+    (configs / 'extensions/registry.json').write_text(json.dumps(registration))
+    (configs / 'extensions/lock.json').write_text(json.dumps({'lock': snapshot.lock, 'locations': {
+        'projects': {'sample': 'configs/modules/projects/sample'},
+        'sources': {'sample/self': 'configs/modules/projects/sample'}}}))
+    frozen = ExtensionCatalog(worker, registry_path=configs / 'extensions/registry.json')
+    assert frozen.project_root('sample') == bundled
+    assert frozen.config_path('module://sample/default.yaml') == configs / 'modules/configs/sample/default.yaml'
+    shutil.rmtree(bundled)
+    assert source.exists()
+    with pytest.raises(ConfigReferenceError, match='frozen.*missing'):
+        frozen.project_root('sample')
+
+
+def test_build_registry_identity_ignores_unselected_registration_and_host_location(tmp_path):
+    import shutil
+    root = tmp_path / 'one'
+    (root / 'plugins').mkdir(parents=True)
+    source = project(root / 'plugins', 'sample', 'plugin')
+    manifest = json.loads((source / 'extension.json').read_text())
+    manifest['builds'] = {'worker': {'image': 'example:test', 'dockerfile': 'Dockerfile', 'sources': []}}
+    (source / 'extension.json').write_text(json.dumps(manifest))
+    (source / 'Dockerfile').write_text('FROM scratch\n')
+    # The legacy projection only handles policy providers; use the neutral selected lock.
+    first = ExtensionCatalog(root, document=document(sample=source)).snapshot(build_refs=['sample/worker'])
+    other = tmp_path / 'two'
+    shutil.copytree(root, other)
+    after = document(sample=other / 'plugins/sample')
+    after['projects']['unavailable'] = {'source': {'kind': 'git', 'url': 'https://example.invalid/missing.git', 'commit': 'a' * 40}}
+    second = ExtensionCatalog(other, document=after).snapshot(build_refs=['sample/worker'])
+    assert first.sha256 == second.sha256
+    assert str(root) not in json.dumps(first.lock)

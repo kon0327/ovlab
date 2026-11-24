@@ -232,6 +232,12 @@ class ExtensionCatalog:
         self.root = Path(repository_root).resolve()
         self.path = globals()["registry_path"](self.root, registry_path, environment=environment)
         self.offline = offline
+        self.frozen = (self.root / "configs/.ovlab-bundle.json").is_file()
+        self._frozen_snapshot = None
+        if self.frozen:
+            lock_path = self.root / "configs/extensions/lock.json"
+            if lock_path.is_file():
+                self._frozen_snapshot = _read_json(lock_path)
         self._document = deepcopy(document) if document is not None else _read_json(self.path)
         self._validate_registry()
 
@@ -302,6 +308,16 @@ class ExtensionCatalog:
             return path
 
     def project_root(self, project, *, acquire=False):
+        if self.frozen:
+            if self._frozen_snapshot is None or project not in self._frozen_snapshot["lock"]["projects"]:
+                raise ConfigReferenceError(f"project {project} is outside the frozen extension closure")
+            relative = self._frozen_snapshot["locations"]["projects"].get(project)
+            if relative is None:
+                raise ConfigReferenceError(f"frozen project {project} has no bundled location")
+            path = _inside(self.root, relative, "frozen project")
+            if not path.is_dir():
+                raise ConfigReferenceError(f"frozen extension project is missing: {project}")
+            return path
         source = self._registration(project)["source"]
         if source["kind"] == "git":
             return self._git_root(source, acquire=acquire)
@@ -316,6 +332,10 @@ class ExtensionCatalog:
         relative = self._registration(project).get("manifest", "extension.json")
         manifest = _read_json(_inside(root, relative, "extension manifest"))
         self._validate_manifest(project, manifest, root)
+        if self.frozen:
+            expected = self._frozen_snapshot["lock"]["projects"][project]["manifest_sha256"]
+            if hashlib.sha256(_canonical(manifest)).hexdigest() != expected:
+                raise ConfigCompatibilityError(f"frozen extension manifest changed: {project}")
         return manifest
 
     def _validate_manifest(self, project, manifest, root):
@@ -471,6 +491,16 @@ class ExtensionCatalog:
         return result
 
     def source_root(self, source_id, *, acquire=False):
+        if self.frozen:
+            if self._frozen_snapshot is None or source_id not in self._frozen_snapshot["lock"]["sources"]:
+                raise ConfigReferenceError(f"source {source_id} is outside the frozen extension closure")
+            relative = self._frozen_snapshot["locations"]["sources"].get(source_id)
+            if relative is None:
+                raise ConfigReferenceError(f"source {source_id} has no bundled control location")
+            path = _inside(self.root, relative, "frozen control source")
+            if not path.is_dir():
+                raise ConfigReferenceError(f"frozen extension source is missing: {source_id}")
+            return path
         owner, name = self._owned_ref(source_id, "source")
         sources = self.infrastructure_sources() if owner == "@infrastructure" else self.project_sources(owner, acquire=acquire)
         if source_id not in sources:
@@ -510,11 +540,19 @@ class ExtensionCatalog:
         manifest = self.project_manifest(project, acquire=acquire)
         if manifest["category"] != category:
             raise ConfigReferenceError(f"configuration URI category differs from extension {project}")
-        root = _inside(self.project_root(project), manifest.get("configs", {}).get("root", "configs"), "extension configuration root")
+        root = (_inside(self.root, f"configs/{category}s/configs/{project}", "frozen configurations") if self.frozen else
+                _inside(self.project_root(project), manifest.get("configs", {}).get("root", "configs"), "extension configuration root"))
         return _inside(root, relative, "extension configuration")
 
     def config_roots(self, category=None):
         roots = {}
+        if self.frozen:
+            if self._frozen_snapshot is None:
+                raise ConfigReferenceError("frozen extension lock is missing")
+            for project, metadata in self._frozen_snapshot["lock"]["projects"].items():
+                if category is None or metadata["category"] == category:
+                    roots[project] = _inside(self.root, f"configs/{metadata['category']}s/configs/{project}", "frozen configurations")
+            return roots
         for row in self.list_projects(category=category):
             if row["status"] == "available":
                 roots[row["id"]] = _inside(self.project_root(row["id"]), row["configs_root"], "extension configuration root")

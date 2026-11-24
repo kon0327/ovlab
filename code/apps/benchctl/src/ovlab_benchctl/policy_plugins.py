@@ -215,8 +215,30 @@ def registry_document(repository_root=None, *, document=None, offline=None):
     return document
 
 
-def registry_identity(repository_root=None):
+def registry_identity(repository_root=None, *, roles=None):
+    root = _root(repository_root)
+    from .plugin_projects import read_document
+    registration = read_document(registry_path(root))
+    if registration.get("schema_version") == "ovlab.extensions/v1":
+        from .extensions import ExtensionCatalog
+        catalog = ExtensionCatalog(root, document=registration)
+        runtime = registry_document(root)
+        selected = list(runtime["builds"]) if roles is None else list(roles)
+        builds = [f"{runtime['builds'][role].get('project', '@infrastructure')}/{role}" for role in selected]
+        providers = [item["provider_ref"] for item in runtime["plugins"].values()
+                     if item.get("deployment", {}).get("role") in selected and item.get("provider_ref")]
+        return catalog.snapshot(provider_refs=providers, build_refs=builds).sha256
     document = registry_document(repository_root)
+    if roles is not None:
+        builds = {role: document["builds"][role] for role in roles}
+        sources = {name for build in builds.values() for name in build.get("sources", [])}
+        document = {**document, "builds": builds,
+                    "sources": {name: document["sources"][name] for name in sources},
+                    "plugins": {key: value for key, value in document["plugins"].items()
+                                if value.get("deployment", {}).get("role") in builds}}
+    from .plugin_identity import registered_source_identities
+    document = deepcopy(document)
+    document["sources"] = registered_source_identities(root, list(document["sources"]), registry=document)
     return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -331,6 +353,12 @@ def plugin_project_root(project_id, repository_root=None):
 
 def plugin_config_roots(repository_root=None):
     root = _root(repository_root)
+    from .plugin_projects import read_document
+    if not (root / "configs/.ovlab-bundle.json").is_file():
+        registration = read_document(registry_path(root))
+        if registration.get("schema_version") == "ovlab.extensions/v1":
+            from .extensions import ExtensionCatalog
+            return ExtensionCatalog(root, document=registration).config_roots(category="plugin")
     registry = registry_document(root)
     roots = {}
     for name, project in registry.get("projects", {}).items():
@@ -384,6 +412,18 @@ def registered_plugins(repository_root=None):
 
 
 def plugin_for_type(config_type, repository_root=None, *, provider=None):
+    if provider is not None:
+        from .plugin_projects import read_document
+        root = _root(repository_root)
+        registration = read_document(registry_path(root))
+        if registration.get("schema_version") == "ovlab.extensions/v1":
+            from .extensions import ExtensionCatalog
+            selected = ExtensionCatalog(root, document=registration).resolve_provider(provider, expected_kind="policy")
+            if selected.descriptor.get("config_type") != config_type:
+                raise ConfigCompatibilityError(f"policy type {config_type!r} differs from its selected provider {provider}")
+            registration["projects"] = {selected.ref.project: registration["projects"][selected.ref.project]}
+            document = registry_document(root, document=registration)
+            return LoadedPolicyPlugin(deepcopy(document["plugins"][config_type]), root, document)
     plugins = registered_plugins(repository_root)
     if provider is not None:
         owners = [plugin for plugin in plugins if plugin.descriptor.get("provider_ref") == provider]

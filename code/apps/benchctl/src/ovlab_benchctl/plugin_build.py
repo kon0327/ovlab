@@ -114,7 +114,6 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
                  config=None, execution_profile=None, runner=subprocess.run):
     root = Path(repository_root).resolve()
     registry = registry_document(root, offline=offline or dry_run)
-    registry_sha = registry_identity(root)
     selected = list(registry["builds"]) if roles is None else list(dict.fromkeys(roles))
     bundle = builder = None
     if config is not None:
@@ -140,6 +139,7 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
     unknown = set(selected) - registry["builds"].keys()
     if unknown:
         raise ConfigReferenceError(f"unknown image roles: {', '.join(sorted(unknown))}")
+    registry_sha = registry_identity(root, roles=selected)
     sources = list(dict.fromkeys(name for role in selected for name in registry["builds"][role].get("sources", [])))
     if dry_run:
         workspace = Path("/<temporary-build-context>") if isolated_sources else root
@@ -219,7 +219,7 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
                 if result.returncode:
                     raise RuntimeError(f"Docker build failed for {role} ({result.returncode})")
                 after = _registered_rows(inspect_sources(workspace, sources, registry=source_registry, staged=True), registry)
-                if after != rows or registry_identity(root) != registry_sha:
+                if after != rows or registry_identity(root, roles=selected) != registry_sha:
                     raise ConfigCompatibilityError("plugin sources or registry changed during build; image must be rebuilt")
                 plan.update(command=command, source_sha256=manifest["source_content_sha256"],
                             registry_sha256=registry_sha, plugin_build_sha256=signature,

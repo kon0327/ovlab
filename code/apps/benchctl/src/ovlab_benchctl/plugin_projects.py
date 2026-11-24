@@ -195,8 +195,10 @@ def project_root(name, root, registry, *, acquire=True):
     if not isinstance(metadata, dict):
         raise ConfigReferenceError(f"unknown plugin project: {name}")
     bundled = root / "configs/plugins/projects" / name
-    if (root / "configs/.ovlab-bundle.json").is_file() and bundled.is_dir():
-        return bundled
+    if (root / "configs/.ovlab-bundle.json").is_file():
+        if bundled.is_dir() and not bundled.is_symlink():
+            return bundled.resolve()
+        raise ConfigReferenceError(f"project {name} is missing from the frozen bundle")
     source_id = metadata["source_id"]
     source = registry["sources"][source_id]
     if source["kind"] == "local":
@@ -244,10 +246,12 @@ def control_source_root(name, root, registry, *, acquire=True):
         raise ConfigReferenceError(f"unknown control source: {name}") from exc
     _source(source)
     bundled = root / "configs/plugins/sources" / name
-    if (root / "configs/.ovlab-bundle.json").is_file() and bundled.is_dir():
+    if (root / "configs/.ovlab-bundle.json").is_file():
         if bundled.is_symlink() or not bundled.resolve().is_relative_to(root):
             raise ConfigReferenceError("bundled control source escapes its runtime root")
-        return bundled.resolve()
+        if bundled.is_dir():
+            return bundled.resolve()
+        raise ConfigReferenceError(f"control source {name} is missing from the frozen bundle")
     if source["kind"] == "local":
         path = Path(source["path"]).expanduser()
         path = (path if path.is_absolute() else root / path).resolve()
