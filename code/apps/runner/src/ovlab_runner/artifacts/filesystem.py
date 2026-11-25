@@ -13,6 +13,7 @@ from .base import RunArtifactStore
 from .codec import TraceCodec, _plain
 from .layout import run_key, safe_key
 from ..permissions import finalize_managed_tree
+from ..historical_metadata import benchmark_family as _benchmark_family, renderer_metadata
 
 
 class FilesystemRunArtifactStore(RunArtifactStore):
@@ -163,7 +164,7 @@ class FilesystemRunArtifactStore(RunArtifactStore):
                 "action_execution_mode": plan.get("action_execution_policy", {}).get("mode"),
                 "maximum_episode_steps": trace.metadata.get("task_maximum_steps"),
                 "renderer": (
-                    started.get("runtime", {}).get("benchmark", {}).get("libero_renderer")
+                    renderer_metadata(started.get("runtime", {}).get("benchmark", {}))
                 ),
             },
             "datetime": {
@@ -305,13 +306,6 @@ def _method_summary(method):
         )
         summary["lora"] = {key: lora[key] for key in lora_keys if key in lora}
     return summary
-
-
-def _benchmark_family(context_metadata, started):
-    suite = context_metadata.get("suite_name")
-    if isinstance(suite, str) and suite.upper().startswith("LIBERO"):
-        return "LIBERO"
-    return started.get("benchmark", {}).get("name")
 
 
 def _iso_utc(value):

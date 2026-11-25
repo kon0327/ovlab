@@ -1,28 +1,10 @@
 """Typed Gate I dataset, training, and checkpoint lifecycle failures."""
 
 
-class DatasetError(RuntimeError):
-    """Base error for immutable dataset operations."""
-
-
-class DatasetRequestError(DatasetError):
-    """A dataset request is invalid or unsupported."""
-
-
-class DatasetUnavailableError(DatasetError):
-    """A requested immutable dataset is not locally ready."""
-
-
-class DatasetIntegrityError(DatasetError):
-    """Dataset bytes or metadata failed verification."""
-
-
-class DatasetSecurityError(DatasetError):
-    """Acquisition input would violate the dataset security boundary."""
-
-
-class DatasetInterruptedError(DatasetError):
-    """Dataset acquisition was interrupted before publication."""
+from ovlab_core.dataset_errors import (
+    DatasetError, DatasetRequestError, DatasetUnavailableError, DatasetIntegrityError,
+    DatasetSecurityError, DatasetInterruptedError,
+)
 
 
 class TrainingProfileError(ValueError):

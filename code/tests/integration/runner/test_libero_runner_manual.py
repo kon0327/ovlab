@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from ovlab_benchctl import ConfigResolver, load
-from ovlab_benchmarks.libero import LiberoBenchmarkAdapter
+from ovlab_libero import LiberoBenchmarkAdapter
 from ovlab_core.contracts import (
     OVLAB_CONTRACT_VERSION, ActionPrediction, ActionRepresentation, ColorSpace, EpisodeTerminalStatus,
     GripperConvention,
@@ -106,7 +106,7 @@ def test_real_libero_runner_produces_recomputable_immutable_trace() -> None:
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
         os.environ["OVLAB_MANUAL_EVALUATION_CONFIG"],
         local_profile=_profile(),
-        execution_profile="ovlab://profiles/egl.yaml",
+        execution_profile="plugin://libero/execution/egl.yaml",
     )
     run = RunContext(RunId(os.environ.get("OVLAB_RUN_ID", "gate-b-libero-mock")), 1, "Gate B LIBERO mock smoke", 42)
     plan = resolved.create_plan(run, (TaskId("libero/spatial/0"),))
@@ -164,7 +164,7 @@ def test_real_libero_runner_produces_recomputable_immutable_trace() -> None:
     assert started["provenance"]["external_commits"]["libero"] == LIBERO_COMMIT
     assert started["benchmark"] == {"name": "libero-benchmark-adapter", "version": "0.2.0"}
     assert started["policy"] == {"name": "deterministic-libero-noop", "version": "1.0.0"}
-    started_renderer = started["runtime"]["benchmark"]["libero_renderer"]
+    started_renderer = started["runtime"]["benchmark"]["renderer"]
     assert started_renderer["requested_backend"] == "egl"
     assert started_renderer["resolved_backend"] == "egl"
     assert started_renderer["device_id"] == 0
@@ -174,7 +174,7 @@ def test_real_libero_runner_produces_recomputable_immutable_trace() -> None:
     assert completed["status"] == "completed"
     assert completed["episode_count"] == 1
     assert completed["episode_counts_by_terminal_status"] == {"time_limit": 1}
-    completed_renderer = completed["metadata"]["benchmark_runtime"]["libero_renderer"]
+    completed_renderer = completed["metadata"]["benchmark_runtime"]["renderer"]
     assert completed_renderer["requested_backend"] == "egl"
     assert completed_renderer["resolved_backend"] == "egl"
     assert completed_renderer["device_id"] == 0

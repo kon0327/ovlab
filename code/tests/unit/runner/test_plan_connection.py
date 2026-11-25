@@ -40,7 +40,7 @@ class RuntimeMetadataPolicy(TrackingPolicy):
     def runtime_metadata(self):
         return {
             "remote_policy": {
-                "protocol_version": "ovlab-policy-rpc/1.0.0",
+                "protocol_version": "ovlab-policy-rpc/2.0.0",
                 "model_identity": {"checkpoint": "test"},
             }
         }
@@ -112,7 +112,7 @@ def test_renderer_runtime_metadata_is_recorded_before_and_after_execution() -> N
     }
     assert store.runs["runner-test"]["started"]["runtime"]["policy"] == {
         "remote_policy": {
-            "protocol_version": "ovlab-policy-rpc/1.0.0",
+            "protocol_version": "ovlab-policy-rpc/2.0.0",
             "model_identity": {"checkpoint": "test"},
         }
     }
@@ -125,7 +125,7 @@ def test_renderer_runtime_metadata_is_recorded_before_and_after_execution() -> N
     assert completed["detected_renderer"] == {"renderer": "synthetic-egl"}
     assert store.runs["runner-test"]["completed"]["metadata"]["policy_runtime"] == {
         "remote_policy": {
-            "protocol_version": "ovlab-policy-rpc/1.0.0",
+            "protocol_version": "ovlab-policy-rpc/2.0.0",
             "model_identity": {"checkpoint": "test"},
         }
     }

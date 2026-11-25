@@ -59,6 +59,38 @@ def test_frozen_builtin_references_do_not_need_the_original_repository(tmp_path)
     assert refs.reference(target) == "ovlab://protocols/default.yaml"
 
 
+@pytest.mark.parametrize("directory", ["examples", "experiments"])
+@pytest.mark.parametrize("prefix", ["", "configs/"])
+def test_frozen_experiment_references_never_fall_back_to_checkout(tmp_path, directory, prefix):
+    configs = tmp_path / "configs"
+    (configs / "extensions").mkdir(parents=True)
+    (configs / ".ovlab-bundle.json").write_text("{}")
+    (configs / "extensions/registry.json").write_text(json.dumps({
+        "schema_version": "ovlab.extensions/v1", "projects": {},
+    }))
+    (configs / "extensions/lock.json").write_text(json.dumps({"lock": {"projects": {}}}))
+    (configs / "plugins").mkdir()
+    (configs / "plugins/registry.json").write_text(json.dumps({
+        "schema_version": "ovlab.plugins/v1", "projects": {}, "sources": {}, "builds": {}, "plugins": {},
+    }))
+    original = tmp_path / directory / "source.yaml"
+    original.parent.mkdir()
+    original.write_text(dumps({"schema_version": "0.1.0", "kind": "artifact_store",
+                               "type": "filesystem", "settings": {"root_resource": "runs_root"}}))
+    reference = f"{prefix}{directory}/source.yaml"
+    frozen = configs / directory / "source.yaml"
+    builder = ConfigBundleBuilder(tmp_path)
+
+    assert builder.references.source(reference) == frozen
+    with pytest.raises(ValueError, match="configuration must be a regular file"):
+        builder.load_component(reference, "artifact_store")
+    assert original.is_file()
+
+    frozen.parent.mkdir()
+    frozen.write_bytes(original.read_bytes())
+    assert builder.load_component(reference, "artifact_store")["settings"] == {"root_resource": "runs_root"}
+
+
 def test_partial_model_evaluation_defaults_are_validated_after_user_composition(tmp_path):
     root = tmp_path / "ovlab"
     (root / "plugins").mkdir(parents=True)
@@ -78,7 +110,7 @@ def test_partial_model_evaluation_defaults_are_validated_after_user_composition(
         "schema_version": "0.1.0", "kind": "experiment",
         "extends": "plugin://openvla/evaluate/default.yaml",
         "experiment": {"id": "local", "name": "Local experiment", "tags": ["example"]},
-        "components": {"benchmark": "ovlab://benchmarks/libero.yaml", "metrics": "ovlab://metrics/default.yaml",
+        "components": {"benchmark": "plugin://libero/benchmark/default.yaml", "metrics": "ovlab://metrics/default.yaml",
                        "protocol": "ovlab://protocols/smoke.yaml", "artifacts": "ovlab://artifacts/default.yaml"},
     }))
     composed = builder.load_component("evaluate.yaml", "experiment")
@@ -107,6 +139,8 @@ def test_frozen_model_bundle_contains_shared_control_code_and_builtin_closure(tm
     (root / "plugins").mkdir()
     shutil.copytree(ROOT / "config", root / "config")
     registration = json.loads((ROOT / "plugins/registry.json").read_text())
+    for source in registration.get("infrastructure", {}).get("sources", {}).values():
+        if source["kind"] == "local": source["path"] = str(ROOT / source["path"])
     for name, entry in registration["projects"].items():
         entry["source"]["path"] = str(ROOT / "plugins" / name)
     (root / "plugins/registry.json").write_text(json.dumps(registration))
@@ -115,15 +149,15 @@ def test_frozen_model_bundle_contains_shared_control_code_and_builtin_closure(tm
         "schema_version": "0.1.0", "kind": "experiment",
         "extends": "plugin://openvla/evaluate/default.yaml",
         "experiment": {"id": "frozen", "name": "Frozen integration", "tags": ["smoke"]},
-        "components": {"benchmark": "ovlab://benchmarks/libero.yaml", "metrics": "ovlab://metrics/default.yaml",
+        "components": {"benchmark": "plugin://libero/benchmark/default.yaml", "metrics": "ovlab://metrics/default.yaml",
                        "protocol": "ovlab://protocols/smoke.yaml", "artifacts": "ovlab://artifacts/default.yaml"},
     }))
     builder = ConfigBundleBuilder(root)
-    bundle = builder.build("evaluate.yaml", "ovlab://profiles/egl.yaml")
+    bundle = builder.build("evaluate.yaml", "plugin://libero/execution/egl.yaml")
     paths = {row["path"] for row in bundle.files}
-    assert "ovlab/benchmarks/libero.yaml" in paths
+    assert "plugins/configs/libero/benchmark/default.yaml" in paths
     assert "plugins/configs/openvla/policy/default.yaml" in paths
-    assert "plugins/sources/openvla-support/src/ovlab_openvla_common/plugin.py" in paths
+    assert "plugins/sources/openvla/openvla-support/src/ovlab_openvla_common/plugin.py" in paths
     # Another model supporting the same artifact form is not a dependency.
     assert not any(path.startswith("plugins/projects/openvla-quic/") for path in paths)
     assert not any(path.startswith("plugins/projects/openvla-oft/") for path in paths)
@@ -137,7 +171,7 @@ root = Path(__import__('sys').argv[1])
 builder = ConfigBundleBuilder(root)
 doc = builder.load_component('evaluate.yaml', 'experiment')
 assert doc['components']['policy'] == 'plugin://openvla/policy/default.yaml'
-builder.load_component('ovlab://benchmarks/libero.yaml', 'benchmark')
+builder.load_component('plugin://libero/benchmark/default.yaml', 'benchmark')
 builder.load_component(doc['components']['policy'], 'policy')
 plugin = plugin_for_type('openvla_vanilla', root)
 module = __import__(plugin.implementation.__class__.__module__, fromlist=[''])

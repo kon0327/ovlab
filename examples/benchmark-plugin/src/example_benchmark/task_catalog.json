@@ -1,0 +1,9 @@
+{
+  "catalog_id": "example-planar-tasks",
+  "revision": "1",
+  "tasks": [
+    {"id": "calibration:alpha", "index": 4, "name": "Calibrate the planar fixture", "instruction": "Hold the two joints still for one step.", "success_after_steps": 1},
+    {"id": "reach:omega", "index": 17, "name": "Observe the episode limit", "instruction": "Continue holding until the episode is truncated.", "success_after_steps": 0},
+    {"id": "stability@hold", "index": 31, "name": "Hold for two steps", "instruction": "Hold the two joints still for two steps.", "success_after_steps": 2}
+  ]
+}

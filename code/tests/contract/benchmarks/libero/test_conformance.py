@@ -5,7 +5,7 @@ from dataclasses import replace
 from helpers.contexts import make_run_context
 from helpers.fake_libero import FakeLiberoBackend, fake_libero_episode
 from helpers.mock_policy import MockPolicy
-from ovlab_benchmarks.libero import LiberoAdapterSettings, LiberoBenchmarkAdapter
+from ovlab_libero import LiberoAdapterSettings, LiberoBenchmarkAdapter
 from ovlab_core import negotiate_capabilities
 
 from contract.adapters.conformance import assert_benchmark_conformance

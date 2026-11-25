@@ -1,0 +1,23 @@
+schema_version: "0.1.0"
+kind: experiment
+experiment:
+  id: cpu-plugin-example
+  name: Independent CPU policy and benchmark example
+  tags: [cpu, plugins, example, smoke]
+deployment:
+  profile: example
+  offline: true
+components:
+  benchmark: plugin://example-benchmark/benchmark.yaml
+  policy: plugin://example-policy/policy.yaml
+  metrics: ovlab://metrics/default.yaml
+  protocol: ovlab://protocols/smoke.yaml
+  artifacts: ovlab://artifacts/default.yaml
+resources:
+  registry: plugin://example-policy/resources.yaml
+reporting:
+  enabled: true
+  profile: libero-task-default
+  on_task_finalize: true
+  on_run_finalize: true
+  failure_policy: warn

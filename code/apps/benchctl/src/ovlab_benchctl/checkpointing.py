@@ -187,9 +187,9 @@ def checkpoint_spec(repository_root: Path, experiment: str | Path) -> Checkpoint
     root = Path(repository_root).resolve()
     refs = ConfigReferences(root)
     builder = ConfigBundleBuilder(root)
-    path = refs.source(str(experiment)) if str(experiment).startswith("plugin:") else Path(experiment)
+    path = Path(experiment)
     if not path.is_absolute():
-        path = root / path
+        path = refs.source(str(experiment))
     kind = load(path).get("kind")
     if kind not in {"experiment", "deployment"}:
         raise CheckpointResolutionError("checkpoint selection requires an evaluation or deployment config")

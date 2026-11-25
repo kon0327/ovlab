@@ -1,0 +1,15 @@
+schema_version: "0.1.0"
+kind: action_interface
+id: example-planar-joint-delta-v1
+dimension: 2
+representation: joint_delta
+translation_indices: []
+rotation_indices: []
+gripper_indices: []
+rotation_representation: none
+gripper_convention: none
+dtype: float32
+units: [rad, rad]
+control_frequency_hz: 5.0
+minimum: [-1.0, -1.0]
+maximum: [1.0, 1.0]

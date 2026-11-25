@@ -162,7 +162,7 @@ def test_checkpoint_identity_resolution_needs_only_system_python():
     completed = subprocess.run(
         [
             "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=/tmp",
-            f"PYTHONPATH={source}:{REPOSITORY / 'code/packages/ovlab-policy-sdk/src'}", "python3", "-c",
+            f"PYTHONPATH={source}:{REPOSITORY / 'code/packages/ovlab-policy-sdk/src'}:{REPOSITORY / 'code/packages/ovlab-core/src'}:{REPOSITORY / 'code/packages/ovlab-benchmarks/src'}", "python3", "-c",
             "from pathlib import Path; from ovlab_benchctl.checkpointing import checkpoint_spec; "
             f"s=checkpoint_spec(Path({str(REPOSITORY)!r}), {EXPERIMENT!r}); print(s.resource_id)",
         ],

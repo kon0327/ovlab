@@ -6,8 +6,10 @@ runtime mounts. OVLAB owns configuration composition, checkpoint verification,
 containers, RPC transport, evaluation lifecycle and artifacts. Adding a model requires a plugin and a registry entry; it requires no new branch in the
 resolver, CLI or deployment code.
 
-The public interface is `ovlab_policy_sdk.plugin.PolicyPlugin` (API `"1"`).
-Existing OpenVLA, merged LoRA, OFT and QuIC integrations use this same interface.
+The current model contract is `ovlab_policy_sdk.plugin.PolicyPluginV2` (API
+`"2"`). OpenVLA, merged LoRA, OFT and QuIC use canonical `BenchmarkContext`
+rather than reading another project's benchmark YAML. The API v1 base remains
+only for migration compatibility. The standalone CPU example also uses API v2.
 Their settings and artifact semantics remain in the integration packages. Model
 libraries and weights are imported only during adapter initialization. Registry
 listing and deployment planning work with the standard library alone when the
@@ -20,18 +22,18 @@ connection without downloading a model. Return here for the full contract.
 
 ## Project registration and source selection
 
-A plugin is an independent project containing a `plugin.json` manifest, a Python
+A plugin is an independent project containing a manifest, a Python
 package, configurations and build recipes. The user registry only binds that
 project to a local directory or an immutable Git revision. Policy variants,
 upstream model sources, capability declarations, defaults, checkpoint catalogs,
 training hooks and dependency locks belong to the project.
 
-The author-facing registry uses `ovlab.plugins/v2`:
+The common author-facing registry uses `ovlab.extensions/v1`:
 
 ```json
 {
-  "schema_version": "ovlab.plugins/v2",
-  "plugins": {
+  "schema_version": "ovlab.extensions/v1",
+  "projects": {
     "my-model": {
       "source": {
         "kind": "git",
@@ -55,7 +57,7 @@ it with an actual commit. Local registrations use
 ```
 
 The command reads the project manifest to obtain its ID and validate the complete
-registration. It writes `configs/plugins/registry.json` by default; `--registry`
+registration. It writes `configs/extensions/registry.json` by default; `--registry`
 selects another destination. A conflicting existing registration is preserved.
 Remote registration acquires the pinned manifest into an ignored project cache.
 Offline operations and build dry runs require that cached manifest; they never
@@ -66,31 +68,38 @@ The checked-in registry registers independent `openvla`, `openvla-oft` and
 QuIC own their distinct runtimes. Shared implementation code lives in the
 reusable `plugins/_shared/openvla-support` distribution, explicitly declared as
 a control/build source by each consuming project. Core packages do not depend
-on that distribution. Infrastructure sources and build roles can be declared alongside the
-project registrations using top-level `sources` and `builds` mappings.
+on that distribution. The independent `libero` project owns the benchmark and
+RLDS dataset provider. Transitional generic recipes remain under the registry's
+`infrastructure: {sources, builds}` table; they are not policy declarations.
 
-Selection order is an explicit `OVLAB_PLUGIN_REGISTRY`, a user registry at
-`configs/plugins/registry.json`, the repository's `plugins/registry.json`, a frozen
-installed-image registry when present, then the core's model-free packaged
-registry. Relative registry and local source paths are
+Selection starts with an explicit registry argument, then
+`OVLAB_EXTENSION_REGISTRY` (the temporary `OVLAB_PLUGIN_REGISTRY` alias is still
+accepted), `configs/extensions/registry.json`, the legacy user location
+`configs/plugins/registry.json`, the repository's `plugins/registry.json`, an
+installed registry and the packaged default. Relative registry and local source paths are
 relative to the OVLAB repository. `plugin` commands also accept `--registry` for
 that one invocation. Python orchestrators honor their explicit environment
 mappings without modifying `os.environ`. A selected registry is a complete
 selection; registering into a new file starts from the selected default to retain
 existing registrations.
 
-A minimal project manifest looks like this:
+New projects default to `extension.json`. Existing model projects retain the
+filename `plugin.json` through the registry's explicit `manifest` field, with
+the same new schema. Do not publish two competing manifests. A project manifest
+with a policy provider looks like this:
 
 ```json
 {
-  "schema_version": "ovlab.plugin/v1",
-  "api_version": "1",
-  "kind": "policy",
+  "schema_version": "ovlab.extension/v1",
+  "category": "plugin",
   "id": "my-model",
   "version": "1.0.0",
   "sources": {},
-  "plugins": {
-    "my_policy": {
+  "providers": {
+    "default": {
+      "kind": "policy",
+      "api_version": "2",
+      "config_type": "my_policy",
       "id": "my-model-policy",
       "family": "my_family",
       "runtime_status": "implemented",
@@ -107,7 +116,6 @@ A minimal project manifest looks like this:
         "image": "ovlab-policy-my-model:local",
         "image_env": "OVLAB_MY_MODEL_IMAGE",
         "policy_service": "policy-my-model",
-        "benchmark_service": "benchmark-my-model",
         "quantization": ["none"],
         "observation_profile": "primary_rgb"
       }
@@ -126,9 +134,13 @@ A minimal project manifest looks like this:
 ```
 
 Dockerfile and lock paths are project-relative and bounded to that project.
-OVLAB automatically adds the project source, `plugin-<project-id>`, to every
-variant and build. The recipe sees the prepared project at
-`external/plugin-my-model/`; its Docker `COPY` paths use that name. Additional
+Source and build names are local to the manifest; catalog identities are
+`<project>/<local-id>`, with `<project>/self` implicitly added to providers and
+builds. Source staging uses `external/extensions/<project>/<source>`; the
+project itself is `external/extensions/my-model/self`. Docker `COPY` paths use
+that materialization, while provider identity remains independent of location.
+This namespace preserves existing development checkouts such as
+`external/openvla`. Additional
 model implementations can remain in separate upstream repositories: declare
 these under the manifest's `sources` as pinned Git or local sources, then list
 their IDs in the variant and recipe. OVLAB acquires each source independently.
@@ -144,15 +156,18 @@ requirements remain independent. Descriptive `capabilities` mappings advertise
 interfaces, artifact loaders, methods, quantization backends and limitations;
 plugin validation remains authoritative for each actual combination.
 
-The expanded `ovlab.plugins/v1` registry is the frozen runtime format. It binds
-all policy entrypoints to project/source identities and recipes and is included
-in configuration bundles and build metadata. Existing explicit v1 registries
-remain supported, but new integrations should publish project manifests.
+Qualified provider IDs distinguish category, kind, project and local provider,
+for example `plugin:policy:my-model/default`. Manifest schema version, provider
+API version and package `version` have independent meanings. Selected frozen
+state uses `ovlab.extension-lock/v1`, separate portable source identities from
+execution locations, and includes only the selected closure. A temporary
+`extension_compat.py` projection supplies legacy policy callers; it is not a
+second registration authority or the author-facing format.
 
 ## Preparing and building sources
 
 Git branches and tags are rejected as source revisions. Managed upstream sources
-are cloned into ignored `external/<source-id>` for development sync. Remote
+are cloned into ignored `external/extensions/<project>/<source>` for development sync. Remote
 project manifests have a separate ignored project cache below `plugins/.cache/`.
 Local projects are used directly for lightweight host hooks and copied into
 content-identified snapshots for builds. Source identity includes executable
@@ -195,8 +210,9 @@ objects without copying dirty working files. `--workspace-sources` explicitly
 selects verified persistent development sources. Source preparation uses locks
 and atomic publication and retains rollback data while replacing local snapshots.
 
-`bash deploy/scripts/build-images.sh ROLE ...` builds any registered role, including
-infrastructure, policy, training and finalizer roles; with no roles it builds all.
+`bash deploy/scripts/build-images.sh PROJECT/ROLE ...` builds qualified registered
+roles, including policy, benchmark, training and finalizer roles; an unqualified
+role is accepted only when it has a unique owner. With no roles it builds all.
 The `plugin build PROJECT` command selects all image recipes owned by that project, including policy, training and finalizer images. Add `--config TARGET` when the
 image should include an explicit experiment/deployment configuration closure:
 
@@ -223,22 +239,23 @@ source for image construction.
 
 ## Developing the plugin
 
-The entrypoint is `module:object`. Export either a `PolicyPlugin` instance or a
-zero-argument class. The implementation must advertise `api_version = "1"`;
+The entrypoint is `module:object`. Export either a `PolicyPluginV2` instance or a
+zero-argument class. The implementation must advertise `api_version = "2"`;
 unsupported versions fail before model initialization. Python packages can live
-at the source root or under `src/`. The exported object must inherit `PolicyPlugin`. Instances are cached on their
+at the source root or under `src/`. The exported object must implement the selected SDK contract. Instances are cached on their
 loaded handle. Control hooks should be stateless and avoid modifying the global
 process environment. The package must be installed by the image's
 build recipe. Registration does not install model dependencies into the host.
 
-Implement these four required methods:
+Implement the required policy hooks:
 
 | Method | Responsibility |
 | --- | --- |
 | `validate_policy(doc, path)` | Validate the complete composed policy document; do not load weights or access the network. |
-| `resolve_settings(doc, benchmark_doc, action_spec, checkpoints, devices, *, repository_root, environment)` | Construct plugin-owned settings using resolved resource identities and the target action contract. Return an object exposing `record_raw_output: bool`. |
+| `resolve_settings(doc, benchmark_context, action_spec, checkpoints, devices, *, repository_root, environment)` | Construct settings from canonical peer capabilities, selected task identity, explicit method claims and resolved resources. Return settings exposing `record_raw_output: bool`; standalone serving passes `None` for the peer. |
+| `describe_capabilities(settings)` | Describe input requirements and action output without constructing or loading a model. |
 | `create_adapter(settings)` | Return a `PolicyAdapter` in `CREATED` state; defer expensive work to `_initialize`. |
-| `identity(capabilities)` | Return RPC identity with `model_identity`, `method_identity`, `runtime_versions`. Preserve immutable checkpoint identity and truthful method metadata. |
+| `identity(capabilities)` | Return RPC identity with `model_identity`, `normalization_identity`, `prompt_template_identity`, `action_codec_identity`, `runtime_versions` and optional `method_descriptor`. Preserve immutable checkpoint identity and truthful method metadata. |
 
 The SDK also provides strict `mapping`, `exact_type`, `enum`, `number` and
 `non_empty_string` helpers. Raise `PolicyPluginValidationError`,
@@ -250,7 +267,7 @@ Optional hooks have safe defaults:
 
 | Hook | Use |
 | --- | --- |
-| `validate_observation(doc, benchmark_doc)` | Check cameras, shapes, proprioception and instruction requirements. |
+| `validate_observation(doc, benchmark_context)` | Check named inputs, shapes, proprioception, instruction and explicit methodological claims through canonical contracts. |
 | `deployment_context(policy, deployment)` | Supply standalone serving context without creating a benchmark; model defaults and normalization belong here. |
 | `scientific_policy(doc)` | Return a deep copy without machine-local execution paths; keep immutable hashes and scientific parameters. |
 | `runtime_resources(doc, repository_root, environment)` | Return execution metadata for additional resources. |
@@ -269,7 +286,7 @@ the model directories to exist yet.
 
 The `accepts_settings` and `accepts_capabilities` hooks support existing direct
 Python callers of the compatibility helpers. Normal service startup selects the
-plugin directly from the configured policy type; new plugins do not need these
+qualified provider declared in the policy configuration; new plugins do not need these
 hooks.
 
 `PolicyAdapter` supplies the lifecycle and checks state transitions, prediction
@@ -310,16 +327,78 @@ policy. QuIC templates omit adapter paths and hashes entirely. Finalization bind
 real identities and normal validation runs before model startup.
 
 Shared control libraries must be explicit source dependencies. Declare their
-source IDs in each consuming policy descriptor
-(`plugins.<type>.control_sources`) and in its policy/build `sources`. OVLAB includes their bounded Python packages in frozen configuration
+source IDs in each consuming provider descriptor
+(`providers.<local-id>.control_sources`) and in its policy/build `sources`. OVLAB includes their bounded Python packages in frozen configuration
 bundles; Docker recipes install the corresponding distributions. Local sources
 are useful inside this checkout. Independently published remote projects must
 pin external dependencies to Git commits instead of relying on sibling paths.
 
-The same explicit configuration origins and complete-document validation can
-support future benchmark and metric projects. Their plugin APIs are a subsequent
-step; current benchmark/metric implementations and defaults remain owned by
-OVLAB.
+Benchmark projects use the same registry and explicit configuration origins.
+`BenchmarkPlugin` API `"1"` owns their settings, catalog, native adapter and
+deployment requirements; [LIBERO](../plugins/libero/README.md) is a concrete
+project. Policies receive canonical `BenchmarkContext`, not benchmark-specific
+YAML. A normalization key is a model setting and cannot establish peer identity.
+Metric/report module metadata is reserved; their runtime modularization remains
+subsequent work.
+
+## First model and benchmark integrations
+
+Start with the [CPU policy project](../examples/policy-plugin/README.md) for
+persistent serving and the [independent CPU benchmark
+project](../examples/benchmark-plugin/README.md) for the paired evaluation
+pipeline. Each has its own manifest, Python package, default configuration,
+action contract and image recipe. The benchmark example selects both projects
+in one private registry and generates an explicit machine profile and Compose
+environment file. Neither example changes the repository registry.
+
+For a new benchmark, implement `BenchmarkPlugin` API `"1"`, declare a portable
+`TaskCatalog`, and bind native tasks only during adapter initialization. Put
+benchmark settings, native action interface, execution profiles and deployment
+requirements in that project. Keep standard-library control hooks in the
+entrypoint; typed catalog/capability code and native imports can load lazily.
+See the [benchmark SDK guide](../code/packages/ovlab-benchmarks/README.md).
+
+For a new model, implement API `"2"`, retain immutable checkpoint/codec identity,
+and declare its own input/action requirements. Its default configuration must
+remain usable for standalone serving without registering a benchmark just to
+resolve an action interface. The resolver checks those declared contracts
+against the separately selected benchmark before initialization.
+
+Model `evaluate/default.yaml` files are composition templates, not complete
+experiments. Add benchmark, metrics, protocol and artifact choices in an
+experiment. For OFT also select the required wrist camera/proprioception profile;
+for QuIC bind a real compatible adapter or use the explicit training checkpoint
+handoff. The maintained [verification scenarios](../examples/README.md) show
+complete compositions.
+
+Keep machine settings separate from portable plugin defaults. A complete local
+profile can supply absolute checkpoint paths without changing their registered
+revision or expected hashes:
+
+```yaml
+schema_version: "0.1.0"
+kind: local_profile
+id: my-machine
+paths:
+  checkpoint_root: /absolute/ovlab-data/checkpoints
+  dataset_root: /absolute/ovlab-data/datasets
+  runs_root: /absolute/ovlab-data/runs
+devices:
+  primary_gpu: cuda:0
+resources:
+  checkpoints:
+    my-checkpoint:
+      local_path: /absolute/path/to/verified-checkpoint
+```
+
+Save the profile under ignored `configs/local/` and select it explicitly with
+`OVLAB_LOCAL_PROFILE` (`deploy run` also accepts `--profile`). A benchmark
+execution profile is a different input: LIBERO supplies
+`plugin://libero/execution/egl.yaml` and `plugin://libero/execution/glfw.yaml`.
+Pass it with `eval run --execution-profile` or `OVLAB_EXECUTION_PROFILE` when
+needed. The CPU benchmark example needs no renderer execution profile. Local
+checkpoint overrides choose a location for verification; they do not bypass
+the catalog's revision/file identity checks.
 
 ## Configuration and checkpoints
 
@@ -329,6 +408,7 @@ A policy configuration retains this common envelope:
 schema_version: "0.1.0"
 kind: policy
 type: my_policy
+provider: plugin:policy:my-model/default
 settings:
   checkpoint_id: my-checkpoint
   input:
@@ -336,7 +416,7 @@ settings:
   runtime:
     quantization: none
   action:
-    action_interface: ovlab://interfaces/actions/libero-osc-pose-v1.yaml
+    action_interface: plugin://my-model/interfaces/actions.yaml
   raw_output:
     enabled: false
 ```
@@ -383,18 +463,20 @@ resolver provides checkpoints as mappings containing `source`, `revision`,
 Use these resolved values; model loading inside a container must use its
 read-only mounted path and offline settings.
 
-Deployment YAML points to the policy and resource registry. The plugin's
-registry metadata selects the image and build role. Evaluation uses the same
-registration to generate policy and benchmark services from one shared Compose
-template. New model profiles require no additional Compose YAML. EGL/GLFW is a
-benchmark execution choice and is applied to the generated benchmark service.
+Deployment YAML points to the policy and resource registry. The policy's
+metadata selects its image and build role. Evaluation separately selects a
+benchmark provider, which owns the benchmark image, build role, GPU needs,
+mounts and execution environment. The orchestrator combines and verifies both
+through one shared Compose template. New model profiles require no additional
+Compose YAML. EGL/GLFW belongs to LIBERO's execution profile and applies only to
+its benchmark service.
 
 ## Build and provenance contract
 
 Each plugin owns its Docker recipe and dependency environment. Use an immutable
 base image, locked/hash-verified dependencies, and `--no-deps --no-build-isolation`
 when installing the local plugin against the resolved dependency lock. Copy
-source from `external/<source-id>`. Install OVLAB contracts, SDK, RPC and CLI, and
+source from `external/extensions/<project>/<source>`. Install OVLAB contracts, SDK, RPC and CLI, and
 install the plugin package. Model-specific dependencies belong to this image.
 
 Policy images must provide `ovlab deploy serve` and `ovlab _worker health`, run
@@ -432,7 +514,8 @@ The runner attaches the plugin-registry hash and a per-role
 `io.github.ovlab.plugin-build.sha256` label. That identity binds the role,
 plugin registration, required source commits/local content and recipe/locks.
 Persistent deployment and evaluation reject a policy image with another role or
-source identity, including when `build: false` is selected. Containers are then
+source identity, including when `build: false` is selected. Evaluation verifies
+the independently selected benchmark image in the same way. Containers are then
 started using the inspected immutable image ID, so moving a tag after preflight
 cannot replace the verified image. Unrelated registry
 entries do not change that per-role identity. After upgrading from images that
@@ -441,18 +524,20 @@ not used as a compatibility check. The manifest
 includes the registry, pinned revisions and actual source-content hashes even
 though materialized sources are ignored by Git.
 
-Every configuration bundle contains `plugins/registry.json`, its source identity
-snapshot, and `plugins/runtime-profile.yaml`. OVLAB passes both registry and
-runtime profile paths into the container, so images do not depend on an inherited
-machine-local profile. The generated profile uses portable container paths and
-selects CPU for a CPU-only policy. Containers receive `OVLAB_PLUGIN_REGISTRY` pointing to that
-read-only snapshot. Bundle identity includes local source content; remote
+Neutral configuration bundles contain selected `extensions/registry.json` and
+`extensions/lock.json`, along with materialized project/control/configuration
+inputs. The lock's source identities are portable; its separate locations map
+points into the worker bundle. The temporary policy facade also supplies
+`plugins/registry.json` and `plugins/runtime-profile.yaml` for existing callers.
+OVLAB passes explicit registry/runtime locations into containers, so they do not
+depend on an inherited machine-local profile. Bundle identity includes local source content; remote
 selection is pinned by commit. Scientific configuration records the plugin
 entrypoint, API and source identity. Runtime initialization should report the
 same artifact/method identity through RPC.
 Workers read remote commit pins and frozen local content identities from this
 bundle. Resolving an experiment in a worker does not require Git, checkout
-metadata, or access to the original local project. Source synchronization and
+metadata, or access to the original local project. Missing frozen inputs fail
+instead of falling back to host/cache/installed sources. Source synchronization and
 checkout verification run on the host before building images.
 
 Dry runs do not clone, build images, create containers or write generated Compose
@@ -476,7 +561,7 @@ Replace this with your own pinned dependency environment for a real model.
 ./ovlab plugin build example-policy --registry examples/policy-plugin/registry.json --dry-run
 ```
 
-For deployment/evaluation with this registry, set `OVLAB_PLUGIN_REGISTRY` as well
+For deployment/evaluation with this registry, set `OVLAB_EXTENSION_REGISTRY` as well
 as selecting an `example_policy` configuration. Copy the example project to
 start a real integration, replace the runtime adapter, and register its Git
 commit or local path. Preserve the policy/checkpoint distinction.
@@ -528,3 +613,21 @@ repository's `.git/modules` while an old source still points there.
 The immutable compound-PEFT historical snapshot lives in `references/` with its
 original content manifest and provenance. It is a tracked reference artifact,
 separate from the ignored source workspace.
+
+Both evaluation workers use RPC `ovlab-policy-rpc/2.0.0`. The transport follows
+named image/proprioception contracts and ActionSpec dimension, dtype and gripper
+semantics; it imposes no OpenVLA camera name or seven-dimensional action layout.
+Rebuild both policy and benchmark images together when upgrading RPC.
+
+A model package owns its action-interface configuration as well as its adapter.
+Its default policy must not refer to a benchmark project's internal YAML. OVLAB
+compares the configured model ActionSpec with the independently declared native
+benchmark ActionSpec; compatible fields must agree without implicit conversion.
+
+Model evaluation defaults select the model deployment only. Benchmark execution
+profiles belong to the benchmark. A complete experiment can explicitly set
+`deployment.execution_profile: execution/local.yaml` (a local `extends` override)
+or a `plugin://` URI; `ovlab eval run --execution-profile ...` overrides it for
+one run. Builds freeze the same selected profile. Profiles must bind the same
+benchmark provider. Benchmark-defined aliases remain available through
+`--renderer`, without a global list of supported renderers.

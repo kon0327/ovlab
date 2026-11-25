@@ -1,0 +1,18 @@
+{
+  "schema_version": "ovlab.extensions/v1",
+  "projects": {
+    "example-policy": {"source": {"kind": "local", "path": "examples/policy-plugin"}},
+    "example-benchmark": {"source": {"kind": "local", "path": "examples/benchmark-plugin"}}
+  },
+  "infrastructure": {
+    "sources": {},
+    "builds": {
+      "reporting": {
+        "dockerfile": "deploy/docker/Dockerfile.reporting",
+        "image": "ovlab-reporting:local",
+        "sources": [],
+        "locks": ["deploy/locks/reporting.pylock.toml", "deploy/locks/reporting.requirements.txt"]
+      }
+    }
+  }
+}

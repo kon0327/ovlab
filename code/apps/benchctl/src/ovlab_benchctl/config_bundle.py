@@ -160,6 +160,10 @@ class ConfigBundleBuilder:
         experiment_document = self._extends_closure(
             experiment_reference, kind, selected
         )
+        if kind == "experiment" and execution_reference is None:
+            configured_execution = experiment_document.get("deployment", {}).get("execution_profile")
+            if configured_execution:
+                execution_reference = self._relative(self._source(configured_execution))
         overlays: dict[str, str] = {}
         if kind == "experiment" and "offline" in experiment_document.get("deployment", {}):
             # Checkpoint acquisition is a host responsibility. Keep its setting
@@ -175,9 +179,16 @@ class ConfigBundleBuilder:
             deployment_leaf.setdefault("runtime", {})["quantization"] = quantization
             overlays[experiment_reference] = dumps(deployment_leaf)
         component_kinds = {"policy": "policy"} if kind == "deployment" else _COMPONENT_KINDS
+        benchmark_provider = None
         for name, component_kind in component_kinds.items():
             reference = experiment_document["components"][name]
             component = self._extends_closure(reference, component_kind, selected)
+            if name == "benchmark" and component.get("provider"):
+                benchmark_provider = component["provider"]
+                from .benchmark_plugins import benchmark_for_document, call_benchmark
+                owner = benchmark_for_document(component, self.repository_root)
+                for dependency in call_benchmark(owner, "bundle_references", component):
+                    self._extends_closure(dependency.reference, dependency.kind, selected)
             if name == "policy":
                 if quantization is not None:
                     component["settings"]["runtime"]["quantization"] = quantization
@@ -194,7 +205,9 @@ class ConfigBundleBuilder:
         registry = experiment_document["resources"]["registry"]
         self._extends_closure(registry, "resource_registry", selected)
         if execution_reference is not None:
-            self._extends_closure(execution_reference, "execution_profile", selected)
+            execution_document = self._extends_closure(execution_reference, "execution_profile", selected)
+            if benchmark_provider is not None and execution_document.get("provider") != benchmark_provider:
+                raise ValueError("execution profile belongs to a different benchmark provider")
 
         from .policy_plugins import registry_document, plugin_project_root
         extra_sources = {}
@@ -203,11 +216,20 @@ class ConfigBundleBuilder:
             project["configs_root"] = f"configs/plugins/configs/{project_id}"
         policy_ref = experiment_document["components"]["policy"]
         policy_doc = self.load_component(policy_ref, "policy")
-        plugin = registry_snapshot["plugins"].get(policy_doc["type"], {})
+        from .policy_plugins import plugin_for_type
+        plugin = (plugin_for_type(policy_doc["type"], self.repository_root, provider=policy_doc.get("provider")).descriptor
+                  if policy_doc["type"] != "mock" else {})
+        provider_refs = {plugin["provider_ref"]} if plugin.get("provider_ref") else set()
         project_ids = {Path(reference).parts[2] for reference in selected
                        if Path(reference).parts[:2] in {("plugins", "configs"), ("modules", "configs")} and len(Path(reference).parts) > 3}
         if plugin.get("project"):
             project_ids.add(plugin["project"])
+        if kind == "experiment":
+            benchmark_doc = self.load_component(experiment_document["components"]["benchmark"], "benchmark")
+            if benchmark_doc.get("provider"):
+                from .extensions import ProviderRef
+                project_ids.add(ProviderRef.parse(benchmark_doc["provider"]).project)
+                provider_refs.add(benchmark_doc["provider"])
         # A selected catalog may contain artifact metadata validated by another
         # registered project. Its lightweight control code belongs in the worker.
         resource_doc = self.load_component(experiment_document["resources"]["registry"], "resource_registry")
@@ -216,10 +238,17 @@ class ConfigBundleBuilder:
             owner = checkpoint_validator(entry, self.repository_root, registry=registry_snapshot)
             if owner is not None and owner.descriptor.get("project"):
                 project_ids.add(owner.descriptor["project"])
+                if owner.descriptor.get("provider_ref"):
+                    provider_refs.add(owner.descriptor["provider_ref"])
         from .plugin_projects import read_document
         from .policy_plugins import registry_path
         registration = read_document(registry_path(self.repository_root))
         catalog = None
+        if registration.get("schema_version") == "ovlab.plugins/v1" and any(
+                value.get("provider_ref") for table in ("plugins", "benchmarks", "datasets")
+                for value in registration.get(table, {}).values()):
+            from .benchmark_plugins import extension_catalog
+            registration = extension_catalog(self.repository_root).document
         if registration.get("schema_version") == "ovlab.extensions/v1":
             from .extensions import ExtensionCatalog
             catalog = ExtensionCatalog(self.repository_root, document=registration)
@@ -251,9 +280,10 @@ class ConfigBundleBuilder:
         # need the host checkout or a network fetch to validate configuration.
         from .plugin_projects import control_source_root
         control_sources = set()
-        for descriptor in registry_snapshot["plugins"].values():
-            if descriptor.get("project") in project_ids or descriptor is plugin:
-                control_sources.update(descriptor.get("control_sources", []))
+        for table in ("plugins", "benchmarks", "datasets"):
+            for descriptor in registry_snapshot.get(table, {}).values():
+                if descriptor.get("provider_ref") in provider_refs or (not descriptor.get("provider_ref") and descriptor.get("project") in project_ids):
+                    control_sources.update(descriptor.get("control_sources", []))
         for source_id in sorted(control_sources):
             source_root = Path(control_source_root(source_id, self.repository_root, registry_snapshot)).resolve()
             candidates = [source_root / "pyproject.toml"]
@@ -274,11 +304,14 @@ class ConfigBundleBuilder:
                 extra_sources[relative] = source
 
         from .plugin_identity import registered_source_identities
+        descriptors = [value for table in ("plugins", "benchmarks", "datasets")
+                       for value in registry_snapshot.get(table, {}).values()
+                       if value.get("provider_ref") in provider_refs or (not value.get("provider_ref") and value.get("project") in project_ids)]
         registry_snapshot["source_identities"] = registered_source_identities(
             self.repository_root,
-            list(dict.fromkeys(name for descriptor in registry_snapshot["plugins"].values()
-                               if descriptor is plugin or descriptor.get("project") in project_ids
-                               for name in descriptor.get("sources", []))),
+            list(dict.fromkeys([name for descriptor in descriptors for name in descriptor.get("sources", [])]
+                               + [value["source_id"] for name, value in registry_snapshot.get("projects", {}).items()
+                                  if name in project_ids])),
             registry=registry_snapshot,
         )
         for source_id in control_sources:
@@ -287,11 +320,17 @@ class ConfigBundleBuilder:
         # Keep only declarations whose code/resources belong to this run.
         registry_snapshot["projects"] = {name: value for name, value in registry_snapshot.get("projects", {}).items() if name in project_ids}
         registry_snapshot["plugins"] = {name: value for name, value in registry_snapshot["plugins"].items()
-                                        if value.get("project") in project_ids or value is plugin}
+                                        if value in descriptors}
+        for table in ("benchmarks", "datasets"):
+            registry_snapshot[table] = {name: value for name, value in registry_snapshot.get(table, {}).items()
+                                        if value in descriptors}
+        required_roles = {value["deployment"]["role"] for value in descriptors if value.get("deployment")}
         registry_snapshot["builds"] = {name: value for name, value in registry_snapshot["builds"].items()
-                                       if value.get("project") in project_ids or not value.get("project")}
-        kept_sources = {source for value in registry_snapshot["plugins"].values() for source in value.get("sources", [])}
+                                       if name in required_roles}
+        kept_sources = {source for table in ("plugins", "benchmarks", "datasets")
+                        for value in registry_snapshot.get(table, {}).values() for source in value.get("sources", [])}
         kept_sources.update(source for value in registry_snapshot["builds"].values() for source in value.get("sources", []))
+        kept_sources.update(value["source_id"] for value in registry_snapshot["projects"].values())
         registry_snapshot["sources"] = {name: value for name, value in registry_snapshot["sources"].items() if name in kept_sources}
         for name, value in registry_snapshot["sources"].items():
             if value["kind"] != "local" or name in control_sources:
@@ -300,7 +339,7 @@ class ConfigBundleBuilder:
                           if metadata["source_id"] == name), None)
             value["path"] = f"configs/plugins/projects/{owner}" if owner else f"external/{name}"
         if catalog is not None:
-            refs = [value["provider_ref"] for value in registry_snapshot["plugins"].values() if value.get("provider_ref")]
+            refs = [value["provider_ref"] for value in descriptors if value.get("provider_ref")]
             config_refs = [f"{Path(reference).parts[0][:-1]}://{Path(reference).parts[2]}/{'/'.join(Path(reference).parts[3:])}"
                            for reference in selected if Path(reference).parts[:2] in {("plugins", "configs"), ("modules", "configs")}]
             snapshot = catalog.snapshot(provider_refs=refs, config_refs=config_refs)
@@ -309,10 +348,12 @@ class ConfigBundleBuilder:
                 portable_locations["projects"][project_id] = f"configs/{value['category']}s/projects/{project_id}"
                 portable_locations["sources"][f"{project_id}/self"] = portable_locations["projects"][project_id]
                 for source_name in catalog.project_manifest(project_id).get("sources", {}):
-                    if source_name in control_sources:
-                        portable_locations["sources"][f"{project_id}/{source_name}"] = f"configs/plugins/sources/{source_name}"
+                    source_id = f"{project_id}/{source_name}"
+                    if source_id in control_sources:
+                        portable_locations["sources"][source_id] = f"configs/plugins/sources/{source_id}"
             selected_registration = {**registration, "projects": {name: value for name, value in registration["projects"].items() if name in project_ids}}
             selected_registration = deepcopy(selected_registration)
+            selected_registration["infrastructure"] = {"sources": {}, "builds": {}}
             for project_id, value in selected_registration["projects"].items():
                 if value["source"]["kind"] == "local":
                     value["source"]["path"] = portable_locations["projects"][project_id]
@@ -320,7 +361,10 @@ class ConfigBundleBuilder:
                                      ("extensions/lock.json", {"lock": snapshot.lock, "locations": portable_locations})):
                 selected.add(reference)
                 overlays[reference] = json.dumps(value, sort_keys=True, indent=2) + "\n"
-        gpu = experiment_document.get("runtime", {}).get("gpu", "all" if plugin.get("deployment", {}).get("gpu", True) else None)
+        policy_gpu = plugin.get("deployment", {}).get("gpu", bool(plugin))
+        benchmark_gpu = any(value.get("kind") == "benchmark" and value.get("deployment", {}).get("gpu", False)
+                            for value in descriptors)
+        gpu = experiment_document.get("runtime", {}).get("gpu", "all" if policy_gpu or benchmark_gpu else None)
         runtime_profile = "plugins/runtime-profile.yaml"
         selected.add(runtime_profile)
         overlays[runtime_profile] = dumps({

@@ -2,7 +2,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from ovlab_policy_sdk.plugin import PolicyPlugin, PolicyPluginValidationError as ConfigSchemaError, PolicyPluginCompatibilityError as ConfigCompatibilityError, PolicyPluginReferenceError as ConfigReferenceError
+from ovlab_policy_sdk.plugin import PolicyPluginV2 as PolicyPlugin, PolicyPluginValidationError as ConfigSchemaError, PolicyPluginCompatibilityError as ConfigCompatibilityError, PolicyPluginReferenceError as ConfigReferenceError
 from ovlab_policy_sdk.validation import mapping, exact_type, enum, non_empty_string, number
 
 
@@ -11,12 +11,32 @@ class OpenVlaPlugin(PolicyPlugin):
         self.config_type, self.component_name = config_type, component_name
 
     def deployment_context(self, policy, deployment):
-        return {"settings": {
-            "suite": policy["settings"].get("unnorm_key"),
-            "observation": {"height": deployment.get("input", {}).get("height", 224),
-                            "width": deployment.get("input", {}).get("width", 224),
-                            "profile": "native_oft" if policy["type"] == "openvla_oft" else "primary_rgb"},
-        }}
+        return None
+
+    @staticmethod
+    def _peer_input(doc, context):
+        if context is None:
+            return tuple(doc["settings"]["input"].get("shape", (224, 224, 3))), (), None
+        from ovlab_core.contracts import BenchmarkContext
+        if not isinstance(context, BenchmarkContext):
+            raise ConfigCompatibilityError("model settings require a canonical benchmark context")
+        inputs = doc["settings"]["input"]
+        camera = inputs.get("camera") or inputs["cameras"]["primary"]
+        images = {item.name: item for item in context.capabilities.observation_spec.images}
+        if camera not in images:
+            raise ConfigCompatibilityError("policy input camera is not supplied by the benchmark observation interface")
+        shapes = images[camera].shapes
+        requested = inputs.get("shape")
+        if requested is not None:
+            shape = tuple(requested)
+            if shape not in shapes:
+                raise ConfigCompatibilityError("configured policy input shape is not supplied by the benchmark")
+        elif len(shapes) != 1:
+            raise ConfigCompatibilityError("model requires one explicitly selected input image shape")
+        else:
+            shape = tuple(shapes[0])
+        claim = context.method_claims.get("libero/protocol@1", {})
+        return shape, tuple(claim.get("suites", ())), claim.get("observation_profile")
 
     def validate_checkpoint_template(self, doc, path):
         """Validate a QuIC policy whose adapter will come from training.
@@ -37,13 +57,17 @@ class OpenVlaPlugin(PolicyPlugin):
         for key in ("checkpoint_id", "processor_id", "unnorm_key"):
             exact_type(settings[key], str, f"{path}.settings.{key}")
         if doc["type"] == "openvla_oft":
-            input_ = mapping(settings["input"], f"{path}.settings.input", required=("cameras", "proprioception"))
+            input_ = mapping(settings["input"], f"{path}.settings.input", required=("cameras", "proprioception"), optional=("shape",))
             cameras = mapping(input_["cameras"], f"{path}.settings.input.cameras", required=("primary", "wrist"))
             for key, value in cameras.items(): non_empty_string(value, f"{path}.settings.input.cameras.{key}")
             non_empty_string(input_["proprioception"], f"{path}.settings.input.proprioception")
         else:
-            input_ = mapping(settings["input"], f"{path}.settings.input", required=("camera",))
+            input_ = mapping(settings["input"], f"{path}.settings.input", required=("camera",), optional=("shape",))
             exact_type(input_["camera"], str, f"{path}.settings.input.camera")
+        if "shape" in input_:
+            shape = input_["shape"]
+            if not isinstance(shape, list) or len(shape) != 3 or any(type(value) is not int or value <= 0 for value in shape) or shape[2] != 3:
+                raise ConfigSchemaError(f"{path}.settings.input.shape must be [height, width, 3] with positive integer dimensions")
         runtime_keys = (
             "device_resource", "dtype", "attention_implementation", "local_files_only",
             "trust_remote_code", "deterministic", "synchronize_inference",
@@ -91,7 +115,7 @@ class OpenVlaPlugin(PolicyPlugin):
             if raw["enabled"]:
                 raise ConfigSchemaError("QuIC provider does not expose raw policy output")
 
-    def resolve_settings(self, doc, benchmark_doc, action_spec, checkpoints, devices, *, repository_root, environment):
+    def resolve_settings(self, doc, benchmark_context, action_spec, checkpoints, devices, *, repository_root, environment):
         from ovlab_openvla_common import LiberoActionCodecConfig, OpenVlaModelSource, OpenVlaRuntimeArtifact, method_descriptor_from_registry, vanilla_base_method_descriptor
         from ovlab_openvla_common import ModelQuantization
         settings = doc["settings"]
@@ -103,7 +127,7 @@ class OpenVlaPlugin(PolicyPlugin):
         except KeyError as exc: raise ConfigReferenceError(f"unknown checkpoint resource: {exc.args[0]}") from exc
         try: device = devices[runtime["device_resource"]]
         except KeyError as exc: raise ConfigReferenceError(f"unknown device resource: {runtime['device_resource']}") from exc
-        obs = benchmark_doc["settings"]["observation"]
+        input_shape, suites, observation_profile = self._peer_input(doc, benchmark_context)
         source = lambda item: OpenVlaModelSource(
             item["source"], item["revision"], item["expected_sha256"], item.get("local_path")
         )
@@ -118,7 +142,7 @@ class OpenVlaPlugin(PolicyPlugin):
                 adapter_manifest_sha256=quic["adapter_manifest_sha256"],
                 adapter_tensor_sha256=quic["adapter_tensor_sha256"],
                 canonical_camera_name=settings["input"]["camera"],
-                input_image_shape=(obs["height"], obs["width"], 3), device=device,
+                input_image_shape=input_shape, device=device,
                 model_dtype=runtime["dtype"], attention_implementation=runtime["attention_implementation"] or "eager",
                 prompt_style=quic["prompt_style"], center_crop=quic["center_crop"],
                 adaptation_state=quic["adaptation_state"], action_codec=settings["action"]["codec"],
@@ -128,7 +152,7 @@ class OpenVlaPlugin(PolicyPlugin):
             from ovlab_openvla_oft import OpenVlaOftArtifact, OpenVlaOftSettings
             if settings["checkpoint_id"] != settings["processor_id"]:
                 raise ConfigCompatibilityError("OFT model and processor resources must be identical")
-            if benchmark_doc["settings"]["suite"] != "libero_10" or obs["profile"] != "native_oft":
+            if benchmark_context is not None and (suites != ("libero_10",) or observation_profile != "native_oft"):
                 raise ConfigCompatibilityError("native Gate E OFT requires LIBERO-10 and the native_oft profile")
             registry_entry = {
                 "repo_id": model["source"], "revision": model["revision"],
@@ -142,7 +166,7 @@ class OpenVlaPlugin(PolicyPlugin):
                 source(model), artifact, unnorm_key=settings["unnorm_key"],
                 primary_camera_name=cameras["primary"], wrist_camera_name=cameras["wrist"],
                 proprioception_name=settings["input"]["proprioception"],
-                input_image_shape=(obs["height"], obs["width"], 3),
+                input_image_shape=input_shape,
                 device=device, quantization=quantization,
                 attention_implementation=runtime["attention_implementation"],
                 target_action_spec=action_spec, record_raw_output=settings["raw_output"]["enabled"],
@@ -170,7 +194,7 @@ class OpenVlaPlugin(PolicyPlugin):
             )
             if settings["unnorm_key"] != "libero_10":
                 raise ConfigCompatibilityError("official merged LoRA reference requires unnorm_key=libero_10")
-            if benchmark_doc["settings"]["suite"] != "libero_10":
+            if benchmark_context is not None and suites != ("libero_10",):
                 raise ConfigCompatibilityError("merged LIBERO-10 LoRA is not a cross-suite acceptance policy")
         elif "artifact" in model or "method" in model:
             raise ConfigCompatibilityError("merged LoRA full weights cannot be classified as OpenVLA Vanilla")
@@ -183,7 +207,7 @@ class OpenVlaPlugin(PolicyPlugin):
         )
         return OpenVlaVanillaSettings(
             source(model), settings["unnorm_key"], processor=source(processor),
-            canonical_camera_name=settings["input"]["camera"], input_image_shape=(obs["height"], obs["width"], 3),
+            canonical_camera_name=settings["input"]["camera"], input_image_shape=input_shape,
             device=device, model_dtype=ModelDType(runtime["dtype"]),
             quantization=quantization,
             attention_implementation=runtime["attention_implementation"], local_files_only=runtime["local_files_only"],
@@ -194,27 +218,40 @@ class OpenVlaPlugin(PolicyPlugin):
             method_descriptor=method_descriptor, runtime_artifact=runtime_artifact,
         )
 
-    def validate_observation(self, doc, benchmark_doc):
-        policy_input = doc["settings"]["input"]
-        observation = benchmark_doc["settings"]["observation"]
-        benchmark_camera = (
-            observation["cameras"]["primary"]["canonical_name"]
-            if benchmark_doc["type"] == "libero"
-            else observation["camera"]
-        )
+    def validate_observation(self, doc, context):
+        if context is None:
+            return
+        input_shape, suites, profile = self._peer_input(doc, context)
+        inputs = doc["settings"]["input"]
+        observation = context.capabilities.observation_spec
+        images = {item.name: item for item in observation.images}
         if doc["type"] == "openvla_oft":
-            cameras = policy_input["cameras"]
-            supplied = {item["canonical_name"] for item in observation["cameras"].values()}
-            if set(cameras.values()) != supplied:
-                raise ConfigCompatibilityError("OFT image inputs differ from the benchmark observation interface")
-            if policy_input["proprioception"] != "robot.proprioception" or observation["profile"] != "native_oft":
+            if set(inputs["cameras"].values()) != set(images) or suites != ("libero_10",) or profile != "native_oft":
                 raise ConfigCompatibilityError("OFT requires the native LIBERO proprioception observation profile")
-        elif policy_input["camera"] != benchmark_camera:
-            raise ConfigCompatibilityError("policy input camera is not supplied by the benchmark observation interface")
-        if benchmark_doc["type"] == "mock":
-            expected_proprio = doc["settings"]["input"].get("proprioception")
-            if expected_proprio is not None and expected_proprio != observation["proprioception"]:
-                raise ConfigCompatibilityError("policy proprioception is not supplied by the benchmark observation interface")
+            proprio = {item.name: item for item in observation.proprioception}
+            expected = proprio.get(inputs["proprioception"])
+            if expected is None or expected.shapes != ((8,),) or expected.units != ("m",) * 3 + ("rad",) * 5:
+                raise ConfigCompatibilityError("OFT proprioception semantics differ from its verified interface")
+        camera = inputs.get("camera") or inputs["cameras"]["primary"]
+        spec = images[camera]
+        if spec.dtype != "uint8" or not any(value.value == "rgb" for value in spec.color_spaces):
+            raise ConfigCompatibilityError("OpenVLA requires canonical uint8 RGB observations")
+
+    def describe_capabilities(self, settings):
+        from ovlab_core.contracts import (OVLAB_CONTRACT_VERSION, ColorSpace, ImageEncoding,
+            ImageObservationSpec, ObservationRequirements, PolicyCapabilities, ProprioceptiveObservationSpec)
+        if self.config_type == "openvla_quic":
+            from ovlab_openvla_quic.service import descriptor_from_settings
+            from ovlab_openvla_quic.provider import QuICCapabilityDeclaration
+            descriptor = descriptor_from_settings(settings)
+            return QuICCapabilityDeclaration.from_mapping(descriptor.capability_identity["declaration"]).to_policy_capabilities(descriptor, {}, {})
+        names = (settings.primary_camera_name, settings.wrist_camera_name) if self.config_type == "openvla_oft" else (settings.canonical_camera_name,)
+        images = tuple(ImageObservationSpec(name, (settings.input_image_shape,), "uint8", (ImageEncoding.RAW,), (ColorSpace.RGB,)) for name in names)
+        proprio = (ProprioceptiveObservationSpec(settings.proprioception_name, ((8,),), "float32", ("m",) * 3 + ("rad",) * 5),) if self.config_type == "openvla_oft" else ()
+        horizon = 8 if self.config_type == "openvla_oft" else 1
+        return PolicyCapabilities(self.component_name, "0.2.0", OVLAB_CONTRACT_VERSION,
+            ObservationRequirements(images, proprio, len(images), len(images), len(proprio), len(proprio) if proprio else None),
+            settings.target_action_spec, horizon == 1, horizon > 1, horizon, horizon, True, True, settings.record_raw_output)
 
     def scientific_policy(self, doc):
         result = deepcopy(doc)
@@ -268,7 +305,7 @@ class OpenVlaPlugin(PolicyPlugin):
         elif self.config_type == "openvla_lora_merged":
             from ovlab_openvla_lora_merged.service import _identity_provider
         else:
-            from ovlab_remote_policy.openvla_service import _identity_provider
+            from ovlab_openvla_vanilla.service import _identity_provider
         return _identity_provider(capabilities)
 
     def validate_checkpoint(self, entry, entry_path):

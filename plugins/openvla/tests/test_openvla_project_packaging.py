@@ -68,16 +68,16 @@ def test_shared_support_is_a_library_and_builds_declare_it_explicitly():
         project = ROOT / 'plugins' / name
         manifest = json.loads((project / 'plugin.json').read_text())
         assert (project / manifest['sources']['openvla-support']['path']).resolve() == SUPPORT.resolve()
-        for descriptor in manifest['plugins'].values():
+        for descriptor in manifest['providers'].values():
             assert 'openvla-support' in descriptor['sources']
             assert 'openvla-support' in descriptor['control_sources']
         for recipe in manifest['builds'].values():
             assert 'openvla-support' in recipe['sources']
             dockerfile = (project / recipe['dockerfile']).read_text()
-            assert f'COPY external/plugin-{name} /opt/ovlab/external/plugin-{name}' in dockerfile
-            assert 'COPY external/openvla-support /opt/ovlab/external/openvla-support' in dockerfile
-            assert '/opt/ovlab/external/openvla-support' in dockerfile
-            assert f'bash /opt/ovlab/external/plugin-{name}/scripts/install-plugin.sh' in dockerfile
+            assert f'COPY external/extensions/{name}/self /opt/ovlab/external/extensions/{name}/self' in dockerfile
+            assert f'COPY external/extensions/{name}/openvla-support /opt/ovlab/external/extensions/{name}/openvla-support' in dockerfile
+            assert f'/opt/ovlab/external/extensions/{name}/openvla-support' in dockerfile
+            assert f'bash /opt/ovlab/external/extensions/{name}/self/scripts/install-plugin.sh' in dockerfile
             for lock in recipe['locks']:
                 assert (project / lock).is_file(), lock
     installer = (ROOT / 'deploy/docker/install-ovlab-packages.sh').read_text()

@@ -1,6 +1,8 @@
 """Reproducible offline HTML reports over immutable canonical run artifacts."""
 
 from __future__ import annotations
+from .historical_metadata import renderer_metadata
+from .action_metadata import component_names as _action_component_names, trace_action_spec, shared_action_spec
 
 from collections import Counter
 from collections.abc import Mapping
@@ -34,7 +36,7 @@ REPORT_PROFILE_SCHEMA = "ovlab.report-profile/v1"
 REPORT_SCHEMA = "ovlab.report/v1"
 REPORT_MANIFEST_SCHEMA = "ovlab.report-manifest/v1"
 REPORT_RENDERER_ID = "ovlab-jinja-static-html"
-REPORT_RENDERER_VERSION = "1.7.0"
+REPORT_RENDERER_VERSION = "1.8.0"
 CHART_BUILDERS = {
     "action_timeseries": "1.2.0",
     "latency_distribution": "1.2.0",
@@ -423,14 +425,6 @@ def _descriptive_statistics(values: list[float]) -> dict[str, int | float | None
     }
 
 
-def _action_component_names(dimension: int) -> tuple[str, ...]:
-    canonical = ("tx", "ty", "tz", "rx", "ry", "rz", "gripper")
-    return tuple(
-        canonical[index] if index < len(canonical) else f"component_{index}"
-        for index in range(dimension)
-    )
-
-
 def _trace_view(episode_path: Path, trace) -> dict[str, object]:
     actions = [list(map(float, item.applied_action)) for item in trace.executed_actions]
     inference = [item.inference_duration_ns / 1_000_000 for item in trace.policy_predictions]
@@ -439,10 +433,14 @@ def _trace_view(episode_path: Path, trace) -> dict[str, object]:
     closed = [item.metadata.get("closed_loop_step_duration_ns") for item in trace.executed_actions]
     closed = [float(value) / 1_000_000 for value in closed if isinstance(value, int)]
     transitions = 0
-    gripper = [row[6] for row in actions if len(row) > 6]
+    action_spec = trace_action_spec(trace)
+    indices = action_spec.get("gripper_indices", ()) if action_spec else ()
+    gripper = [row[indices[0]] for row in actions if indices and len(row) > indices[0]]
+    binary = action_spec and str(action_spec.get("gripper_convention", "")).startswith("binary_")
+    threshold = 0.5 if binary else 0.0
     for previous, current in zip(gripper, gripper[1:]):
-        transitions += (previous >= 0) != (current >= 0)
-    component_names = _action_component_names(max((len(row) for row in actions), default=0))
+        transitions += (previous >= threshold) != (current >= threshold)
+    component_names = _action_component_names(max((len(row) for row in actions), default=0), action_spec)
     allocated, reserved, peak_allocated, peak_reserved, estimated_gflops = [], [], [], [], []
     compute_identity = None
     for prediction in trace.policy_predictions:
@@ -468,7 +466,9 @@ def _trace_view(episode_path: Path, trace) -> dict[str, object]:
                 key: compute.get(key) for key in ("method", "formula", "qualification")
             }
     return {
+        "action_spec": action_spec,
         "action_series": _downsample(actions),
+        "gripper_available": bool(indices),
         "action_sample_count": len(actions),
         "action_component_statistics": {
             name: _descriptive_statistics([row[index] for row in actions if len(row) > index])
@@ -593,6 +593,9 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
         task_views.append({
             "task_id": task_id or task_path.name,
             "task_key": task_path.name,
+            "suite_id": (trace.episode_context.metadata.get("environment", {}).get("native_suite")
+                         or trace.episode_context.metadata.get("suite_name")) if episode_views else None,
+            "suite_name": trace.episode_context.metadata.get("suite_name") if episode_views else None,
             "instruction": instruction,
             "status": task_status,
             "partial": task_status in {"partial", "interrupted"},
@@ -602,9 +605,8 @@ def build_report_model(run_path: str | Path, *, scope_task_id: str | None = None
         })
     if scope_task_id is not None and not task_views:
         raise ArtifactError(f"task is not present in canonical run: {scope_task_id}")
-    renderer = final.get("metadata", {}).get("benchmark_runtime", {}).get(
-        "libero_renderer", started.get("runtime", {}).get("benchmark", {}).get("libero_renderer")
-    )
+    renderer = (renderer_metadata(final.get("metadata", {}).get("benchmark_runtime", {}))
+                or renderer_metadata(started.get("runtime", {}).get("benchmark", {})))
     detected = renderer.get("detected_renderer") if isinstance(renderer, dict) else None
     software = isinstance(detected, dict) and "llvmpipe" in str(detected.get("renderer", "")).lower()
     all_episodes = [episode for task in task_views for episode in task["episodes"]]
@@ -847,7 +849,8 @@ def _chart_svg(chart_id: str, builder: str, model: dict[str, object]) -> str:
             for episode in task["episodes"]:
                 rows.extend(episode["trace_view"]["action_series"])
         labels = [str(index) for index in range(len(rows))]
-        names = _action_component_names(max((len(row) for row in rows), default=0))
+        names = _action_component_names(max((len(row) for row in rows), default=0),
+            shared_action_spec([episode["trace_view"] for task in model["tasks"] for episode in task["episodes"]]))
         for component, name in enumerate(names):
             values = [float(row[component]) for row in rows if len(row) > component]
             series.append({"name": name, "color": colors[component], "points": _sampled_points(values)})

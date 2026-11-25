@@ -1,12 +1,13 @@
 schema_version: "0.1.0"
 kind: policy
 type: example_policy
+provider: plugin:policy:example-policy/constant
 settings:
   checkpoint_id: example-constant
   input: {}
   runtime:
     quantization: none
   action:
-    action_interface: ovlab://interfaces/actions/libero-osc-pose-v1.yaml
+    action_interface: plugin://example-policy/interfaces/planar-v1.yaml
   raw_output:
     enabled: false

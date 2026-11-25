@@ -114,7 +114,8 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
                  config=None, execution_profile=None, runner=subprocess.run):
     root = Path(repository_root).resolve()
     registry = registry_document(root, offline=offline or dry_run)
-    selected = list(registry["builds"]) if roles is None else list(dict.fromkeys(roles))
+    from .policy_plugins import resolve_build_role
+    selected = list(registry["builds"]) if roles is None else list(dict.fromkeys(resolve_build_role(role, registry) for role in roles))
     bundle = builder = None
     if config is not None:
         from .config_bundle import ConfigBundleBuilder
@@ -127,14 +128,20 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
             raise ConfigReferenceError("image configuration must be an experiment or deployment")
         document = builder.load_component(reference, kind)
         policy = builder.load_component(document["components"]["policy"], "policy")
-        configured_role = plugin_for_type(policy["type"], root, provider=policy.get("provider")).descriptor.get("deployment", {}).get("role")
-        if configured_role not in selected:
-            raise ConfigCompatibilityError("selected image roles do not provide the configured policy")
-        selected = [role for role in selected if role == configured_role or not registry["builds"][role].get("project")]
-        if roles is None:
-            selected = [configured_role]
-        if execution_profile is None and kind == "experiment" and "deployment" in document:
-            execution_profile = {"egl": "ovlab://profiles/egl.yaml", "glfw": "ovlab://profiles/glfw.yaml"}.get(document["deployment"].get("renderer", "egl"))
+        configured_roles = [plugin_for_type(policy["type"], root, provider=policy.get("provider")).descriptor.get("deployment", {}).get("role")]
+        if kind == "experiment":
+            from .benchmark_plugins import benchmark_for_document
+            benchmark = builder.load_component(document["components"]["benchmark"], "benchmark")
+            owner = benchmark_for_document(benchmark, root)
+            configured_roles.append(owner.descriptor.get("deployment", {}).get("role"))
+            if execution_profile is None:
+                renderer = document.get("deployment", {}).get("renderer")
+                execution_profile = (document.get("deployment", {}).get("execution_profile") or owner.descriptor.get("execution_profiles", {}).get(renderer)
+                                     or owner.descriptor.get("default_execution_profile"))
+        if any(role not in selected for role in configured_roles):
+            raise ConfigCompatibilityError("selected image roles do not provide the configured policy and benchmark")
+        selected = (list(dict.fromkeys(configured_roles)) if roles is None else
+                    [role for role in selected if role in configured_roles or not registry["builds"][role].get("project")])
         bundle = builder.build(reference, execution_profile, kind=kind)
     unknown = set(selected) - registry["builds"].keys()
     if unknown:
@@ -165,7 +172,8 @@ def build_images(repository_root, roles=None, *, offline=False, dry_run=False, i
             image_registry["source_identities"] = source_identities(registry, rows)
             for row in rows:
                 if row["kind"] == "local":
-                    image_registry["sources"][row["id"]]["path"] = f"/opt/ovlab/external/{row['id']}"
+                    from .plugin_sources import managed_source_relative
+                    image_registry["sources"][row["id"]]["path"] = f"/opt/ovlab/{managed_source_relative(row['id'])}"
             registry_path.write_text(json.dumps(image_registry, sort_keys=True))
             config_path = None
             if bundle is not None:

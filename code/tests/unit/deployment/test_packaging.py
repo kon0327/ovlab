@@ -17,7 +17,7 @@ from ovlab_benchctl.versioning import repository_revision
 
 ROOT = Path(__file__).resolve().parents[4]
 DOCKER = ROOT / "deploy/docker"
-PROJECTS = tuple(ROOT / "plugins" / name for name in ("openvla", "openvla-oft", "openvla-quic"))
+PROJECTS = tuple(ROOT / "plugins" / name for name in ("openvla", "openvla-oft", "openvla-quic", "libero"))
 COMPOSE = (ROOT / "deploy/compose/compose.yaml").read_text(encoding="utf-8")
 from ovlab_benchctl.deployment import ComposeDeployment
 
@@ -31,6 +31,8 @@ def deployment_workspace(tmp_path_factory):
     shutil.copytree(ROOT / "deploy/compose", root / "deploy/compose")
     (root / "configs/plugins").mkdir(parents=True)
     registry = json.loads((ROOT / "plugins/registry.json").read_text())
+    for source in registry.get("infrastructure", {}).get("sources", {}).values():
+        if source["kind"] == "local": source["path"] = str(ROOT / source["path"])
     for entry in registry["projects"].values():
         entry["source"]["path"] = str(ROOT / entry["source"]["path"])
     (root / "configs/plugins/registry.json").write_text(json.dumps(registry))
@@ -47,7 +49,7 @@ def _evaluation_services(root, profile="openvla", renderer="egl"):
 
 
 def _dockerfile(name: str) -> str:
-    paths = [DOCKER / name, *(project / "docker" / name for project in PROJECTS)]
+    paths = [ROOT / "plugins/libero/docker/Dockerfile"] if name == "Dockerfile.benchmark" else [DOCKER / name, *(project / "docker" / name for project in PROJECTS)]
     return next(path for path in paths if path.is_file()).read_text(encoding="utf-8")
 
 
@@ -105,11 +107,11 @@ def test_production_images_are_digest_pinned_non_root_and_cli_only():
         assert 'org.opencontainers.image.licenses="NOASSERTION"' in text
         assert 'io.github.ovlab.build-target="production"' in text
         expected_contract = (
-            "resolved-checkpoint-quantization-config-bundle-v2"
+            "policy-rpc-v2-config-bundle-v3"
             if name in {"Dockerfile.openvla", "Dockerfile.openvla-oft"}
             else "canonical-readonly-reporting-v2"
             if name == "Dockerfile.reporting"
-            else "native-run-config-bundle-v3"
+            else "benchmark-rpc-v2-config-bundle-v5"
         )
         assert f'io.github.ovlab.deployment.contract="{expected_contract}"' in text
 
@@ -119,21 +121,21 @@ def test_role_closures_do_not_cross_heavy_runtime_boundaries():
     reporting = _dockerfile("Dockerfile.reporting")
     openvla = _dockerfile("Dockerfile.openvla")
     oft = _dockerfile("Dockerfile.openvla-oft")
-    assert "COPY external/libero " in benchmark
-    assert "PYTHONPATH=/opt/ovlab/external/libero" in benchmark
+    assert "COPY external/extensions/libero/libero " in benchmark
+    assert "PYTHONPATH=/opt/ovlab/external/extensions/libero/libero" in benchmark
     assert "pip install" not in "\n".join(
-        line for line in benchmark.splitlines() if "/opt/ovlab/external/libero" in line
+        line for line in benchmark.splitlines() if "/opt/ovlab/external/extensions/libero/libero" in line
     )
     assert "external/openvla " not in benchmark
     assert "external/openvla-oft " not in benchmark
-    assert "COPY external/openvla " in openvla
-    assert "COPY external/libero " not in openvla
-    assert "COPY external/openvla-oft " in oft
-    assert "COPY external/libero " not in oft
+    assert "COPY external/extensions/openvla/openvla " in openvla
+    assert "COPY external/extensions/libero/libero " not in openvla
+    assert "COPY external/extensions/openvla-oft/openvla-oft " in oft
+    assert "COPY external/extensions/libero/libero " not in oft
     assert "COPY external/" not in reporting
     assert "mujoco" not in reporting.lower()
     assert "resolved-checkpoint" not in reporting
-    assert "COPY external/libero " not in _dockerfile("Dockerfile.openvla-quic")
+    assert "COPY external/extensions/libero/libero " not in _dockerfile("Dockerfile.openvla-quic")
 
 
 def test_oft_quantization_stack_pins_the_dispatch_compatible_accelerate_version():
@@ -165,7 +167,7 @@ def test_compose_is_socket_only_offline_and_least_privilege(deployment_workspace
         assert all(mount["read_only"] for mount in policy["volumes"] if isinstance(mount, dict))
         assert benchmark["environment"]["MUJOCO_GL"] == "egl"
         assert list(benchmark["depends_on"].values())[0]["condition"] == "service_healthy"
-        assert any(mount.get("target") == "/datasets" and mount["read_only"] for mount in benchmark["volumes"] if isinstance(mount, dict))
+        assert not any(mount.get("target") == "/datasets" for mount in benchmark["volumes"] if isinstance(mount, dict))
 
 
 def test_host_artifact_mounts_separate_canonical_runs_from_unified_exports(deployment_workspace):
@@ -222,13 +224,14 @@ def test_gate_i_compose_services_preserve_dataset_training_and_finalization_boun
 def test_gate_i_images_keep_dataset_and_training_dependency_closures_separate():
     dataset = _dockerfile("Dockerfile.dataset")
     training = _dockerfile("Dockerfile.training-openvla")
-    assert "COPY external/" not in dataset
+    assert "COPY external/extensions/libero/libero " not in dataset
+    assert "COPY external/extensions/libero/self " in dataset
     assert "reporting.requirements" not in dataset
-    assert "matplotlib" not in (ROOT / "deploy/locks/dataset.requirements.txt").read_text(encoding="utf-8")
-    assert "COPY external/openvla " in training
-    assert "COPY external/libero " not in training
-    assert "COPY external/openvla-oft " not in training
-    assert "COPY external/openvla-quic " not in training
+    assert "matplotlib" not in _lock("dataset.requirements.txt").read_text(encoding="utf-8")
+    assert "COPY external/extensions/openvla/openvla " in training
+    assert "COPY external/extensions/libero/libero " not in training
+    assert "COPY external/extensions/openvla-oft/openvla-oft " not in training
+    assert "COPY external/extensions/openvla-quic/openvla-quic " not in training
     assert "io.github.ovlab.dependency-lock.sha256" in dataset
     assert "io.github.ovlab.dependency-lock.sha256" in training
 
@@ -249,9 +252,9 @@ def test_hash_locks_and_immutable_vcs_revision_are_checked_in():
     ) in openvla_lock
     assert "bitsandbytes=0.43.1" in _dockerfile("Dockerfile.openvla")
     assert "rich==15.0.0" in _lock("openvla-oft.requirements.txt").read_text(encoding="utf-8")
-    assert "imageio-ffmpeg==0.6.0" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
-    assert "jinja2==3.1.6" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
-    assert "markupsafe==3.0.3" in (locks / "benchmark.requirements.txt").read_text(encoding="utf-8")
+    assert "imageio-ffmpeg==0.6.0" in _lock("benchmark.requirements.txt").read_text(encoding="utf-8")
+    assert "jinja2==3.1.6" in _lock("benchmark.requirements.txt").read_text(encoding="utf-8")
+    assert "markupsafe==3.0.3" in _lock("benchmark.requirements.txt").read_text(encoding="utf-8")
     oft = _lock("openvla-oft.pylock.toml").read_text(encoding="utf-8")
     assert oft.count('commit-id = "bc339d9ad707454c0c115970db43c260067c61ab"') == 1
     assert oft.count('commit-id = "040105d256bd28866cc6620621a3d5f7b6b91b46"') == 1
@@ -273,8 +276,8 @@ def test_dataset_pyyaml_lock_uses_the_verified_platform_wheel_hash():
     """Keep the small dataset lock aligned with the accepted runtime locks."""
     expected = "9c7708761fccb9397fe64bbc0395abcae8c4bf7b0eac081e12b809bf47700d0b"
     locks = ROOT / "deploy/locks"
-    dataset_requirement = (locks / "dataset.requirements.txt").read_text(encoding="utf-8")
-    dataset_pylock = (locks / "dataset.pylock.toml").read_text(encoding="utf-8")
+    dataset_requirement = _lock("dataset.requirements.txt").read_text(encoding="utf-8")
+    dataset_pylock = _lock("dataset.pylock.toml").read_text(encoding="utf-8")
     accepted_openvla_lock = _lock("openvla.requirements.txt").read_text(encoding="utf-8")
     assert f"pyyaml==6.0.3 --hash=sha256:{expected}" in dataset_requirement
     assert f'sha256 = "{expected}"' in dataset_pylock
@@ -319,11 +322,11 @@ def test_benchmark_renderer_is_selected_at_runtime_and_libero_paths_are_portable
     assert "LIBERO_CONFIG_PATH=/etc/ovlab/libero" in benchmark
     assert "MPLCONFIGDIR=/tmp/ovlab-matplotlib" in benchmark
     assert "install -d -o root -g root -m 0755 /etc/ovlab/libero" in benchmark
-    assert "deploy/config/libero/config.yaml /etc/ovlab/libero/config.yaml" in benchmark
+    assert "external/extensions/libero/self/runtime/config.yaml /etc/ovlab/libero/config.yaml" in benchmark
 
-    config = (ROOT / "deploy/config/libero/config.yaml").read_text(encoding="utf-8")
+    config = (ROOT / "plugins/libero/runtime/config.yaml").read_text(encoding="utf-8")
     assert "datasets: /datasets" in config
-    assert "/opt/ovlab/external/libero/libero/libero" in config
+    assert "/opt/ovlab/external/extensions/libero/libero/libero/libero" in config
     assert "/home/" not in config
 
 
@@ -333,7 +336,7 @@ def test_glfw_overlay_requires_a_display_and_removes_egl_device_configuration(de
         benchmark = services[plan.benchmark_service]
         assert benchmark["environment"]["MUJOCO_GL"] == "glfw"
         assert "MUJOCO_EGL_DEVICE_ID" not in benchmark["environment"]
-        assert benchmark["environment"]["DISPLAY"] == "${OVLAB_DISPLAY:-:0}"
+        assert benchmark["environment"]["DISPLAY"] == ":0"
         assert any(m.get("target") == "/tmp/.X11-unix" and m["read_only"] for m in benchmark["volumes"] if isinstance(m, dict))
         assert "ports" not in benchmark and "privileged" not in benchmark
 
@@ -360,7 +363,7 @@ def test_source_manifest_is_deterministic_and_records_dirty_state(tmp_path):
     assert re.fullmatch(r"[0-9a-f]{64}", first["source_content_sha256"])
     assert first["submodules"] == []
     assert {row["id"] for row in first["registered_sources"]} == set(registry["sources"])
-    assert {"plugin-openvla", "plugin-openvla-oft", "plugin-openvla-quic", "openvla-support"} <= set(registry["sources"])
+    assert {"openvla/self", "openvla-oft/self", "openvla-quic/self", "openvla/openvla-support"} <= set(registry["sources"])
     assert all("path" not in row for row in first["registered_sources"])
     assert not first["dirty"]
     assert "config/default.yaml" in {row["path"] for row in first["files"]}
@@ -444,10 +447,10 @@ def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount(deploymen
     training = _dockerfile("Dockerfile.training-openvla-quic")
     lock = _lock("quic-openvla.requirements.txt").read_text()
     for dockerfile in (policy, training):
-        assert "/opt/ovlab/external/quic-peft-vla" in dockerfile
-        assert "COPY external/quic-peft-vla " in dockerfile
-        assert "COPY external/openvla-quic " in dockerfile
-        assert "COPY external/libero " not in dockerfile
+        assert "/opt/ovlab/external/extensions/openvla-quic/quic-peft-vla" in dockerfile
+        assert "COPY external/extensions/openvla-quic/quic-peft-vla " in dockerfile
+        assert "COPY external/extensions/openvla-quic/openvla-quic " in dockerfile
+        assert "COPY external/extensions/libero/libero " not in dockerfile
         assert 'USER 10001:10001' in dockerfile
         assert "--require-hashes" in dockerfile
     assert "transformers==4.40.1" in lock
@@ -464,7 +467,7 @@ def test_quic_runtime_uses_dense_token_host_and_separate_adapter_mount(deploymen
     policy = spec["services"]["policy-openvla-quic"]
     assert policy["environment"]["OVLAB_QUIC_ADAPTER_PATH"] == "/checkpoints/quic-adapter"
     assert any(isinstance(m, dict) and m["target"] == "/checkpoints/quic-adapter" and m["read_only"] for m in policy["volumes"])
-    assert all(not isinstance(m, dict) or m["target"] != "/checkpoints/quic-adapter" for m in services["benchmark-quic"]["volumes"])
+    assert all(not isinstance(m, dict) or m["target"] != "/checkpoints/quic-adapter" for m in services["benchmark"]["volumes"])
 
 
 def test_container_root_revision_and_deployment_provenance_are_explicit(monkeypatch):

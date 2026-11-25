@@ -77,10 +77,16 @@ def _selected(root, ids, registry=None):
     return [(name, sources[name]) for name in selected]
 
 
+def managed_source_relative(name):
+    if not isinstance(name, str) or "\\" in name or Path(name).is_absolute() or any(part in {"", ".", ".."} for part in name.split("/")):
+        raise ConfigReferenceError(f"unsafe managed source identifier: {name}")
+    return Path("external/extensions" if "/" in name else "external") / name
+
+
 def _destination(root, name):
     external = Path(root) / "external"
-    path = external / name
-    if external.is_symlink() or path.is_symlink():
+    path = Path(root) / managed_source_relative(name)
+    if external.is_symlink() or any(parent.is_symlink() for parent in (path, *path.parents) if parent.is_relative_to(external)):
         raise ConfigReferenceError(f"managed source cannot be a symlink: {path}")
     return path
 
@@ -115,7 +121,7 @@ def _source_lock(root, name):
         raise ConfigReferenceError("managed source and lock directories cannot be symlinks")
     locks.mkdir(parents=True, exist_ok=True)
     # O_NOFOLLOW closes the final-component symlink hole before opening a lock.
-    fd = os.open(locks / f"{name}.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fd = os.open(locks / (hashlib.sha256(name.encode()).hexdigest() + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "a") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
         yield
@@ -167,7 +173,7 @@ def _sync_git(root, name, source, offline, git_cache_root=None):
         # are neither copied nor modified by an isolated offline build.
         fetch_from = str(cached)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=path.parent))
+    temporary = Path(tempfile.mkdtemp(prefix=f".{Path(name).name}-", dir=path.parent))
     try:
         _git(temporary, "init", "--quiet")
         _git(temporary, "remote", "add", "origin", source["url"])
@@ -206,7 +212,7 @@ def _sync_local(root, name, source):
             raise ConfigCompatibilityError(f"local source snapshot has changes: {destination}")
         if saved["source"] == str(original) and identity == saved["identity"]: return
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=destination.parent))
+    temporary = Path(tempfile.mkdtemp(prefix=f".{Path(name).name}-", dir=destination.parent))
     try:
         def ignore_generated(directory, names):
             relative = Path(directory).relative_to(original)
@@ -219,7 +225,7 @@ def _sync_local(root, name, source):
         (temporary / ".ovlab-source.json").write_text(json.dumps({"source": str(original), "identity": identity}, sort_keys=True))
         backup = None
         if destination.exists():
-            backup = Path(tempfile.mkdtemp(prefix=f".{name}-previous-", dir=destination.parent))
+            backup = Path(tempfile.mkdtemp(prefix=f".{Path(name).name}-previous-", dir=destination.parent))
             backup.rmdir()
             destination.rename(backup)
         try:

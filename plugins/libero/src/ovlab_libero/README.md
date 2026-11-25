@@ -3,8 +3,8 @@
 This integration targets the pinned LIBERO source at commit
 `8f1084e3132a39270c3a13ebe37270a43ece2a01`. Production imports are lazy:
 `import ovlab_benchmarks` and the generic interfaces do not require LIBERO,
-Robosuite, MuJoCo, Torch, or EGL. Constructing the default concrete adapter
-requires the tested local LIBERO installation and its existing initial-state
+Robosuite, MuJoCo, Torch, or EGL. Initializing the concrete `ovlab_libero` adapter
+requires a compatible local LIBERO installation and its existing initial-state
 assets; it never downloads them.
 
 ## Suites and deterministic tasks
@@ -86,8 +86,8 @@ produces truncation. Native reward remains separate.
 ## Rendering and manual validation
 
 Rendering is selected by an execution profile, independently of the scientific
-experiment. `libero-bench-egl.yaml` configures headless EGL;
-`libero-playground-glfw.yaml` configures interactive GLFW. The adapter applies
+experiment. `plugin://libero/execution/egl.yaml` configures headless EGL;
+`plugin://libero/execution/glfw.yaml` configures interactive GLFW. The adapter applies
 the resolved process environment before constructing the lazy native backend:
 
 - EGL sets `MUJOCO_GL=egl` and, when selected, `MUJOCO_EGL_DEVICE_ID`.

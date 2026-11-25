@@ -1,6 +1,6 @@
 """Minimal third-party integration: no OVLAB orchestration or model imports."""
 from dataclasses import dataclass
-from ovlab_policy_sdk.plugin import PolicyPlugin
+from ovlab_policy_sdk.plugin import PolicyPluginV2, PolicyPluginCompatibilityError, PolicyPluginReferenceError
 from ovlab_policy_sdk.validation import mapping, non_empty_string
 
 
@@ -11,7 +11,7 @@ class Settings:
     record_raw_output: bool = False
 
 
-class ExamplePlugin(PolicyPlugin):
+class ExamplePlugin(PolicyPluginV2):
     def validate_policy(self, doc, path):
         settings = mapping(doc['settings'], f'{path}.settings', required=('checkpoint_id', 'input', 'runtime', 'action', 'raw_output'))
         non_empty_string(settings['checkpoint_id'], f'{path}.settings.checkpoint_id')
@@ -27,8 +27,22 @@ class ExamplePlugin(PolicyPlugin):
             from ovlab_policy_sdk.plugin import PolicyPluginValidationError
             raise PolicyPluginValidationError('example policy does not expose raw output')
 
-    def resolve_settings(self, doc, benchmark_doc, action_spec, checkpoints, devices, *, repository_root, environment):
-        return Settings(action_spec, dict(checkpoints[doc['settings']['checkpoint_id']]))
+    def resolve_settings(self, doc, benchmark_context, action_spec, checkpoints, devices, *, repository_root, environment):
+        from .contracts import planar_action_spec
+        from ovlab_policy_sdk.adapter import _action_specs_equal
+        if not _action_specs_equal(action_spec, planar_action_spec()) or action_spec.control_frequency_hz != 5.0:
+            raise PolicyPluginCompatibilityError('example policy requires its native two-joint action interface')
+        try:
+            checkpoint = checkpoints[doc['settings']['checkpoint_id']]
+        except KeyError as exc:
+            raise PolicyPluginReferenceError('example policy checkpoint is not registered') from exc
+        return Settings(action_spec, dict(checkpoint))
+
+    def describe_capabilities(self, settings):
+        from ovlab_core.contracts import PolicyCapabilities, ObservationRequirements, OVLAB_CONTRACT_VERSION
+        return PolicyCapabilities('example-policy', '2.0.0', OVLAB_CONTRACT_VERSION,
+            ObservationRequirements(), settings.action_spec, True, False, 1, 1,
+            False, True, False, {'checkpoint': settings.checkpoint})
 
     def create_adapter(self, settings):
         from .runtime import ConstantPolicy
@@ -36,8 +50,12 @@ class ExamplePlugin(PolicyPlugin):
 
     def identity(self, capabilities):
         return {'model_identity': dict(capabilities.metadata['checkpoint']),
-                'method_identity': {'id': 'example-constant', 'version': '1.0.0'},
-                'runtime_versions': {'example-policy': '1.0.0'}}
+                'normalization_identity': {'kind': 'identity', 'units': 'rad'},
+                'prompt_template_identity': {'kind': 'none'},
+                'action_codec_identity': {'identifier': 'example-planar-joint-delta-v1',
+                                          'conversion_owner': 'example-policy', 'application_count': 0},
+                'method_descriptor': {'id': 'example-constant', 'version': '2.0.0', 'family': 'constant'},
+                'runtime_versions': {'example-policy': '2.0.0'}}
 
 
 plugin = ExamplePlugin()

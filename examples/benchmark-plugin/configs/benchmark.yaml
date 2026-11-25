@@ -1,0 +1,8 @@
+schema_version: "0.1.0"
+kind: benchmark
+type: example_planar
+provider: plugin:benchmark:example-benchmark/planar
+settings:
+  task_ids: all
+  action:
+    interface_ref: plugin://example-benchmark/interfaces/planar-v1.yaml

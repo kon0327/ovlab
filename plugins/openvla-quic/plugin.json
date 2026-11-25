@@ -90,7 +90,7 @@
   "providers": {
     "quic-peft": {
       "kind": "policy",
-      "api_version": "1",
+      "api_version": "2",
       "config_type": "openvla_quic",
       "id": "quic-peft",
       "family": "openvla_quic",
@@ -111,11 +111,9 @@
         "image": "ovlab-policy-openvla-quic:local",
         "image_env": "OVLAB_QUIC_IMAGE",
         "policy_service": "policy-openvla-quic",
-        "benchmark_service": "benchmark-quic",
         "quantization": [
           "none"
-        ],
-        "observation_profile": "primary_rgb"
+        ]
       },
       "document_kinds": [
         "quic_policy_descriptor"

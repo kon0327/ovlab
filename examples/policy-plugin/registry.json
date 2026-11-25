@@ -1,6 +1,6 @@
 {
-  "schema_version": "ovlab.plugins/v2",
-  "plugins": {
+  "schema_version": "ovlab.extensions/v1",
+  "projects": {
     "example-policy": {
       "source": {
         "kind": "local",

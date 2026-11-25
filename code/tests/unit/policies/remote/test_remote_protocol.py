@@ -60,8 +60,8 @@ def test_incompatible_protocol_version_is_rejected_clearly():
 
 def test_prediction_schema_round_trip_contains_only_public_fields(observation):
     payload = observation_to_predict_payload(observation, episode_id="episode-0")
-    assert set(payload) == {"episode_id", "step_id", "instruction", "image"}
-    assert set(payload["image"]) == {"shape", "layout", "dtype", "data_b64"}
+    assert set(payload) == {"episode_id", "step_id", "timestamp_ns", "instruction", "images", "proprioception"}
+    assert set(payload["images"][0]) == {"name", "camera_name", "timestamp_ns", "shape", "dtype", "encoding", "color_space", "data_b64"}
     episode_id, restored = predict_payload_to_observation(payload)
     assert episode_id == "episode-0"
     assert restored.step_id == observation.step_id
@@ -123,7 +123,7 @@ def test_prediction_schema_rejects_metadata_but_round_trips_negotiated_modalitie
         (proprio,),
     )
     payload = observation_to_predict_payload(with_proprio, episode_id="episode-0")
-    assert set(payload) == {"episode_id", "step_id", "instruction", "images", "proprioception"}
+    assert set(payload) == {"episode_id", "step_id", "timestamp_ns", "instruction", "images", "proprioception"}
     serialized = str(payload)
     for forbidden in ("reward", "success", "simulator_state", "object_poses", "contacts"):
         assert forbidden not in serialized
@@ -135,7 +135,7 @@ def test_prediction_schema_rejects_metadata_but_round_trips_negotiated_modalitie
 
 def test_prediction_schema_rejects_mismatched_image_size(observation):
     payload = observation_to_predict_payload(observation, episode_id="episode-0")
-    payload["image"]["data_b64"] = base64.b64encode(b"short").decode()
+    payload["images"][0]["data_b64"] = base64.b64encode(b"short").decode()
     with pytest.raises(RemotePolicyProtocolError, match="does not match declared shape"):
         predict_payload_to_observation(payload)
 
@@ -152,3 +152,54 @@ def test_action_chunk_wire_round_trip_preserves_horizon_dtype_and_offsets():
     restored = prediction_from_wire(wire)
     assert restored["actions"].dtype == np.float32 and restored["actions"].shape == (8, 7)
     np.testing.assert_array_equal(restored["actions"], actions)
+
+
+def test_prediction_round_trip_without_images_preserves_observation_time(observation):
+    source = PolicyObservation(observation.step_id, 900, observation.instruction)
+    payload = observation_to_predict_payload(source, episode_id='opaque:episode')
+    assert payload['images'] == payload['proprioception'] == []
+    episode, restored = predict_payload_to_observation(payload)
+    assert episode == 'opaque:episode' and restored.timestamp_ns == 900
+    assert restored.instruction.timestamp_ns == observation.instruction.timestamp_ns
+
+
+def test_named_depth_and_float64_proprioception_round_trip(observation):
+    image = ImageObservation('sensor.depth', np.arange(6, dtype=np.float32).reshape(2, 3),
+                             701, ImageEncoding.RAW, ColorSpace.DEPTH, 'tool-mounted-depth')
+    vector = ProprioceptiveObservation('arm.angles', np.arange(4, dtype=np.float64), 702, ('rad',) * 4)
+    source = PolicyObservation(observation.step_id, 703, observation.instruction, (image,), (vector,))
+    payload = observation_to_predict_payload(source, episode_id='opaque:episode')
+    _, restored = predict_payload_to_observation(payload)
+    assert restored.images[0].name == 'sensor.depth'
+    assert restored.images[0].camera_name == 'tool-mounted-depth'
+    assert restored.images[0].color_space is ColorSpace.DEPTH
+    assert restored.images[0].timestamp_ns == 701
+    assert restored.proprioception[0].timestamp_ns == 702
+    np.testing.assert_array_equal(restored.images[0].data, image.data)
+    assert restored.proprioception[0].values.dtype == np.float64
+    np.testing.assert_array_equal(restored.proprioception[0].values, vector.values)
+
+
+@pytest.mark.parametrize('mutation', ['overflow-shape', 'object-dtype', 'duplicate-name'])
+def test_generic_modality_limits_reject_invalid_arrays(observation, mutation):
+    payload = observation_to_predict_payload(observation, episode_id='opaque:episode')
+    if mutation == 'overflow-shape': payload['images'][0]['shape'] = [2**62, 2**62]
+    if mutation == 'object-dtype': payload['images'][0]['dtype'] = 'object'
+    if mutation == 'duplicate-name': payload['images'].append(dict(payload['images'][0]))
+    with pytest.raises(RemotePolicyProtocolError):
+        predict_payload_to_observation(payload)
+
+
+def test_two_joint_float64_action_and_gripper_none_survive_rpc():
+    from dataclasses import replace
+    from ovlab_core.contracts import ActionRepresentation, ActionSpec, GripperConvention, RotationRepresentation
+    spec = ActionSpec(2, ActionRepresentation.JOINT_DELTA, (), (), (), RotationRepresentation.NONE,
+                      GripperConvention.NONE, ('rad', 'rad'), np.full(2, -1., np.float64),
+                      np.full(2, 1., np.float64), 'float64', 5.)
+    for horizon in (1, 3):
+        actions = np.full((horizon, 2), 0.123456789123, dtype=np.float64)
+        prediction = ActionPrediction(PredictionId('two-joint'), StepId('step'), actions, spec, 2, 1, horizon)
+        result = prediction_from_wire(prediction_to_wire(prediction))
+        assert result['actions'].dtype == np.float64 and result['horizon'] == horizon
+        assert result['action_spec'].gripper_convention is GripperConvention.NONE
+        np.testing.assert_array_equal(result['actions'], actions)

@@ -1,5 +1,6 @@
 schema_version: "0.1.0"
 kind: "execution_profile"
+provider: "plugin:benchmark:libero/libero"
 id: "libero-bench-egl"
 execution:
   libero:

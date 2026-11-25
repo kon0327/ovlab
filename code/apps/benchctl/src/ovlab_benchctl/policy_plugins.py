@@ -17,7 +17,7 @@ import sys
 from .errors import ConfigCompatibilityError, ConfigReferenceError, ConfigSchemaError
 
 DEFAULT_REGISTRY = Path(__file__).with_name("plugins") / "registry.json"
-API_VERSION = "1"
+API_VERSION = "2"
 _NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _ROOT = ContextVar("ovlab_plugin_repository_root", default=None)
 _UNSET = object()
@@ -101,8 +101,15 @@ def registry_document(repository_root=None, *, document=None, offline=None):
     for name in ("sources", "plugins", "builds"):
         if not isinstance(document.get(name), dict):
             raise ConfigSchemaError(f"plugin registry {name} must be a mapping")
-        if any(not _NAME.fullmatch(key) for key in document[name]):
-            raise ConfigSchemaError(f"invalid identifier in plugin registry {name}")
+        for key in document[name]:
+            if name == "plugins" and key.startswith("plugin:policy:"):
+                from .extensions import ProviderRef
+                ProviderRef.parse(key)
+            elif "/" in key:
+                from .extensions import ExtensionCatalog
+                ExtensionCatalog._owned_ref(key, name)
+            elif not _NAME.fullmatch(key):
+                raise ConfigSchemaError(f"invalid identifier in plugin registry {name}")
     projects = document.get("projects", {})
     if not isinstance(projects, dict) or any(not _NAME.fullmatch(key) for key in projects):
         raise ConfigSchemaError("plugin projects must be a mapping with valid identifiers")
@@ -129,8 +136,10 @@ def registry_document(repository_root=None, *, document=None, offline=None):
                 raise ConfigSchemaError(f"source {name} requires a full lowercase Git commit")
             if not isinstance(source.get("url"), str) or not source["url"] or source["url"].startswith("-"):
                 raise ConfigSchemaError(f"source {name} requires a Git URL")
-            if source.get("path", f"external/{name}") != f"external/{name}":
-                raise ConfigSchemaError(f"source {name} must use external/{name}")
+            from .plugin_sources import managed_source_relative
+            expected_path = managed_source_relative(name).as_posix()
+            if source.get("path", expected_path) != expected_path:
+                raise ConfigSchemaError(f"source {name} must use {expected_path}")
         elif not isinstance(source.get("path"), str) or not source["path"]:
             raise ConfigSchemaError(f"local source {name} requires a filesystem path")
     for role, build in document["builds"].items():
@@ -151,18 +160,19 @@ def registry_document(repository_root=None, *, document=None, offline=None):
     document_owners = {}
     profiles = {}
     for config_type, plugin in document["plugins"].items():
-        if not isinstance(plugin, dict) or plugin.get("config_type", config_type) != config_type:
+        if not isinstance(plugin, dict) or (not config_type.startswith("plugin:policy:") and plugin.get("config_type", config_type) != config_type):
             raise ConfigSchemaError(f"invalid plugin descriptor {config_type}")
-        plugin["config_type"] = config_type
+        plugin.setdefault("config_type", config_type)
         if "project" in plugin and plugin["project"] not in projects:
             raise ConfigSchemaError(f"plugin {config_type} references an unknown project")
         if not all(isinstance(plugin.get(k), str) and plugin[k] for k in ("id", "family", "runtime_status")):
             raise ConfigSchemaError(f"plugin {config_type} requires id, family and runtime_status")
         if plugin["runtime_status"] not in {"implemented", "experimental", "unavailable"}:
             raise ConfigSchemaError(f"plugin {config_type} has an invalid runtime_status")
-        if plugin["id"] in ids:
-            raise ConfigSchemaError(f"duplicate plugin ID {plugin['id']}")
-        ids.add(plugin["id"])
+        identity = plugin.get("provider_ref", plugin["id"])
+        if identity in ids:
+            raise ConfigSchemaError(f"duplicate plugin ID {identity}")
+        ids.add(identity)
         entrypoint = plugin.get("entrypoint")
         if plugin["runtime_status"] != "unavailable" and (not isinstance(entrypoint, str) or not re.fullmatch(r"[A-Za-z_][\w.]*:[A-Za-z_][\w]*", entrypoint)):
             raise ConfigSchemaError(f"plugin {config_type} requires module:object entrypoint")
@@ -181,10 +191,13 @@ def registry_document(repository_root=None, *, document=None, offline=None):
             document_owners[kind] = config_type
         deploy = plugin.get("deployment")
         if deploy is not None:
-            required = ("profile", "role", "image", "image_env", "policy_service", "benchmark_service", "observation_profile")
+            required = ("profile", "role", "image", "image_env", "policy_service")
             if not isinstance(deploy, dict) or any(not isinstance(deploy.get(k), str) or not deploy[k] for k in required):
                 raise ConfigSchemaError(f"plugin {config_type} has invalid deployment metadata")
-            if any(not _NAME.fullmatch(deploy[k]) for k in ("profile", "role", "policy_service", "benchmark_service")):
+            if "/" in deploy["role"]:
+                from .extensions import ExtensionCatalog
+                ExtensionCatalog._owned_ref(deploy["role"], "deployment role")
+            if any(not _NAME.fullmatch(deploy[k]) for k in ("profile", "policy_service", "benchmark_service") if k in deploy):
                 raise ConfigSchemaError(f"plugin {config_type} has invalid service/profile identifier")
             if deploy["role"] not in document["builds"]:
                 raise ConfigSchemaError(f"plugin {config_type} references unknown build role")
@@ -195,10 +208,10 @@ def registry_document(repository_root=None, *, document=None, offline=None):
                 raise ConfigSchemaError(f"plugin {config_type} build omits required plugin sources")
             if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", deploy["image_env"]):
                 raise ConfigSchemaError(f"plugin {config_type} requires a valid image environment variable")
-            if deploy["policy_service"] == deploy["benchmark_service"]:
+            if deploy["policy_service"] == deploy.get("benchmark_service"):
                 raise ConfigSchemaError(f"plugin {config_type} policy and benchmark services must differ")
             reserved_services = {"reporting", "export", "dataset-acquire", "checkpoint-finalizer"}
-            if {deploy["policy_service"], deploy["benchmark_service"]} & reserved_services:
+            if {deploy["policy_service"], deploy.get("benchmark_service")} & reserved_services:
                 raise ConfigSchemaError(f"plugin {config_type} uses a reserved infrastructure service name")
             if deploy["profile"] in {"reporting", "export", "dataset-acquire", "training", "training-finalize"}:
                 raise ConfigSchemaError(f"plugin {config_type} uses a reserved infrastructure profile")
@@ -206,7 +219,7 @@ def registry_document(repository_root=None, *, document=None, offline=None):
                 raise ConfigSchemaError(f"plugin {config_type} uses a reserved infrastructure image variable")
             if type(deploy.get("gpu", True)) is not bool:
                 raise ConfigSchemaError(f"plugin {config_type}.deployment.gpu must be boolean")
-            if deploy["profile"] in profiles and profiles[deploy["profile"]] != deploy:
+            if not plugin.get("provider_ref") and deploy["profile"] in profiles and profiles[deploy["profile"]] != deploy:
                 raise ConfigSchemaError(f"deployment profile {deploy['profile']!r} has conflicting definitions")
             profiles[deploy["profile"]] = deploy
             quantization = deploy.get("quantization", ["none"])
@@ -223,9 +236,9 @@ def registry_identity(repository_root=None, *, roles=None):
         from .extensions import ExtensionCatalog
         catalog = ExtensionCatalog(root, document=registration)
         runtime = registry_document(root)
-        selected = list(runtime["builds"]) if roles is None else list(roles)
-        builds = [f"{runtime['builds'][role].get('project', '@infrastructure')}/{role}" for role in selected]
-        providers = [item["provider_ref"] for item in runtime["plugins"].values()
+        selected = list(runtime["builds"]) if roles is None else [resolve_build_role(role, runtime) for role in roles]
+        builds = list(selected)
+        providers = [item["provider_ref"] for table in ("plugins", "benchmarks", "datasets") for item in runtime.get(table, {}).values()
                      if item.get("deployment", {}).get("role") in selected and item.get("provider_ref")]
         return catalog.snapshot(provider_refs=providers, build_refs=builds).sha256
     document = registry_document(repository_root)
@@ -266,8 +279,13 @@ class LoadedPolicyPlugin:
         for name in self.descriptor.get("sources", []):
             if project and name == self.registry["projects"][project]["source_id"]:
                 continue
+            if project and name not in self.descriptor.get("control_sources", []):
+                # Upstreams belong to image builds. Planning exposes only the
+                # adapter and explicit control dependencies, never external/.
+                continue
             source = self.registry["sources"][name]
-            path = self.repository_root / "external" / name
+            from .plugin_sources import _destination
+            path = _destination(self.repository_root, name)
             if name in self.descriptor.get("control_sources", []):
                 from .plugin_projects import control_source_root
                 path = control_source_root(name, self.repository_root, self.registry)
@@ -308,7 +326,7 @@ class LoadedPolicyPlugin:
         from ovlab_policy_sdk.plugin import PolicyPlugin
         if not isinstance(implementation, PolicyPlugin):
             raise ConfigCompatibilityError(f"plugin {self.descriptor['id']} must inherit PolicyPlugin")
-        if getattr(implementation, "api_version", None) != API_VERSION:
+        if getattr(implementation, "api_version", None) != self.descriptor.get("api_version", "1"):
             raise ConfigCompatibilityError(f"plugin {self.descriptor['id']} requires unsupported plugin API {getattr(implementation, 'api_version', None)!r}")
         for method in ("validate_policy", "resolve_settings", "create_adapter", "identity"):
             if not callable(getattr(implementation, method, None)):
@@ -325,20 +343,21 @@ class LoadedPolicyPlugin:
         for candidate in candidates:
             module_path = candidate.joinpath(*module.split("."))
             expected.extend(p.resolve() for p in (module_path.with_suffix(".py"), module_path / "__init__.py") if p.is_file())
+        if self.descriptor.get("project") and not expected:
+            raise ConfigReferenceError(f"plugin {self.descriptor['id']} entrypoint is missing from its selected sources")
         if expected and Path(getattr(loaded, "__file__", "")).resolve() not in expected:
             same_source = False
             if self.descriptor.get("project"):
                 from .plugin_sources import tree_identity
                 loaded_file = Path(getattr(loaded, "__file__", "")).resolve()
+                namespace = module.split(".")[0]
+                loaded_package = next((parent for parent in loaded_file.parents if parent.name == namespace), None)
                 for candidate in candidates:
-                    target = candidate.joinpath(*module.split("."))
-                    if not any(path.is_file() for path in (target.with_suffix(".py"), target / "__init__.py")):
-                        continue
-                    for parent in loaded_file.parents:
-                        old_target = parent.joinpath(*module.split("."))
-                        if loaded_file in (old_target.with_suffix(".py"), old_target / "__init__.py"):
-                            same_source = tree_identity(parent) == tree_identity(candidate)
-                            break
+                    package = candidate / namespace
+                    if loaded_package is not None and package.is_dir():
+                        same_source = tree_identity(package) == tree_identity(loaded_package)
+                    elif len(module.split(".")) == 1 and package.with_suffix(".py").is_file() and loaded_file.is_file():
+                        same_source = package.with_suffix(".py").read_bytes() == loaded_file.read_bytes()
                     if same_source:
                         break
             if not same_source:
@@ -415,6 +434,9 @@ def plugin_for_type(config_type, repository_root=None, *, provider=None):
     if provider is not None:
         from .plugin_projects import read_document
         root = _root(repository_root)
+        if (root / "configs/.ovlab-bundle.json").is_file() and (root / "configs/extensions/lock.json").is_file():
+            from .benchmark_plugins import extension_catalog
+            extension_catalog(root).resolve_provider(provider, expected_kind="policy")
         registration = read_document(registry_path(root))
         if registration.get("schema_version") == "ovlab.extensions/v1":
             from .extensions import ExtensionCatalog
@@ -423,7 +445,7 @@ def plugin_for_type(config_type, repository_root=None, *, provider=None):
                 raise ConfigCompatibilityError(f"policy type {config_type!r} differs from its selected provider {provider}")
             registration["projects"] = {selected.ref.project: registration["projects"][selected.ref.project]}
             document = registry_document(root, document=registration)
-            return LoadedPolicyPlugin(deepcopy(document["plugins"][config_type]), root, document)
+            return LoadedPolicyPlugin(deepcopy(document["plugins"][provider]), root, document)
     plugins = registered_plugins(repository_root)
     if provider is not None:
         owners = [plugin for plugin in plugins if plugin.descriptor.get("provider_ref") == provider]
@@ -474,3 +496,13 @@ def call_plugin(plugin, method, *args, **kwargs):
 
 def plugin_for_document(kind, repository_root=None):
     return next((p for p in registered_plugins(repository_root) if kind in p.descriptor.get("document_kinds", [])), None)
+
+
+def resolve_build_role(role, registry):
+    """Accept a qualified role, or an unambiguous local convenience alias."""
+    if role in registry["builds"]:
+        return role
+    matches = [key for key in registry["builds"] if key.rsplit("/", 1)[-1] == role]
+    if len(matches) != 1:
+        raise ConfigReferenceError(f"image role {role!r} is unknown or ambiguous; use project/role")
+    return matches[0]

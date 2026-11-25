@@ -33,6 +33,67 @@ signal, canonical result, report and export contracts. `reporting.enabled=false`
 continues to suppress derived HTML while preserving the isolated export. It is
 not a request to omit the reporting/export execution role.
 
+## Implemented boundaries
+
+The registration format is `ovlab.extensions/v1` with a `projects` mapping.
+Each binding selects a local directory or a full immutable Git commit and an
+optional manifest path. New projects default to `extension.json`; the three
+existing model projects explicitly retain the filename `plugin.json` with the
+new `ovlab.extension/v1` contents. There is one manifest per project, not a pair
+of competing declarations.
+
+Manifest category belongs to the project; provider kind belongs to each entry
+under `providers`. A plugin project can contain several provider kinds. Common
+metadata supports policy, benchmark, service, dataset and training providers;
+module metadata reserves metric/report kinds without supplying a runtime SDK.
+A module containing only configuration and no providers is a supported
+registration/discovery fixture, not a qualified metric/report implementation.
+Manifest schema, provider API and Python package versions are independent.
+
+Qualified provider bindings include category, kind, project and local provider
+ID, for example `plugin:benchmark:libero/libero`. Component `type` remains the
+selected provider's configuration type. Manifest source/build names are local
+to their project; common catalog identities use `project/local`, including
+`project/self`. Physical staging is
+`external/extensions/<project>/<source>`, independently of existing user
+checkouts under `external/`. Build selectors use `project/build-role`; a local
+role alias is accepted only when its owner is unique. The temporary
+`extension_compat.py` facade preserves caller shapes, not a second registration
+authority or a separate source/build namespace.
+
+`ExtensionCatalog` owns declarative discovery, acquisition primitives, bounded
+configuration roots and selected snapshots. It does not import provider code
+for listing or selection and does not fetch an unavailable unrelated project.
+Acquisition is explicit; the pinned-project cache checks origin, revision and
+cleanliness. Selected locks (`ovlab.extension-lock/v1`) describe portable
+declarations and source identities, while locations describe materialized
+host/worker paths separately. A frozen worker resolves from its selected lock
+and bundled locations and fails if an input is absent; it must not recover from
+host checkouts, external caches, installed project locators or the network.
+
+The SDK split keeps `ovlab_benchmarks.plugin` standard-library-only for control
+contracts and deployment descriptions. `ovlab_benchmarks.catalog` owns typed
+task/catalog/capability utilities and can use the canonical NumPy DTOs. Policy
+API `"2"` receives `BenchmarkContext`: identity, capabilities, selected task-set
+identity and explicit method claims. It never parses the selected benchmark's
+YAML. Standalone serving has no benchmark context and must not infer one from
+a model normalization key. `BenchmarkResolutionContext` carries already
+resolved orchestration inputs into the benchmark's own settings hook.
+
+`plugins/libero` owns the concrete benchmark distribution (`ovlab_libero`),
+portable task catalog and native bindings, action/observation/signal mapping,
+execution profiles, renderer, runtime configuration, dependency locks and image
+recipes. Its benchmark provider declares the benchmark image/GPU/mount needs;
+the selected model independently declares its policy image/resources. The
+orchestrator composes and verifies that pair. Its RLDS provider implements
+`ovlab_core.datasets.DatasetProvider`; source-specific acquisition remains in
+the project, while publication, verified inventories and lifecycle remain
+generic. SDK/core code has no dependency on `ovlab-benchctl`.
+
+Metrics, report generation and export continue through the existing canonical
+pipeline after the model/benchmark boundary. Registration support for future
+modules does not change those runtime owners during this migration.
+
 ## Stages and commit boundaries
 
 | Stage | Complete change | Required qualification before commit |
@@ -174,15 +235,14 @@ for this preparation. Recheck current workloads before future runtime smoke.
 
 - Stage 0: plan and independent boundary audit completed; runtime availability
   inspected read-only.
-- Stage 1: common catalog implementation and independent isolation tests are in
-  progress. API-level test execution and second review are pending.
-- Initial focused baseline attempt in `ovlab-tester`: report/export checks could
-  not run because Jinja2/matplotlib are absent; the configured-run check reached
-  the in-progress registry integration before `extensions.py` was available.
-  These are not passing smoke evidence. Repeat after the catalog is complete
-  using the reporting-capable environment for report/export checks.
-- Stages 2–5: not yet qualified. The frozen subprocess and complete runtime
-  acceptance gates above remain open.
+- Stages 1–3 are committed as `25c008d`, `e75e659` and `d3e27c4` respectively;
+  their recorded evidence is listed below. Those gates do not establish a
+  qualified API v2 production deployment or LIBERO image.
+- Stage 4 is complete: API v2 model/benchmark composition, public CPU and native
+  LIBERO workflows, metrics/report/export and read-only integrity checks passed.
+- Stage 5 is in progress: installed pinned-Git regression, final API compatibility
+  cleanup, repeated smoke and documentation/cleanup. External publication remains
+  separate future work.
 
 ## Implementation evidence
 
@@ -191,3 +251,79 @@ Phase 1 adds the shared catalog and migrates the in-tree policy manifests withou
 Phase 2 freezes the selected neutral lock beside its portable runtime locations, prunes unrelated policy declarations, validates cached origins and closes project/control-source host fallback. Targeted build/config regressions: 125 passed. Second review, relocation and closed-module-bundle checks: 24 passed. Large runtime data remains external; only selected control code/configuration is bundled.
 
 Phase 3 adds BenchmarkPlugin API1, immutable task/catalog/peer contracts, policy API2 alongside unchanged API1, a lower-level dataset provider contract, and pure connection preflight. The SDK toy executes two CPU tasks into canonical artifacts, metrics and report without qualifying the public CLI/Compose route. SDK plus runner review: 39 tests passed. No concrete simulator/runtime imports are introduced in SDK contracts.
+
+Phase 4 integration also removes the remaining model implementation from the
+RPC SDK: vanilla service identity lives in the OpenVLA package. RPC v2 carries
+named typed observations and arbitrary ActionSpec dimensions/conventions. Model
+packages own action-interface defaults; benchmark execution profiles are
+selected explicitly and frozen with local extensions. Reports receive explicit
+benchmark/suite/renderer identity and recorded action semantics. Historical
+artifact fallback is read-only. The generic metrics/report implementation still
+belongs to the subsequent module phases.
+
+
+### Stage 4 public qualification (2026-11-25)
+
+The full unit/contract/selected-integration gate passed 1,146 tests before final
+review. Review fixed adapter abort delegation and runtime task-limit/index drift,
+optional runtime metadata, missing frozen example/experiment fallback and
+unselected-invalid-project isolation. The subsequent broad gate passed 1,155
+tests and exposed one old inventory assertion; explicit selected-corrupt-project
+rejection and the updated inventory behavior then passed the 27-test registry
+review. Deployment review passed 38 tests; report/export regression passed 30.
+The remaining report/browser tests are repeated at the final stage.
+
+Independent CPU invocation (generated private example registry/profile):
+
+```bash
+OVLAB_EXTENSION_REGISTRY="$PWD/configs/extensions/cpu-example.json" \
+OVLAB_LOCAL_PROFILE="$PWD/configs/local/cpu-plugin-example.yaml" \
+OVLAB_COMPOSE_ENV_FILE="$PWD/configs/local/cpu-plugin-example.env" \
+ovlab eval run configs/evaluation/cpu-plugin-example.yaml --offline \
+  --project-name ovlab-phase4-cpu-final --json
+```
+
+Run: `cpu-plugin-example_2026-11-25_12-16-09_acecdf64`, under
+`/tmp/ovlab-phase4-cpu-data/runs/evaluate/`. It completed the three opaque tasks
+with a two-dimensional joint action contract. Policy and benchmark services
+exited 0; Compose cleanup completed. Frozen bundle identity:
+`e47946e5e57067bddee910097607f2f5f6bdab259beafb3880e8f11a2aef1388`.
+Canonical verify, metric recompute (all results agree), report verify and isolated
+export verify succeeded. All 58 canonical files retained identical SHA-256.
+
+Native GPU invocation:
+
+```bash
+OVLAB_LOCAL_PROFILE="$PWD/configs/local/gate-b-showrack.yaml" \
+ovlab run examples/experiments/plugin-pipeline-smoke.yaml --json
+```
+
+Workflow: `plugin-pipeline-smoke_2026-11-25_12-14-14_2370e2a427`.
+Training: `plugin-pipeline-smoke-train_2026-11-25_13-15-25_4b67e506` (three
+optimizer steps), finalized adapter `checkpoint-f7270eb3f519920f36f657aed037ff08`.
+Evaluation: `plugin-pipeline-smoke-eval_2026-11-25_12-18-00_f5444601`, one real
+LIBERO task with a two-step limit, under that workflow's
+`evaluate/evaluate-checkpoint/` directory in `ovlab-data/runs`.
+Both eval services exited 0 and cleanup completed. Training and evaluation
+reports and isolated exports succeeded. Canonical verify, metric recompute,
+report verify and export verify passed; all 43 evaluation canonical files kept
+identical SHA-256. Frozen eval bundle:
+`31408d7c39c44ae19ac5f2ee70c23cbc8c3875c8caf7f6e0f87be112b33f287d`.
+The initial workflow attempt caught missing adapter mounts in static preflight;
+mounts now share the same read-only container locations across preflight and
+both workers, covered by the deployment regression.
+
+Selected immutable image IDs for this qualification:
+
+| Role | Image ID (sha256) |
+| --- | --- |
+| LIBERO benchmark | `29613151ccc5cbbd5fdc8af56204a797a74f839ff28a17a11f9d8938b6d9151c` |
+| LIBERO dataset | `cf6b5f4f68a53033b0967c041b694888e0936d363512ddf38a595d29785852f6` |
+| QuIC policy | `409974411fc76a3af3b1127519a3c2e7ee2cd2bc15d39853b64aea8d5e217c71` |
+| QuIC training | `d11ec14cfdc75cb3a076b69909d30d98afa0929099cb688357b2dc147fe313bf` |
+| QuIC finalizer | `453ff2d72593e99802e6992b9acbb545c812004d2f0a238a366e88a7d8690b64` |
+| Reporting | `4fff3381dcbd71499214f682daaf908d44e6e6e8a25f2d37a70c8e53a9fcaf33` |
+
+This is pipeline/lifecycle qualification, not a model-quality experiment. Dataset,
+base checkpoint and native LIBERO assets were reused read-only; no user source
+checkout was modified. OpenVLA/OFT images were not used by this native gate.

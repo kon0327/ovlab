@@ -7,7 +7,7 @@ import pytest
 
 from helpers.contexts import make_run_context
 from helpers.fake_libero import FakeLiberoBackend
-from ovlab_benchmarks.libero import (
+from ovlab_libero import (
     LiberoAdapterSettings,
     LiberoBenchmarkAdapter,
     LiberoConfigurationError,
@@ -82,7 +82,7 @@ def test_conflicting_already_imported_graphics_backend_fails(monkeypatch) -> Non
 
 
 def test_renderer_is_applied_before_default_backend_construction(monkeypatch) -> None:
-    import ovlab_benchmarks.libero.adapter as adapter_module
+    import ovlab_libero.adapter as adapter_module
 
     monkeypatch.delenv("MUJOCO_GL", raising=False)
     monkeypatch.delenv("MUJOCO_EGL_DEVICE_ID", raising=False)

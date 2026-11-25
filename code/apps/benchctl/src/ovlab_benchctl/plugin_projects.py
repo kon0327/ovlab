@@ -105,7 +105,7 @@ def expand_projects(document, root, *, offline=False, catalog=None):
     if any(not isinstance(document.get(key, {}), dict) for key in ("sources", "builds")):
         raise ConfigSchemaError("plugin project sources and builds must be mappings")
     result = {"schema_version": "ovlab.plugins/v1", "sources": deepcopy(document.get("sources", {})),
-              "builds": deepcopy(document.get("builds", {})), "plugins": {}, "projects": {}}
+              "builds": deepcopy(document.get("builds", {})), "plugins": {}, "projects": {}, "benchmarks": {}, "datasets": {}}
     for name, registration in registrations.items():
         if not isinstance(registration, dict) or not isinstance(registration.get("source"), dict):
             raise ConfigSchemaError(f"plugin {name} requires a project source")
@@ -114,8 +114,9 @@ def expand_projects(document, root, *, offline=False, catalog=None):
         source = deepcopy(_source(registration["source"]))
         project = (catalog.project_root(name) if catalog is not None else
                    acquire_project(root, name, source, offline=offline or registration.get("offline", False)))
-        manifest_name = registration.get("manifest", "plugin.json")
+        manifest_name = registration.get("manifest", "extension.json" if catalog is not None else "plugin.json")
         manifest = read_document(_inside(project, manifest_name, "plugin manifest"))
+        neutral = manifest if manifest.get("schema_version") == "ovlab.extension/v1" else None
         from .extension_compat import policy_manifest
         manifest = policy_manifest(manifest)
         if (manifest.get("schema_version") != "ovlab.plugin/v1" or manifest.get("api_version") != "1"
@@ -160,6 +161,17 @@ def expand_projects(document, root, *, offline=False, catalog=None):
                 if hook in manifest:
                     descriptor.setdefault(hook, deepcopy(manifest[hook]))
         _merge(result["plugins"], descriptors, "policy types")
+        if neutral is not None:
+            for provider_id, declaration in neutral["providers"].items():
+                provider_kind = declaration["kind"]
+                if provider_kind not in {"benchmark", "dataset"}:
+                    continue
+                descriptor = deepcopy(declaration)
+                descriptor.update(project=name, id=provider_id,
+                    provider_ref=f"plugin:{provider_kind}:{name}/{provider_id}")
+                descriptor["sources"] = list(dict.fromkeys([source_id, *descriptor.get("sources", [])]))
+                table = "benchmarks" if provider_kind == "benchmark" else "datasets"
+                result[table][descriptor["provider_ref"]] = descriptor
         configs = manifest.get("configs", {})
         if not isinstance(configs, dict) or not isinstance(manifest.get("capabilities", {}), dict):
             raise ConfigSchemaError(f"plugin {name} configs and capabilities must be mappings")
@@ -179,7 +191,7 @@ def expand_projects(document, root, *, offline=False, catalog=None):
         if not isinstance(aliases, dict):
             raise ConfigSchemaError(f"plugin {name} configuration aliases must be a mapping")
         result["projects"][name] = {
-            "kind": manifest["kind"], "description": manifest.get("description", ""),
+            "kind": (next(iter(neutral["providers"].values()))["kind"] if neutral and neutral["providers"] else manifest["kind"]), "description": manifest.get("description", ""),
             "source_id": source_id, "manifest": manifest_name, "version": manifest["version"],
             "configs_root": config_root, "config_aliases": aliases,
             "capabilities": deepcopy(manifest.get("capabilities", {})),
@@ -211,7 +223,8 @@ def project_root(name, root, registry, *, acquire=True):
         cached = root / "plugins/.cache" / name / source["commit"] / "external" / source_id
         if cached.is_dir():
             return cached.resolve()
-    staged = root / "external" / source_id
+    from .plugin_sources import _destination
+    staged = _destination(root, source_id)
     if staged.is_dir() and source_id in registry.get("source_identities", {}):
         return staged.resolve()
     from importlib.metadata import entry_points
@@ -238,7 +251,10 @@ def control_source_root(name, root, registry, *, acquire=True):
     root = Path(root).resolve()
     from .policy_plugins import _OFFLINE
     acquire = acquire and not _OFFLINE.get()
-    if not isinstance(name, str) or not _NAME.fullmatch(name):
+    if "/" in name:
+        from .extensions import ExtensionCatalog
+        ExtensionCatalog._owned_ref(name, "control source")
+    elif not isinstance(name, str) or not _NAME.fullmatch(name):
         raise ConfigSchemaError(f"invalid control source identifier: {name}")
     try:
         source = registry["sources"][name]
@@ -265,7 +281,8 @@ def control_source_root(name, root, registry, *, acquire=True):
             raise ConfigReferenceError("control source cache cannot contain symlinks")
     from .plugin_sources import prepared_sources
     with prepared_sources(cache, [name], registry={"sources": {name: source}}, offline=not acquire):
-        return cache / "external" / name
+        from .plugin_sources import _destination
+        return _destination(cache, name)
 
 
 def register_project(root, location, *, commit=None, registry_path=None, dry_run=False):

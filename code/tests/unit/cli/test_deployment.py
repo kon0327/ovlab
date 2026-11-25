@@ -25,6 +25,7 @@ ENV_FILE = "deploy/compose/.env.example"
 LORA = "configs/.tests/evaluation/openvla.yaml"
 OFT = "configs/.tests/evaluation/oft.yaml"
 _PREFLIGHT_IMAGES = ComposeDeployment._preflight_images
+_PREFLIGHT_CONTRACTS = ComposeDeployment._preflight_contracts
 
 
 def test_compose_evaluation_progress_redraws_on_host_terminal():
@@ -33,20 +34,20 @@ def test_compose_evaluation_progress_redraws_on_host_terminal():
             return True
 
     terminal = Terminal()
-    output = _ComposeProgressOutput(terminal, "benchmark-openvla")
-    output.write("benchmark-openvla-1  | [Evaluation] [.....] 0/30 episode running\n")
-    output.write("\x1b[32mbenchmark-openvla-1\x1b[0m  | [Evaluation] [=....] 1/30 episode running\n")
-    output.write("benchmark-openvla-1  | [Evaluation] [=====] 30/30 episode completed\n")
+    output = _ComposeProgressOutput(terminal, "benchmark")
+    output.write("benchmark-1  | [Evaluation] [.....] 0/30 episode running\n")
+    output.write("\x1b[32mbenchmark-1\x1b[0m  | [Evaluation] [=....] 1/30 episode running\n")
+    output.write("benchmark-1  | [Evaluation] [=====] 30/30 episode completed\n")
     output.close()
     assert terminal.getvalue().count("\r[Evaluation]") == 3
     assert terminal.getvalue().count("\n") == 1
-    assert "benchmark-openvla-1" not in terminal.getvalue()
+    assert "benchmark-1" not in terminal.getvalue()
 
 
 def test_compose_progress_keeps_plain_logs_and_other_messages():
     stream = StringIO()
-    output = _ComposeProgressOutput(stream, "benchmark-quic")
-    first = "benchmark-quic-1  | [Evaluation] 1/3 episode running\n"
+    output = _ComposeProgressOutput(stream, "benchmark")
+    first = "benchmark-1  | [Evaluation] 1/3 episode running\n"
     second = "policy-openvla-quic-1  | loaded checkpoint\n"
     output.write(first)
     output.write(second)
@@ -76,6 +77,33 @@ class _Result:
     stderr: str = ""
 
 
+def test_adapter_mount_is_shared_by_workers_and_static_preflight(tmp_path):
+    adapter = tmp_path / 'adapter'
+    adapter.mkdir()
+    (adapter / 'adapter.json').write_text('{}')
+    (adapter / 'adapter.safetensors').write_bytes(b'fixture')
+    calls = []
+    deployment = ComposeDeployment(REPOSITORY,
+        environment={'OVLAB_QUIC_ADAPTER_HOST_PATH': str(adapter)},
+        runner=lambda command, **kwargs: calls.append(command) or _Result(0))
+    plan = deployment.plan('configs/.tests/evaluation/quic.yaml', env_file=ENV_FILE)
+    mounts = deployment._runtime_mounts(plan)
+    services = deployment.service_spec(plan, mounts)['services']
+    for service in services.values():
+        assert service['environment']['OVLAB_QUIC_ADAPTER_PATH'] == '/checkpoints/quic-adapter'
+        assert any(row.get('target') == '/checkpoints/quic-adapter' and row['read_only']
+                   for row in service['volumes'] if isinstance(row, dict))
+
+    checkpoint = SimpleNamespace(host_path=tmp_path, container_path='/checkpoints/resolved/model')
+    _PREFLIGHT_CONTRACTS(deployment, plan,
+        {'OVLAB_EXPERIMENT_CONFIG': '/opt/ovlab/configs/example.yaml'}, checkpoint, tmp_path)
+    command = calls[0]
+    assert f'type=bind,source={adapter},target=/checkpoints/quic-adapter,readonly' in command
+    assert 'OVLAB_QUIC_ADAPTER_PATH=/checkpoints/quic-adapter' in command
+    assert command[command.index('--network') + 1] == 'none'
+    assert '--gpus' not in command
+
+
 class _Runner:
     def __init__(self, *returncodes: int, status_payload: str | None = None) -> None:
         self.returncodes = list(returncodes)
@@ -87,7 +115,7 @@ class _Runner:
         if command[-4:] == ["ps", "--all", "--format", "json"]:
             profile = command[command.index("--profile") + 1]
             policy = "policy-openvla-oft" if profile == "oft" else "policy-openvla"
-            benchmark = "benchmark-oft" if profile == "oft" else "benchmark-openvla"
+            benchmark = "benchmark" if profile == "oft" else "benchmark"
             payload = self.status_payload or "\n".join((
                 json.dumps({"Service": policy, "State": "exited", "ExitCode": 0}),
                 json.dumps({"Service": benchmark, "State": "exited", "ExitCode": 0}),
@@ -129,6 +157,7 @@ def resolved_checkpoint(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(ComposeDeployment, "_resolve_checkpoint", lambda self, plan: checkpoint)
     monkeypatch.setattr(ComposeDeployment, "_preflight_images", lambda self, plan: None)
+    monkeypatch.setattr(ComposeDeployment, "_preflight_contracts", lambda *args: None)
 
 
 def test_openvla_egl_run_preflights_starts_and_reaps_one_project(deployment_environment):
@@ -150,7 +179,7 @@ def test_openvla_egl_run_preflights_starts_and_reaps_one_project(deployment_envi
     assert config[-2:] == ["config", "--quiet"]
     assert "compose.glfw.yaml" not in " ".join(config)
     assert up[-6:] == [
-        "up", "--pull", "never", "--no-build", "--exit-code-from", "benchmark-openvla",
+        "up", "--pull", "never", "--no-build", "--exit-code-from", "benchmark",
     ]
     assert status[-4:] == ["ps", "--all", "--format", "json"]
     assert down[-3:] == ["down", "--volumes", "--remove-orphans"]
@@ -264,9 +293,9 @@ def test_oft_glfw_plan_selects_oft_services_and_renderer_overlay():
         project_name="ovlab-test-oft",
     )
 
-    assert plan.benchmark_service == "benchmark-oft"
+    assert plan.benchmark_service == "benchmark"
     assert deployment.service_spec(plan)["services"][plan.benchmark_service]["environment"]["MUJOCO_GL"] == "glfw"
-    assert plan.up_command[-2:] == ("--exit-code-from", "benchmark-oft")
+    assert plan.up_command[-2:] == ("--exit-code-from", "benchmark")
     assert plan.experiment == OFT.removeprefix("configs/")
 
 
@@ -284,10 +313,11 @@ def test_deployment_defaults_are_read_from_experiment_yaml():
         project_name="ovlab-test-oft-defaults",
     )
 
-    assert (lora.profile, lora.renderer) == ("openvla", "egl")
-    assert (oft.profile, oft.renderer) == ("oft", "egl")
-    assert lora.profile_source == lora.renderer_source == "experiment"
-    assert oft.profile_source == oft.renderer_source == "experiment"
+    assert (lora.profile, lora.renderer) == ("openvla", "")
+    assert lora.execution_profile == "plugin://libero/execution/egl.yaml"
+    assert (oft.profile, oft.renderer) == ("oft", "")
+    assert lora.profile_source == "experiment" and lora.renderer_source == "benchmark"
+    assert oft.profile_source == "experiment" and oft.renderer_source == "benchmark"
 
 
 def test_deploy_target_resolves_bare_experiment_name():
@@ -373,7 +403,7 @@ def test_evaluation_offline_setting_is_resolved_from_yaml(tmp_path):
     assert plan.document(side_effects_performed=False)["offline"] is True
     assert deployment.plan(LORA, offline=False).offline is False
     builder = ConfigBundleBuilder(repository)
-    bundle = builder.build(LORA, "ovlab://profiles/egl.yaml")
+    bundle = builder.build(LORA, "plugin://libero/execution/egl.yaml")
     from ovlab_benchctl.strict_yaml import load
     with builder.materialize(bundle) as materialized:
         runtime = load(materialized / LORA.removeprefix("configs/"))
@@ -402,7 +432,7 @@ def test_stale_policy_and_benchmark_images_fail_before_checkpoint_or_compose(
     with pytest.raises(ComposeDeploymentError, match="images need rebuilding") as failure:
         _PREFLIGHT_IMAGES(deployment, plan)
 
-    assert "bash deploy/scripts/build-images.sh benchmark policy-openvla-oft reporting" in str(failure.value)
+    assert "bash deploy/scripts/build-images.sh libero/benchmark openvla-oft/policy-openvla-oft reporting" in str(failure.value)
     assert "deployment format mismatch" in str(failure.value)
     assert len(observed) == 3
     assert all(call[0][:3] == ["docker", "image", "inspect"] for call in observed)
@@ -415,13 +445,13 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
         del kwargs
         image = command[-1]
         contract = (
-            "native-run-config-bundle-v3"
+            "benchmark-rpc-v2-config-bundle-v5"
             if image == "ovlab-benchmark-libero:local"
             else "canonical-readonly-reporting-v2"
             if image == "ovlab-reporting:local"
             else "resolved-checkpoint-v1"
         )
-        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "policy-openvla")}}))
+        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "libero/benchmark" if image == "ovlab-benchmark-libero:local" else "openvla/policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "benchmark" if image == "ovlab-benchmark-libero:local" else "policy-openvla")}}))
 
     deployment = ComposeDeployment(
         REPOSITORY, environment=deployment_environment, runner=inspect
@@ -434,7 +464,7 @@ def test_openvla_preflight_requires_quantization_capable_policy_image(
     with pytest.raises(ComposeDeploymentError, match="policy-openvla") as failure:
         _PREFLIGHT_IMAGES(deployment, plan)
 
-    assert "build-images.sh policy-openvla" in str(failure.value)
+    assert "build-images.sh openvla/policy-openvla" in str(failure.value)
 
 
 def test_old_benchmark_worker_requires_only_the_benchmark_rebuild():
@@ -442,14 +472,14 @@ def test_old_benchmark_worker_requires_only_the_benchmark_rebuild():
         image = command[-1]
         contract = ("resolved-checkpoint-config-bundle-v2" if image == "ovlab-benchmark-libero:local"
                     else "canonical-readonly-reporting-v2" if image == "ovlab-reporting:local"
-                    else "resolved-checkpoint-quantization-config-bundle-v2")
-        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "policy-openvla")}}))
+                    else "policy-rpc-v2-config-bundle-v3")
+        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "libero/benchmark" if image == "ovlab-benchmark-libero:local" else "openvla/policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "benchmark" if image == "ovlab-benchmark-libero:local" else "policy-openvla")}}))
     deployment = ComposeDeployment(REPOSITORY, runner=inspect)
     plan = deployment.plan(LORA, env_file=ENV_FILE)
     with pytest.raises(ComposeDeploymentError) as failure:
         _PREFLIGHT_IMAGES(deployment, plan)
-    assert "build-images.sh benchmark" in str(failure.value)
-    assert "build-images.sh benchmark policy" not in str(failure.value)
+    assert "build-images.sh libero/benchmark" in str(failure.value)
+    assert "build-images.sh libero/benchmark openvla/policy" not in str(failure.value)
 
 
 def test_preflight_accepts_compatible_images_without_source_tree_lock():
@@ -459,20 +489,20 @@ def test_preflight_accepts_compatible_images_without_source_tree_lock():
         observed.append(command)
         image = command[-1]
         contract = (
-            "resolved-checkpoint-quantization-config-bundle-v2"
+            "policy-rpc-v2-config-bundle-v3"
             if image == "ovlab-policy-openvla:local"
             else "canonical-readonly-reporting-v2"
             if image == "ovlab-reporting:local"
-            else "native-run-config-bundle-v3"
+            else "benchmark-rpc-v2-config-bundle-v5"
         )
-        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "policy-openvla")}}))
+        return _Result(0, stdout=json.dumps({"id": "sha256:"+"1"*64, "labels": {IMAGE_CONTRACT_LABEL: contract, "io.github.ovlab.role": "libero/benchmark" if image == "ovlab-benchmark-libero:local" else "openvla/policy-openvla", PLUGIN_BUILD_LABEL: plugin_build_identity(REPOSITORY, "benchmark" if image == "ovlab-benchmark-libero:local" else "policy-openvla")}}))
 
     deployment = ComposeDeployment(REPOSITORY, runner=inspect)
     plan = deployment.plan(
         LORA, env_file=ENV_FILE, project_name="ovlab-test-stale-source"
     )
 
-    assert _PREFLIGHT_IMAGES(deployment, plan)["policy-openvla"] == "sha256:" + "1"*64
+    assert _PREFLIGHT_IMAGES(deployment, plan)["openvla/policy-openvla"] == "sha256:" + "1"*64
     assert len(observed) == 3
     assert all("source-manifest" not in " ".join(command) for command in observed)
 
@@ -494,7 +524,7 @@ def test_failed_benchmark_is_cleaned_and_reported(deployment_environment):
 def test_policy_failure_is_reported_when_compose_up_returns_zero(deployment_environment):
     statuses = "\n".join((
         json.dumps({"Service": "policy-openvla-oft", "State": "exited", "ExitCode": 6}),
-        json.dumps({"Service": "benchmark-oft", "State": "exited", "ExitCode": 0}),
+        json.dumps({"Service": "benchmark", "State": "exited", "ExitCode": 0}),
     ))
     runner = _Runner(0, 0, 0, status_payload=statuses)
     deployment = ComposeDeployment(REPOSITORY, environment=deployment_environment, runner=runner)
@@ -523,7 +553,7 @@ def test_failed_compose_preflight_never_starts_services(deployment_environment):
     assert len(runner.calls) == 1
 
 
-def test_missing_dataset_mount_fails_before_compose(tmp_path):
+def test_evaluation_does_not_require_unused_dataset_mount(tmp_path):
     datasets = tmp_path / "missing-datasets"
     runs = tmp_path / "runs"
     runs.mkdir()
@@ -538,13 +568,13 @@ def test_missing_dataset_mount_fails_before_compose(tmp_path):
         project_name="ovlab-test-missing-cache",
     )
 
-    with pytest.raises(ComposeDeploymentError, match="OVLAB_DATASETS_PATH"):
-        deployment.run(plan)
+    assert deployment.run(plan)["status"] == "completed"
+    assert not datasets.exists()
+    assert not any(isinstance(mount, dict) and mount.get("target") == "/datasets"
+                   for mount in deployment.service_spec(plan)["services"]["benchmark"]["volumes"])
 
-    assert runner.calls == []
 
-
-def test_unset_dataset_path_uses_managed_storage_next_to_runs(tmp_path):
+def test_evaluation_does_not_create_unrequested_datasets(tmp_path):
     runs = tmp_path / "ovlab-data/runs"
     runs.mkdir(parents=True)
     runner = _Runner(0, 0, 0)
@@ -561,12 +591,8 @@ def test_unset_dataset_path_uses_managed_storage_next_to_runs(tmp_path):
     result = deployment.run(plan)
 
     datasets = tmp_path / "ovlab-data/datasets/libero"
-    assert datasets.is_dir()
-    assert result["datasets_root"] == str(datasets.resolve())
-    assert all(
-        call["env"]["OVLAB_DATASETS_PATH"] == str(datasets.resolve())
-        for call in runner.calls
-    )
+    assert not datasets.exists()
+    assert result["datasets_root"] is None
 
 
 def test_missing_runs_root_is_created_setgid_without_world_access(tmp_path):
@@ -686,8 +712,8 @@ def test_dry_run_has_no_docker_side_effects():
 
 def test_config_bundle_is_minimal_deterministic_and_read_only(tmp_path):
     builder = ConfigBundleBuilder(REPOSITORY)
-    first = builder.build(LORA, "ovlab://profiles/egl.yaml")
-    second = builder.build(LORA, "ovlab://profiles/egl.yaml")
+    first = builder.build(LORA, "plugin://libero/execution/egl.yaml")
+    second = builder.build(LORA, "plugin://libero/execution/egl.yaml")
 
     assert first == second
     paths = {item["path"] for item in first.files}
@@ -695,9 +721,9 @@ def test_config_bundle_is_minimal_deterministic_and_read_only(tmp_path):
     assert ".tests/components/openvla-benchmark.yaml" in paths
     assert ".tests/components/openvla-protocol.yaml" in paths
     assert "plugins/configs/openvla/policy/lora.yaml" in paths
-    assert "ovlab/interfaces/actions/libero-osc-pose-v1.yaml" in paths
+    assert "plugins/configs/libero/interfaces/osc-pose-v1.yaml" in paths
     assert "plugins/configs/openvla/registry/default.yaml" in paths
-    assert "ovlab/profiles/egl.yaml" in paths
+    assert "plugins/configs/libero/execution/egl.yaml" in paths
     assert "configs/.tests/evaluation/oft.yaml" not in paths
 
     with builder.materialize(first) as root:
@@ -713,8 +739,8 @@ def test_quantization_override_changes_materialized_policy_and_bundle_identity(t
     import hashlib
 
     builder = ConfigBundleBuilder(REPOSITORY)
-    original = builder.build(LORA, "ovlab://profiles/egl.yaml")
-    quantized = builder.build(LORA, "ovlab://profiles/egl.yaml", quantization="4bit")
+    original = builder.build(LORA, "plugin://libero/execution/egl.yaml")
+    quantized = builder.build(LORA, "plugin://libero/execution/egl.yaml", quantization="4bit")
     assert quantized.sha256 != original.sha256
     assert quantized.summary()["quantization_override"] == "4bit"
     assert quantized.document()["quantization_override"] == "4bit"
@@ -744,7 +770,7 @@ def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
     shutil.copytree(REPOSITORY / "experiments", copied / "experiments")
     shutil.copytree(REPOSITORY / "plugins", copied / "plugins", ignore=shutil.ignore_patterns('.cache', '__pycache__', '*.egg-info', 'build', 'dist'))
     builder = ConfigBundleBuilder(copied)
-    before = builder.build(LORA, "ovlab://profiles/egl.yaml")
+    before = builder.build(LORA, "plugin://libero/execution/egl.yaml")
     experiment = copied / "configs/.tests/evaluation/openvla.yaml"
     experiment.write_text(
         experiment.read_text(encoding="utf-8").replace(
@@ -752,7 +778,7 @@ def test_config_bundle_identity_changes_when_selected_yaml_changes(tmp_path):
         ),
         encoding="utf-8",
     )
-    after = builder.build(LORA, "ovlab://profiles/egl.yaml")
+    after = builder.build(LORA, "plugin://libero/execution/egl.yaml")
     assert before.sha256 != after.sha256
 
 
@@ -782,7 +808,7 @@ def test_public_cli_exposes_compose_dry_run_without_invoking_docker():
         check=False,
     )
 
-    assert completed.returncode == 0 and completed.stderr == ""
+    assert completed.returncode == 0 and completed.stderr == "", completed.stdout
     payload = json.loads(completed.stdout)
     assert payload["command"] == "eval run"
     assert payload["result"]["profile"] == "openvla"
@@ -828,9 +854,10 @@ def test_public_cli_reads_profile_and_renderer_from_experiment():
     assert completed.returncode == 0 and completed.stderr == ""
     result = json.loads(completed.stdout)["result"]
     assert result["profile"] == "oft"
-    assert result["renderer"] == "egl"
+    assert result["renderer"] == ""
+    assert result["execution_profile"] == "plugin://libero/execution/egl.yaml"
     assert result["profile_source"] == "experiment"
-    assert result["renderer_source"] == "experiment"
+    assert result["renderer_source"] == "benchmark"
 
 
 def test_deploy_dry_run_needs_only_system_python_and_standard_library():

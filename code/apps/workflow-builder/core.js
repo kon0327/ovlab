@@ -64,6 +64,12 @@
     const prefix = phase === 'train' ? 'experiments/training/' : 'experiments/evaluation/';
     return (catalog[phase === 'train' ? 'training' : 'evaluation'] || []).find(item => item.ref === reference || item.ref === prefix + reference);
   }
+  function pluginForPolicy(catalog, policy) {
+    if (!policy) return undefined;
+    if (policy.provider) return catalog.plugins?.[policy.provider];
+    const matches = Object.values(catalog.plugins || {}).filter(item => item.config_type === policy.type);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
   function resolve(entry, phase, catalog) {
     const state = entry.state[phase];
     if (!state || !state.profile) return null;
@@ -83,11 +89,11 @@
     }
     if (phase === 'evaluate') {
       for (const kind of ['policy', 'benchmark']) if (components[kind] && (!object(components[kind]) || !object(components[kind].settings))) return invalid(`${kind} patches must preserve their settings object.`);
-      if (components.policy && components.policy.type !== 'mock' && !own(catalog.plugins, components.policy.type)) return invalid('Unknown policy type; choose a registered policy component.');
+      if (components.policy && components.policy.type !== 'mock' && !pluginForPolicy(catalog, components.policy)) return invalid('Unknown policy type; choose a registered policy component.');
       if (components.benchmark && !(catalog.components.benchmark || []).some(item => item.document.type === components.benchmark.type)) return invalid('Unknown benchmark type; choose a catalog benchmark component.');
       if (components.protocol && (!object(components.protocol) || !object(components.protocol.execution))) return invalid('Protocol patches must preserve execution settings.');
     }
-    return {document, components, source, state, plugin: phase === 'evaluate' ? catalog.plugins?.[components.policy?.type] : trainingPlugin};
+    return {document, components, source, state, plugin: phase === 'evaluate' ? pluginForPolicy(catalog, components.policy) : trainingPlugin};
   }
   function family(resolved, phase) {
     if (!resolved || resolved.unavailable) return '';
@@ -409,7 +415,7 @@
     if (!object(document)) throw new Error('The root must be a mapping.');
     return guard(document);
   }
-  const api = {PHASES, RESERVED, SAFE, own, object, clone, merge, get, set, flatten, profile, resolve, family, bindingCompatible, sameDocument,
+  const api = {PHASES, RESERVED, SAFE, own, object, clone, merge, get, set, flatten, profile, pluginForPolicy, resolve, family, bindingCompatible, sameDocument,
     analyze, rewriteReferences, uniqueId, moveNode, renameNode, dumpYaml, parse, guard};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.OVLABBuilder = api;

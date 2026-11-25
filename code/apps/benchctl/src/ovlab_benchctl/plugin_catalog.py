@@ -108,11 +108,19 @@ def check_project(root, name, *, category="plugin"):
                 checked_templates.append(reference)
         variants = []
         for item in info["variants"]:
-            if item["kind"] != "policy":
+            if item["kind"] == "policy":
+                from ovlab_policy_sdk.plugin import PolicyPlugin
+                contract = PolicyPlugin
+            elif item["kind"] == "benchmark":
+                from ovlab_benchmarks import BenchmarkPlugin
+                contract = BenchmarkPlugin
+            elif item["kind"] == "dataset":
+                from ovlab_core.datasets import DatasetProvider
+                contract = DatasetProvider
+            else:
                 raise ConfigCompatibilityError(f"SDK control checking is not supported yet for {category}/{item['kind']}")
-            from ovlab_policy_sdk.plugin import PolicyPlugin
-            implementation = catalog.load_provider(item["provider_ref"], expected_kind="policy", api_version="1", contract=PolicyPlugin)
-            variants.append({"id": item["id"], "config_type": item["config_type"], "api_version": implementation.api_version})
+            implementation = catalog.load_provider(item["provider_ref"], expected_kind=item["kind"], api_version=item["api_version"], contract=contract)
+            variants.append({"id": item["id"], "kind": item["kind"], "config_type": item.get("config_type"), "api_version": implementation.api_version})
         return {"id": name, "valid": True, "category": category, "kind": info["kind"],
                 "checks": ["manifest", "configuration_templates", *(["sdk_control_api"] if variants else [])],
                 "templates": checked_templates, "variants": variants, "runtime_tested": False,

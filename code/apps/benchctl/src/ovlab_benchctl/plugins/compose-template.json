@@ -29,7 +29,7 @@
       "environment": {
         "OVLAB_PROGRESS": "${OVLAB_PROGRESS:-auto}",
         "OVLAB_DEPLOYMENT_PROFILE": "@PROFILE@",
-        "OVLAB_EXECUTION_PROFILE": "${OVLAB_EXECUTION_PROFILE:?execution profile required}",
+        "OVLAB_EXECUTION_PROFILE": "${OVLAB_EXECUTION_PROFILE:-}",
         "OVLAB_CONFIG_BUNDLE_SHA256": "${OVLAB_CONFIG_BUNDLE_SHA256:?config identity required}",
         "OVLAB_PLUGIN_REGISTRY": "/opt/ovlab/configs/plugins/registry.json",
         "OVLAB_RESOLVED_CHECKPOINT_ID": "${OVLAB_RESOLVED_CHECKPOINT_ID}",
@@ -51,7 +51,8 @@
         "OVLAB_OFFLINE_MODE": "hf-hub-offline,transformers-offline,network-none",
         "OVLAB_MOUNT_CONTRACT": "config-bundle-ro,resolved-checkpoint-ro,rpc-rw",
         "NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
-        "OVLAB_LOCAL_PROFILE": "/opt/ovlab/configs/plugins/runtime-profile.yaml"
+        "OVLAB_LOCAL_PROFILE": "/opt/ovlab/configs/plugins/runtime-profile.yaml",
+        "OVLAB_EXTENSION_REGISTRY": "/opt/ovlab/configs/extensions/registry.json"
       },
       "volumes": [
         {
@@ -103,7 +104,7 @@
         "@PROFILE@"
       ],
       "stop_grace_period": "5m",
-      "image": "${OVLAB_BENCHMARK_IMAGE:-ovlab-benchmark-libero:local}",
+      "image": "${@BENCHMARK_IMAGE_ENV@:-@BENCHMARK_IMAGE@}",
       "command": [
         "_native-run",
         "${OVLAB_EXPERIMENT_CONFIG:?experiment required}",
@@ -113,7 +114,7 @@
       "environment": {
         "OVLAB_PROGRESS": "${OVLAB_PROGRESS:-auto}",
         "OVLAB_DEPLOYMENT_PROFILE": "@PROFILE@",
-        "OVLAB_EXECUTION_PROFILE": "${OVLAB_EXECUTION_PROFILE:?execution profile required}",
+        "OVLAB_EXECUTION_PROFILE": "${OVLAB_EXECUTION_PROFILE:-}",
         "OVLAB_CONFIG_BUNDLE_SHA256": "${OVLAB_CONFIG_BUNDLE_SHA256:?config identity required}",
         "OVLAB_PLUGIN_REGISTRY": "/opt/ovlab/configs/plugins/registry.json",
         "OVLAB_RESOLVED_CHECKPOINT_ID": "${OVLAB_RESOLVED_CHECKPOINT_ID}",
@@ -126,9 +127,7 @@
         "OVLAB_CONTAINER_RUNTIME_VERSION": "${OVLAB_CONTAINER_RUNTIME_VERSION:-unavailable}",
         "OVLAB_SERVICE_TOPOLOGY": "@BENCHMARK@--af-unix--@POLICY@",
         "NVIDIA_VISIBLE_DEVICES": "${OVLAB_GPU_DEVICE:-all}",
-        "MUJOCO_GL": "egl",
-        "MUJOCO_EGL_DEVICE_ID": "${OVLAB_EGL_DEVICE_ID:-0}",
-        "OVLAB_IMAGE_DIGEST": "${OVLAB_BENCHMARK_IMAGE_DIGEST:-unavailable}",
+        "OVLAB_IMAGE_DIGEST": "${@BENCHMARK_IMAGE_ENV@_DIGEST:-unavailable}",
         "OVLAB_OFFLINE_MODE": "network-none",
         "OVLAB_MOUNT_CONTRACT": "config-bundle-ro,datasets-ro,runs-rw,rpc-rw",
         "OVLAB_ARTIFACT_UMASK": "0007",
@@ -138,7 +137,9 @@
         "NVIDIA_DRIVER_CAPABILITIES": "compute,graphics,utility",
         "OVLAB_EXPERIMENT_ID": "${OVLAB_EXPERIMENT_ID:-}",
         "OVLAB_EXPERIMENT_NODE": "${OVLAB_EXPERIMENT_NODE:-}",
-        "OVLAB_LOCAL_PROFILE": "/opt/ovlab/configs/plugins/runtime-profile.yaml"
+        "OVLAB_LOCAL_PROFILE": "/opt/ovlab/configs/plugins/runtime-profile.yaml",
+        "OVLAB_EXTENSION_REGISTRY": "/opt/ovlab/configs/extensions/registry.json",
+        "OVLAB_POLICY_SOCKET": "/run/ovlab/policy.sock"
       },
       "group_add": [
         "${OVLAB_HOST_ARTIFACT_GID:-1000}"
@@ -157,12 +158,6 @@
           "read_only": true
         },
         "rpc-policy:/run/ovlab",
-        {
-          "type": "bind",
-          "source": "${OVLAB_DATASETS_PATH:?datasets required}",
-          "target": "/datasets",
-          "read_only": true
-        },
         {
           "type": "bind",
           "source": "${OVLAB_RUNS_ROOT:-../../../ovlab-data/runs}",

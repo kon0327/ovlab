@@ -86,11 +86,19 @@ class ComposeDeploymentPlan:
     down_command: tuple[str, ...]
     postprocess_command: tuple[str, ...]
     plugin_type: str = ""
+    benchmark_provider: str = ""
+    policy_provider: str = ""
+    execution_profile: str | None = None
+    execution_profile_source: str = "benchmark"
 
     def document(self, *, side_effects_performed: bool) -> dict[str, object]:
         return {
             "deployment": "docker-compose",
             "plugin_type": self.plugin_type,
+            "policy_provider": self.policy_provider,
+            "benchmark_provider": self.benchmark_provider,
+            "execution_profile": self.execution_profile,
+            "execution_profile_source": self.execution_profile_source,
             "experiment": self.experiment,
             "profile": self.profile,
             "renderer": self.renderer,
@@ -118,27 +126,59 @@ class ComposeDeploymentPlan:
 class ComposeDeployment:
     """Start and reap one isolated benchmark/policy Compose project."""
 
-    _RENDERERS = {"egl", "glfw"}
-    _RENDERER_EXECUTION_PROFILES = {
-        "egl": "ovlab://profiles/egl.yaml",
-        "glfw": "ovlab://profiles/glfw.yaml",
-    }
     _IMAGE_CONTRACT_LABEL = IMAGE_CONTRACT_LABEL
-    _POLICY_CONTRACT = "resolved-checkpoint-quantization-config-bundle-v2"
+    _POLICY_CONTRACT = "policy-rpc-v2-config-bundle-v3"
 
     @with_registry
     def _plugin(self, plan):
         from .policy_plugins import plugin_for_type, plugin_for_profile
-        return plugin_for_type(plan.plugin_type, self.repository_root) if getattr(plan, "plugin_type", "") else plugin_for_profile(plan.profile, self.repository_root)
+        return plugin_for_type(plan.plugin_type, self.repository_root, provider=getattr(plan, "policy_provider", None) or None) if getattr(plan, "plugin_type", "") else plugin_for_profile(plan.profile, self.repository_root)
+
+    def _benchmark_document(self, plan):
+        builder = ConfigBundleBuilder(self.repository_root)
+        document = builder.load_component(plan.experiment, "experiment")
+        return builder.load_component(document["components"]["benchmark"], "benchmark")
+
+    def _benchmark(self, plan):
+        from .benchmark_plugins import benchmark_for_document
+        return benchmark_for_document(self._benchmark_document(plan), self.repository_root)
+
+    def _benchmark_control(self, plan):
+        from .benchmark_plugins import call_benchmark
+        builder = ConfigBundleBuilder(self.repository_root)
+        experiment = builder.load_component(plan.experiment, "experiment")
+        owner = self._benchmark(plan)
+        profiles = owner.descriptor.get("execution_profiles", {})
+        if not plan.execution_profile and plan.renderer and plan.renderer not in profiles:
+            raise ComposeDeploymentError(f"benchmark does not support execution profile {plan.renderer!r}")
+        reference = plan.execution_profile or profiles.get(plan.renderer) or owner.descriptor.get("default_execution_profile")
+        profile = builder.load_component(reference, "execution_profile") if reference else {}
+        if profile and profile.get("provider") != str(owner.ref):
+            raise ComposeDeploymentError("execution profile belongs to a different benchmark provider")
+        local = load(plan.local_profile) if plan.local_profile else {}
+        runtime = call_benchmark(owner, "resolve_deployment", self._benchmark_document(plan),
+            execution_profile=profile, local_execution=local.get("execution", {}),
+            devices=local.get("devices", {"primary_gpu": "cuda:0"}), environment=self.environment,
+            deployment=experiment.get("deployment", {}))
+        declared = owner.descriptor["deployment"]
+        role = runtime.build_role if "/" in runtime.build_role else f"{owner.ref.project}/{runtime.build_role}"
+        if (role, runtime.image, runtime.image_env) != (declared["role"], declared["image"], declared["image_env"]):
+            raise ComposeDeploymentError("benchmark deployment hook differs from its registered build/image")
+        return runtime
 
     def _profile_images(self, plan):
         deploy = self._plugin(plan).descriptor["deployment"]
-        return (("OVLAB_BENCHMARK_IMAGE", "ovlab-benchmark-libero:local", "benchmark"),
+        benchmark = self._benchmark(plan).descriptor["deployment"]
+        return ((benchmark["image_env"], benchmark["image"], benchmark["role"]),
                 (deploy["image_env"], deploy["image"], deploy["role"]),
                 ("OVLAB_REPORTING_IMAGE", "ovlab-reporting:local", "reporting"))
 
     def _image_contract(self, role):
-        return {"benchmark": "native-run-config-bundle-v3", "reporting": "canonical-readonly-reporting-v2"}.get(role, self._POLICY_CONTRACT)
+        from .policy_plugins import registry_document
+        benchmark_roles = {item["deployment"]["role"] for item in registry_document(self.repository_root).get("benchmarks", {}).values() if "deployment" in item}
+        if role in benchmark_roles:
+            return "benchmark-rpc-v2-config-bundle-v5"
+        return {"reporting": "canonical-readonly-reporting-v2"}.get(role, self._POLICY_CONTRACT)
 
     def _policy_document(self, plan):
         builder = ConfigBundleBuilder(self.repository_root)
@@ -168,23 +208,46 @@ class ComposeDeployment:
         deploy = self._plugin(plan).descriptor["deployment"]
         from .plugin_mounts import validate_runtime_mounts
         mounts = validate_runtime_mounts(mounts)
+        benchmark_deploy = self._benchmark(plan).descriptor["deployment"]
+        benchmark_service = benchmark_deploy.get("benchmark_service", "benchmark")
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", benchmark_service) or benchmark_service in {"reporting", "export"}:
+            raise ComposeDeploymentError("benchmark declares an invalid or reserved service name")
+        if benchmark_service == deploy["policy_service"]:
+            raise ComposeDeploymentError("policy and benchmark service names collide")
         text = (Path(__file__).with_name("plugins") / "compose-template.json").read_text()
-        for token, value in {"@POLICY@": deploy["policy_service"], "@BENCHMARK@": deploy["benchmark_service"], "@PROFILE@": deploy["profile"], "@IMAGE@": deploy["image"]}.items():
+        for token, value in {"@POLICY@": deploy["policy_service"], "@BENCHMARK@": benchmark_service, "@PROFILE@": deploy["profile"], "@IMAGE@": deploy["image"], "@BENCHMARK_IMAGE@": benchmark_deploy["image"], "@BENCHMARK_IMAGE_ENV@": benchmark_deploy["image_env"]}.items():
             text = text.replace(token, value)
         document = json.loads(text)
         policy = document["services"][deploy["policy_service"]]
+        benchmark = document["services"][benchmark_service]
         for mount in mounts:
-            policy["volumes"].append({"type": "bind", "source": mount["source"].replace("$", "$$"), "target": mount["target"], "read_only": True})
-            if mount.get("environment"): policy["environment"][mount["environment"]] = mount["target"]
+            # Both workers resolve the selected policy's static contract. Its
+            # external adapter metadata must have the same container location.
+            for service in (policy, benchmark):
+                service["volumes"].append({"type": "bind", "source": mount["source"].replace("$", "$$"), "target": mount["target"], "read_only": True})
+                if mount.get("environment"):
+                    service["environment"][mount["environment"]] = mount["target"]
         if not deploy.get("gpu", True):
             policy.pop("gpus", None)
             for key in ("NVIDIA_VISIBLE_DEVICES", "NVIDIA_DRIVER_CAPABILITIES"):
                 policy["environment"].pop(key, None)
-        benchmark = document["services"][deploy["benchmark_service"]]
-        if plan.renderer == "glfw":
-            benchmark["environment"].update(MUJOCO_GL="glfw", DISPLAY="${OVLAB_DISPLAY:-:0}")
-            benchmark["environment"].pop("MUJOCO_EGL_DEVICE_ID", None)
-            benchmark["volumes"].append({"type": "bind", "source": "${OVLAB_X11_SOCKET:-/tmp/.X11-unix}", "target": "/tmp/.X11-unix", "read_only": True})
+        from .benchmark_plugins import call_benchmark
+        runtime = self._benchmark_control(plan)
+        if set(runtime.environment) & set(benchmark["environment"]):
+            raise ComposeDeploymentError("benchmark environment overlaps OVLAB-owned runtime configuration")
+        benchmark["environment"].update({key: value.replace("$", "$$") for key, value in runtime.environment.items()})
+        mount_rows = validate_runtime_mounts([
+            {"source": mount.source, "target": mount.target, "required_files": list(mount.required_files)}
+            for mount in runtime.mounts], protect_tmp=False)
+        for mount, row in zip(runtime.mounts, mount_rows):
+            benchmark["volumes"].append({"type": "bind", "source": row["source"].replace("$", "$$"), "target": row["target"], "read_only": mount.read_only})
+        if not runtime.requires_gpu:
+            benchmark.pop("gpus", None)
+            for key in ("NVIDIA_VISIBLE_DEVICES", "NVIDIA_DRIVER_CAPABILITIES"):
+                benchmark["environment"].pop(key, None)
+        if self.environment.get("OVLAB_DEBUG") == "1":
+            for service in (policy, benchmark):
+                service["command"].insert(0, "--debug")
         return document
 
     @contextmanager
@@ -233,6 +296,7 @@ class ComposeDeployment:
         *,
         profile: str | None = None,
         renderer: str | None = None,
+        execution_profile: str | None = None,
         quantization: str | None = None,
         env_file: str | Path | None = None,
         local_profile: str | Path | None = None,
@@ -252,13 +316,12 @@ class ComposeDeployment:
                 "add the portable deployment block"
             )
         selected_profile = profile or configured["profile"]
-        selected_renderer = renderer or configured["renderer"]
+        selected_renderer = renderer or configured.get("renderer", "")
+        selected_execution = execution_profile or configured.get("execution_profile")
         offline = configured.get("offline", False) if offline is None else offline
         reporting = experiment_doc.get("reporting", {})
         reporting_enabled = reporting.get("enabled", True)
         reporting_profile = reporting.get("profile", "libero-task-default")
-        if selected_renderer not in self._RENDERERS:
-            raise ValueError(f"renderer must be one of: {', '.join(sorted(self._RENDERERS))}")
 
         policy_reference = experiment_doc["components"]["policy"]
         policy_path = resolver.references.source(policy_reference)
@@ -267,7 +330,16 @@ class ComposeDeployment:
         policy_doc = resolver.load_component(policy_reference, "policy")
         policy_type = policy_doc.get("type")
         from .policy_plugins import plugin_for_type
-        deploy = plugin_for_type(policy_type, self.repository_root).descriptor.get("deployment", {})
+        deploy = plugin_for_type(policy_type, self.repository_root, provider=policy_doc.get("provider")).descriptor.get("deployment", {})
+        benchmark_doc = resolver.load_component(experiment_doc["components"]["benchmark"], "benchmark")
+        from .benchmark_plugins import benchmark_for_document
+        benchmark_owner = benchmark_for_document(benchmark_doc, self.repository_root)
+        benchmark_deploy = benchmark_owner.descriptor["deployment"]
+        execution_profiles = benchmark_owner.descriptor.get("execution_profiles", {})
+        if selected_renderer and not selected_execution and selected_renderer not in execution_profiles:
+            raise ComposeDeploymentError(f"benchmark does not support execution alias {selected_renderer!r}")
+        selected_execution = (selected_execution or execution_profiles.get(selected_renderer)
+                              or benchmark_owner.descriptor.get("default_execution_profile"))
         required_profile = deploy.get("profile")
         if required_profile is None:
             raise ValueError(f"policy type {policy_type!r} has no Docker deployment profile")
@@ -285,7 +357,8 @@ class ComposeDeployment:
         quantization_source = "cli" if quantization is not None else "policy"
 
         profile_source = "cli" if profile is not None else "experiment"
-        renderer_source = "cli" if renderer is not None else "experiment"
+        renderer_source = "cli" if renderer is not None else "experiment" if "renderer" in configured else "benchmark"
+        execution_source = "cli" if execution_profile is not None else "experiment" if configured.get("execution_profile") else "benchmark"
         profile = selected_profile
         renderer = selected_renderer
 
@@ -318,12 +391,16 @@ class ComposeDeployment:
         for compose_file in files:
             common.extend(("--file", str(compose_file)))
         common.extend(("--profile", profile))
-        benchmark = deploy["benchmark_service"]
+        benchmark = benchmark_deploy.get("benchmark_service", "benchmark")
         return ComposeDeploymentPlan(
             experiment=experiment_reference,
             plugin_type=policy_type,
+            policy_provider=policy_doc.get("provider", ""),
+            benchmark_provider=str(benchmark_owner.ref),
             profile=profile,
             renderer=renderer,
+            execution_profile=selected_execution,
+            execution_profile_source=execution_source,
             profile_source=profile_source,
             renderer_source=renderer_source,
             quantization=selected_quantization,
@@ -552,7 +629,7 @@ class ComposeDeployment:
             contract = labels.get(self._IMAGE_CONTRACT_LABEL)
             if contract != expected_contract:
                 rebuild_roles.append((image, role, expected_contract, contract or "missing"))
-            elif role == self._plugin(plan).descriptor["deployment"]["role"]:
+            elif role in {self._plugin(plan).descriptor["deployment"]["role"], self._benchmark(plan).descriptor["deployment"]["role"]}:
                 from .plugin_identity import verify_plugin_image
                 try:
                     verify_plugin_image(labels, self.repository_root, role)
@@ -574,25 +651,6 @@ class ComposeDeployment:
             )
 
         return image_ids
-
-    def _dataset_root(self, plan: ComposeDeploymentPlan) -> Path:
-        explicit = self._environment_value(plan, "OVLAB_DATASETS_PATH")
-        if explicit:
-            path = Path(explicit).expanduser()
-            if not path.is_absolute():
-                path = Path(plan.compose_files[0]).parent / path
-            resolved = path.resolve()
-            if not resolved.is_dir():
-                raise ComposeDeploymentError(
-                    f"OVLAB_DATASETS_PATH must name an existing directory: {resolved}"
-                )
-            return resolved
-        runs = self._bind_source(plan, "OVLAB_RUNS_ROOT")
-        if runs is None:
-            raise ComposeDeploymentError("cannot derive managed dataset storage without OVLAB_RUNS_ROOT")
-        managed = (runs.parent / "datasets/libero").resolve()
-        managed.mkdir(mode=0o755, parents=True, exist_ok=True)
-        return managed
 
     def _managed_checkpoint_root(self, plan: ComposeDeploymentPlan) -> Path:
         explicit = self._environment_value(plan, "OVLAB_MANAGED_CHECKPOINTS_ROOT")
@@ -666,7 +724,7 @@ class ComposeDeployment:
         bundle_builder = ConfigBundleBuilder(self.repository_root)
         bundle = bundle_builder.build(
             plan.experiment,
-            self._RENDERER_EXECUTION_PROFILES[plan.renderer],
+            plan.execution_profile or self._benchmark(plan).descriptor.get("execution_profiles", {}).get(plan.renderer) or self._benchmark(plan).descriptor.get("default_execution_profile"),
             quantization=plan.quantization if plan.quantization_source == "cli" else None,
         )
         if dry_run:
@@ -676,9 +734,12 @@ class ComposeDeployment:
                 "plugin_services": self.service_spec(plan, self._runtime_mounts(plan, check_files=False)),
             }
         self._preflight_bind_sources(plan)
-        datasets_root = self._dataset_root(plan)
+        datasets_root = self._bind_source(plan, "OVLAB_DATASETS_PATH")
         image_ids = self._preflight_images(plan) or {}
         mounts = self._runtime_mounts(plan)
+        from .plugin_mounts import validate_runtime_mounts
+        validate_runtime_mounts([{"source": mount.source, "target": mount.target, "required_files": list(mount.required_files)}
+                                 for mount in self._benchmark_control(plan).mounts], check_files=True, protect_tmp=False)
         checkpoint = self._resolve_checkpoint(plan)
         with bundle_builder.materialize(bundle) as bundle_root, self._compose_spec(plan, mounts):
             environment = {
@@ -687,12 +748,12 @@ class ComposeDeployment:
                     f"/opt/ovlab/configs/{bundle.experiment}"
                 ),
                 "OVLAB_EXECUTION_PROFILE": (
-                    f"/opt/ovlab/configs/{bundle.execution_profile}"
+                    f"/opt/ovlab/configs/{bundle.execution_profile}" if bundle.execution_profile else ""
                 ),
                 "OVLAB_CONFIG_BUNDLE_PATH": str(bundle_root),
                 "OVLAB_CONFIG_BUNDLE_SHA256": bundle.sha256,
                 "OVLAB_DEPLOYMENT_PROFILE": plan.profile,
-                "OVLAB_DATASETS_PATH": str(datasets_root),
+                "OVLAB_DATASETS_PATH": str(datasets_root) if datasets_root is not None else "",
                 "OVLAB_HOST_ARTIFACT_GID": self.environment.get(
                     "OVLAB_HOST_ARTIFACT_GID", str(os.getgid())
                 ),
@@ -710,6 +771,7 @@ class ComposeDeployment:
                 if role in image_ids:
                     if role != deploy["role"]: environment[variable] = image_ids[role]
                     environment["OVLAB_POLICY_IMAGE_DIGEST" if role == deploy["role"] else variable + "_DIGEST"] = image_ids[role]
+            self._preflight_contracts(plan, environment, checkpoint, bundle_root)
             runs_root = self._bind_source(plan, "OVLAB_RUNS_ROOT")
             scope = ExperimentScope.from_environment(self.environment)
             if scope is not None:
@@ -791,7 +853,7 @@ class ComposeDeployment:
             "status": "completed",
             "cleanup": "completed",
             "runs_root": None if runs_root is None else str(runs_root),
-            "datasets_root": str(datasets_root),
+            "datasets_root": str(datasets_root) if datasets_root is not None else None,
             "new_run_paths": new_runs,
             "run_path": new_runs[0],
             "postprocessing": {
@@ -810,3 +872,29 @@ class ComposeDeployment:
         if tracking:
             result["wandb"] = tracking
         return result
+
+    def _preflight_contracts(self, plan, environment, checkpoint, bundle_root):
+        """Use the selected worker SDK before starting either runtime service."""
+        benchmark = self._benchmark(plan).descriptor["deployment"]
+        image = environment.get(benchmark["image_env"], benchmark["image"])
+        command = ["docker", "run", "--rm", "--network", "none", "--read-only",
+                   "--user", "10001:10001", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+                   "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
+                   "--mount", f"type=bind,source={bundle_root},target=/opt/ovlab/configs,readonly",
+                   "--mount", f"type=bind,source={checkpoint.host_path},target={checkpoint.container_path},readonly"]
+        from .plugin_mounts import docker_bind
+        mounts = self._runtime_mounts(plan)
+        for mount in mounts:
+            command.extend(("--mount", docker_bind(mount["source"], mount["target"])))
+        controls = {key: value for key, value in environment.items()
+                    if key.startswith("OVLAB_") and key not in {"OVLAB_LOCAL_PROFILE", "OVLAB_ROOT"}}
+        controls.update(OVLAB_ROOT="/opt/ovlab", OVLAB_PLUGIN_REGISTRY="/opt/ovlab/configs/plugins/registry.json",
+                        OVLAB_EXTENSION_REGISTRY="/opt/ovlab/configs/extensions/registry.json",
+                        OVLAB_LOCAL_PROFILE="/opt/ovlab/configs/plugins/runtime-profile.yaml")
+        controls.update({mount["environment"]: mount["target"] for mount in mounts if mount.get("environment")})
+        for key, value in sorted(controls.items()):
+            command.extend(("--env", f"{key}={value}"))
+        command += [image, "config", "validate", environment["OVLAB_EXPERIMENT_CONFIG"], "--mode", "runtime", "--json"]
+        completed = self._execute(command, environment)
+        if completed.returncode:
+            raise ComposeDeploymentError("declared plugin/task/metric compatibility preflight failed before runtime startup")

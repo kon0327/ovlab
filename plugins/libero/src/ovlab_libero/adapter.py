@@ -240,7 +240,7 @@ class LiberoBenchmarkAdapter(BenchmarkAdapter):
     def runtime_metadata(self) -> dict[str, object]:
         renderer = self.settings.renderer.as_dict()
         renderer["detected_renderer"] = self._detected_renderer
-        return {"libero_renderer": renderer}
+        return {"renderer": renderer}
 
 
 def configured_capabilities(

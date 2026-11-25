@@ -4,7 +4,6 @@ schema_version: "0.1.0"
 kind: "experiment"
 deployment:
   profile: "openvla"
-  renderer: "egl"
 components:
   policy: "plugin://openvla/policy/default.yaml"
 resources:

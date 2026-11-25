@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from ovlab_benchctl import ConfigResolver
-from ovlab_benchmarks.libero import LiberoBenchmarkAdapter, LiberoRendererBackend
+from ovlab_libero import LiberoBenchmarkAdapter, LiberoRendererBackend
 from ovlab_core.contracts import (
     EpisodeContext, EpisodeId, GripperConvention, Instruction, InstructionId, InstructionSource,
     RunContext, RunId, TaskId,
@@ -62,7 +62,7 @@ def _profile() -> Path:
 def _resolve():
     return ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
         os.environ["OVLAB_MANUAL_EVALUATION_CONFIG"],
-        local_profile=_profile(), execution_profile="ovlab://profiles/egl.yaml",
+        local_profile=_profile(), execution_profile="plugin://libero/execution/egl.yaml",
     )
 
 

@@ -11,11 +11,14 @@ import sys
 from types import MappingProxyType, SimpleNamespace
 from urllib.parse import unquote, urlsplit
 
+import numpy as np
 import pytest
 
 from helpers.contexts import make_run_context
+from helpers.mock_specs import mock_action_spec
 from helpers.runner_fixtures import TrackingBenchmark, TrackingPolicy, runner_plan
 from ovlab_benchctl.application import OvlabApplication
+from ovlab_core.contracts import ActionPrediction, ExecutedAction, PredictionId, StepId
 from ovlab_metrics import ActionSequenceMetricConfig, ActionSource
 from ovlab_runner import (
     ArtifactError, AutomaticDerivedReporter, DerivedReportEngine, DeterministicClock,
@@ -141,14 +144,18 @@ def test_trace_report_extracts_policy_allocator_vram_and_estimated_compute(tmp_p
             "method": "test-estimator", "formula": "test", "qualification": "estimated",
         }),
     })
-    trace = SimpleNamespace(
-        executed_actions=(SimpleNamespace(applied_action=[0.0] * 7, metadata={}),),
-        policy_predictions=(SimpleNamespace(
-            inference_duration_ns=1_000_000,
-            metadata=MappingProxyType({"runtime": MappingProxyType({"performance": performance})}),
-        ),),
+    action_spec = mock_action_spec()
+    prediction = ActionPrediction(
+        PredictionId("telemetry-prediction"), StepId("telemetry-step"),
+        np.zeros((1, action_spec.dimension), dtype=action_spec.dtype), action_spec,
+        timestamp_ns=1_000_000, inference_duration_ns=1_000_000, horizon=1,
+        metadata={"runtime": {"performance": performance}},
     )
+    executed = ExecutedAction(prediction.prediction_id, prediction.step_id, 0,
+                              prediction.actions[0], prediction.actions[0], 1_000_001)
+    trace = SimpleNamespace(executed_actions=(executed,), policy_predictions=(prediction,))
     view = _trace_view(tmp_path / "episode", trace)
+    assert set(view["action_component_statistics"]) == {"tx", "ty", "gripper"}
     assert view["vram_allocated_mib"] == [1.0]
     assert view["vram_peak_reserved_mib"] == [4.0]
     assert view["estimated_gflops"] == [12.5]
@@ -448,7 +455,7 @@ def test_single_episode_report_is_binary_offline_traceable_and_tamper_evident(tm
     action_statistics = charts["action_timeseries"]["statistics"]
     assert action_statistics["schema_version"] == "ovlab.descriptive-statistics/v1"
     assert "full canonical trace" in action_statistics["source"]
-    assert {row["series"] for row in action_statistics["rows"]} == {"tx", "ty", "tz"}
+    assert {row["series"] for row in action_statistics["rows"]} == {"tx", "ty", "gripper"}
     assert all(row["n"] == task["episodes"][0]["trace_view"]["action_sample_count"] for row in action_statistics["rows"])
     assert all(row["non_finite_count"] == 0 for row in action_statistics["rows"])
     assert all(row["sample_standard_deviation"] is not None for row in action_statistics["rows"])

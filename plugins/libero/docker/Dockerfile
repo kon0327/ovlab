@@ -18,7 +18,7 @@ LABEL org.opencontainers.image.title="OVLAB LIBERO benchmark runner" \
       org.opencontainers.image.description="Isolated LIBERO runner; no OpenVLA model runtime" \
       io.github.ovlab.role="benchmark-libero" \
       io.github.ovlab.build-target="production" \
-      io.github.ovlab.deployment.contract="native-run-config-bundle-v3" \
+      io.github.ovlab.deployment.contract="benchmark-rpc-v2-config-bundle-v5" \
       io.github.ovlab.python.version="3.10.20" \
       io.github.ovlab.cuda.version="12.1" \
       io.github.ovlab.runtime.components="torch=2.2.0;mujoco=3.9.0;robosuite=1.4.1" \
@@ -29,7 +29,6 @@ LABEL org.opencontainers.image.title="OVLAB LIBERO benchmark runner" \
 
 ENV OVLAB_ROOT=/opt/ovlab \
     OVLAB_LOCAL_PROFILE=/opt/ovlab/deploy/config/container-profile.yaml \
-    OVLAB_EXECUTION_PROFILE=profiles/libero-bench-egl.yaml \
     OVLAB_POLICY_SOCKET=/run/ovlab/policy.sock \
     OVLAB_REVISION=$OVLAB_REVISION \
     OVLAB_IMAGE_ROLE=benchmark-libero \
@@ -45,7 +44,7 @@ ENV OVLAB_ROOT=/opt/ovlab \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONPATH=/opt/ovlab/external/libero \
+    PYTHONPATH=/opt/ovlab/external/extensions/libero/libero \
     LIBERO_CONFIG_PATH=/etc/ovlab/libero \
     NUMBA_CACHE_DIR=/tmp/ovlab-numba-cache \
     MPLCONFIGDIR=/tmp/ovlab-matplotlib \
@@ -58,7 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/ovlab
-COPY deploy/locks/benchmark.requirements.txt /tmp/requirements.txt
+COPY external/extensions/libero/self/locks/benchmark.requirements.txt /tmp/requirements.txt
 RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
       /opt/conda/lib/python3.10/site-packages/networkx-*.dist-info \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes -r /tmp/requirements.txt \
@@ -66,15 +65,17 @@ RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx \
 COPY code /opt/ovlab/code
 COPY deploy/config /opt/ovlab/deploy/config
 RUN install -d -o root -g root -m 0755 /etc/ovlab/libero
-COPY --chmod=0444 deploy/config/libero/config.yaml /etc/ovlab/libero/config.yaml
+COPY --chmod=0444 external/extensions/libero/self/runtime/config.yaml /etc/ovlab/libero/config.yaml
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
-COPY external/libero /opt/ovlab/external/libero
+COPY external/extensions/libero/libero /opt/ovlab/external/extensions/libero/libero
+COPY external/extensions/libero/self /opt/ovlab/external/extensions/libero/self
 ARG OVLAB_CONFIG_BUNDLE_SHA256=none
 RUN --mount=type=secret,id=ovlab_source_manifest \
     --mount=type=secret,id=ovlab_plugin_registry \
     --mount=type=secret,id=ovlab_config_bundle \
     test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
     && bash /tmp/install-ovlab-packages.sh \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/extensions/libero/self \
     && rm /tmp/install-ovlab-packages.sh \
     && groupadd --gid 10001 ovlab \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \

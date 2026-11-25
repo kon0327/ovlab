@@ -11,10 +11,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
+from types import MappingProxyType
 
-from .contracts.metadata import Metadata, normalize_metadata
+Metadata = Mapping[str, object]
 
 DATASET_RESOLUTION_SCHEMA = "ovlab.dataset-resolution/v1"
 DatasetProgress = Callable[[str], None]
@@ -22,28 +24,10 @@ _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-class DatasetError(RuntimeError):
-    """Base error for immutable dataset operations."""
-
-
-class DatasetRequestError(DatasetError):
-    """The requested source or transformation is invalid."""
-
-
-class DatasetUnavailableError(DatasetError):
-    """Required immutable data is unavailable."""
-
-
-class DatasetIntegrityError(DatasetError):
-    """Dataset bytes or metadata failed verification."""
-
-
-class DatasetSecurityError(DatasetError):
-    """The acquisition input violates the dataset boundary."""
-
-
-class DatasetInterruptedError(DatasetError):
-    """Acquisition stopped before publication."""
+from .dataset_errors import (
+    DatasetError, DatasetRequestError, DatasetUnavailableError, DatasetIntegrityError,
+    DatasetSecurityError, DatasetInterruptedError,
+)
 
 
 def _name(value: object, label: str) -> None:
@@ -62,6 +46,21 @@ def _plain(value):
     if isinstance(value, (tuple, list)):
         return [_plain(item) for item in value]
     return value
+
+
+def _freeze_metadata(value):
+    """Dataset identities contain JSON data and need no numeric runtime import."""
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise DatasetRequestError("dataset metadata keys must be strings")
+        return MappingProxyType({key: _freeze_metadata(item) for key, item in value.items()})
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze_metadata(item) for item in value)
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise DatasetRequestError("dataset metadata must contain finite JSON values")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +113,9 @@ class DatasetResolution:
             not isinstance(self.expected_digest, str) or _SHA256.fullmatch(self.expected_digest) is None
         ):
             raise DatasetRequestError("expected_digest must be a lowercase SHA-256 digest")
-        object.__setattr__(self, "source_metadata", normalize_metadata(self.source_metadata, type(self).__name__))
+        if not isinstance(self.source_metadata, Mapping):
+            raise DatasetRequestError("source_metadata must be a mapping")
+        object.__setattr__(self, "source_metadata", _freeze_metadata(self.source_metadata))
 
     def identifying_document(self) -> dict[str, object]:
         return {
@@ -153,6 +154,10 @@ class DatasetProvider(ABC):
     bridge_version: str
     supports_resume: bool = False
 
+    def publication_version(self, resolution: DatasetResolution) -> str:
+        """Path-safe public version; independent of the source revision/pin."""
+        return resolution.source_revision
+
     @abstractmethod
     def capabilities(self) -> Mapping[str, object]: ...
 
@@ -164,8 +169,14 @@ class DatasetProvider(ABC):
     def acquire(self, resolution: DatasetResolution, destination: Path,
                 progress: DatasetProgress | None = None) -> None: ...
 
-    @abstractmethod
-    def verify(self, resolution: DatasetResolution, acquired: Path) -> dict[str, object]: ...
+    def verify(self, resolution: DatasetResolution, acquired: Path) -> dict[str, object]:
+        from .artifact_identity import inventory
+        files, digest, size = inventory(acquired, exclude=("source.json",))
+        if not files:
+            raise DatasetIntegrityError("acquired dataset contains no files")
+        if resolution.expected_digest is not None and digest != resolution.expected_digest:
+            raise DatasetIntegrityError(f"dataset content digest mismatch: expected {resolution.expected_digest}, got {digest}")
+        return {"files": files, "content_digest": digest, "total_size": size}
 
     @abstractmethod
     def prepare(self, resolution: DatasetResolution, acquired: Path, destination: Path) -> dict[str, object]: ...

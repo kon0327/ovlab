@@ -316,6 +316,8 @@ class OvlabApplication:
     def validate(self, config: str | Path, *, mode: str) -> dict[str, object]:
         resolved = self.resolve(config, mode=mode)
         if isinstance(resolved, ResolvedExperimentConfig):
+            if mode == "runtime" and resolved.benchmark_context is not None:
+                self.preflight(resolved)
             return {
                 "valid": True,
                 "mode": mode,
@@ -331,6 +333,26 @@ class OvlabApplication:
             "scientific_config_hash": resolved.get("scientific_config_hash"),
             "execution_config_hash": resolved.get("execution_config_hash"),
         }
+
+    def preflight(self, resolved: ResolvedExperimentConfig):
+        """Negotiate declared model/benchmark/tasks/metrics without runtime startup."""
+        from ovlab_core.contracts import RunContext, RunId
+        from ovlab_metrics import MetricRegistry
+        from ovlab_runner import preflight_components
+        from .benchmark_plugins import benchmark_for_document, call_benchmark
+        from .policy_plugins import plugin_for_type, call_plugin
+        components = resolved.scientific_config["components"]
+        benchmark = benchmark_for_document(components["benchmark"], self.repository_root)
+        policy = plugin_for_type(components["policy"]["type"], self.repository_root,
+                                 provider=components["policy"].get("provider"))
+        capabilities = call_plugin(policy, "describe_capabilities", resolved.policy_settings)
+        catalog = call_benchmark(benchmark, "task_catalog", resolved.benchmark_settings)
+        selected = resolved.benchmark_context.task_set.task_ids
+        context = RunContext(RunId("contract-preflight"), 0, resolved.experiment_id,
+                             resolved.protocol_settings.base_seed)
+        plan = resolved.create_plan(context, selected)
+        return preflight_components(plan, resolved.benchmark_context.capabilities,
+                                    capabilities, catalog.tasks, MetricRegistry.default())
 
     def resolved_document(self, config: str | Path, *, mode: str):
         value = self.resolve(config, mode=mode)
@@ -456,7 +478,8 @@ class OvlabApplication:
         policy_type = getattr(resolved, "policy_type", None)
         if policy_type is None and hasattr(resolved, "scientific_config"):
             policy_type = resolved.scientific_config["components"]["policy"]["type"]
-        plugin = plugin_for_type(policy_type, self.repository_root) if policy_type and policy_type != "mock" else None
+        policy_document = resolved.scientific_config["components"]["policy"] if hasattr(resolved, "scientific_config") else {}
+        plugin = plugin_for_type(policy_type, self.repository_root, provider=policy_document.get("provider")) if policy_type and policy_type != "mock" else None
         adapter = (adapter_factory(resolved.policy_settings) if adapter_factory else
                    call_plugin(plugin, "create_adapter", resolved.policy_settings) if plugin else self._policy_adapter(resolved.policy_settings))
         socket = Path(socket_path) if socket_path is not None else self.default_socket(path)
@@ -507,10 +530,13 @@ class OvlabApplication:
         from ovlab_remote_policy import RemotePolicyAdapter, TcpPolicyClient, UnixPolicyClient
 
         resolved = self._resolved_experiment(config)
-        describe = getattr(resolved.benchmark_settings, "describe_capabilities", None)
-        if not callable(describe):
-            raise ConfigCompatibilityError("benchmark settings must implement describe_capabilities(action_spec) for deployment checks")
-        benchmark_capabilities = describe(resolved.action_spec)
+        if resolved.benchmark_context is not None:
+            benchmark_capabilities = resolved.benchmark_context.capabilities
+        else:
+            describe = getattr(resolved.benchmark_settings, "describe_capabilities", None)
+            if not callable(describe):
+                raise ConfigCompatibilityError("benchmark must declare its configured capabilities")
+            benchmark_capabilities = describe(resolved.action_spec)
         if socket_path is not None and port is not None:
             raise ConfigCompatibilityError("connect requires either a Unix socket or TCP endpoint")
         if port is not None:
@@ -574,22 +600,14 @@ class OvlabApplication:
 
     @staticmethod
     def _selected_tasks(resolved: ResolvedExperimentConfig):
-        from ovlab_benchmarks.libero import LiberoAdapterSettings
-        from ovlab_core.contracts import TaskId
-        settings = resolved.benchmark_settings
-        if not isinstance(settings, LiberoAdapterSettings):
-            raise ConfigCompatibilityError("production CLI run currently requires LIBERO")
-        slug = {
-            "LIBERO-10": "10", "LIBERO-Spatial": "spatial", "LIBERO-Object": "object", "LIBERO-Goal": "goal",
-        }
-        indices = settings.task_indices if settings.task_indices is not None else tuple(range(10))
-        return tuple(TaskId(f"libero/{slug[suite]}/{index}") for suite in settings.suite_names for index in indices)
+        if resolved.benchmark_context is None:
+            raise ConfigCompatibilityError("native execution requires a registered benchmark provider")
+        return resolved.benchmark_context.task_set.task_ids
 
     def run(
         self, config: str | Path, *, output_root: str | Path | None = None,
         local_profile: str | Path | None = None,
     ) -> dict[str, object]:
-        from ovlab_benchmarks.libero import LiberoBenchmarkAdapter
         from ovlab_core.contracts import RunContext, RunId
         from ovlab_remote_policy import RemotePolicyAdapter, UnixPolicyClient
         from ovlab_runner import (
@@ -598,6 +616,7 @@ class OvlabApplication:
         )
 
         resolved = self._resolved_experiment(config, local_profile=local_profile)
+        self.preflight(resolved)
         scope = ExperimentScope.from_environment(self.environment)
         created_wall_time_utc_ns = time.time_ns()
         run_id = RunId(_readable_run_id(
@@ -657,9 +676,11 @@ class OvlabApplication:
             )
         socket = self.default_socket(config)
         policy = RemotePolicyAdapter(UnixPolicyClient(socket))
+        from .benchmark_plugins import benchmark_for_document, create_adapter
+        benchmark_owner = benchmark_for_document(resolved.scientific_config["components"]["benchmark"], self.repository_root)
         runner = ExperimentRunner(
             plan,
-            LiberoBenchmarkAdapter(resolved.benchmark_settings),
+            create_adapter(benchmark_owner, resolved.benchmark_settings),
             policy,
             FilesystemRunArtifactStore(root),
             configuration_snapshot=resolved.configuration_snapshot(),

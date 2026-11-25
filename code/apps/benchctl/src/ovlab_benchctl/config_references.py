@@ -109,7 +109,7 @@ class ConfigReferences:
         path = Path(reference)
         if path.parts and path.parts[0] in {"experiments", "examples"}:
             frozen = self.config_root / path
-            if self.is_frozen and frozen.is_file():
+            if self.is_frozen:
                 return self.inside(frozen, self.config_root / path.parts[0], "experiment")
             return self.inside(self.repository_root / path, self.repository_root / path.parts[0], "experiment")
         return self.inside(self.config_root / path, self.config_root, "user configuration")
@@ -131,6 +131,8 @@ class ConfigReferences:
 
     def origin(self, path):
         path = Path(path).resolve()
+        if path.is_relative_to(self.builtin_root):
+            return self.builtin_root
         for root in self.module_roots().values():
             if path.is_relative_to(root):
                 return root
@@ -139,16 +141,18 @@ class ConfigReferences:
             return frozen[1]
         if path.is_relative_to(self.builtin_root):
             return self.builtin_root
-        for root in (self.config_root, self.repository_root / "experiments", self.repository_root / "examples"):
+        for root in self.plugin_roots().values():
             if path.is_relative_to(root):
                 return root
-        for root in self.plugin_roots().values():
+        for root in (self.config_root, self.repository_root / "experiments", self.repository_root / "examples"):
             if path.is_relative_to(root):
                 return root
         raise ConfigReferenceError(f"configuration is outside registered roots: {path}")
 
     def reference(self, path):
         path = Path(path).resolve()
+        if path.is_relative_to(self.builtin_root):
+            return "ovlab://" + path.relative_to(self.builtin_root).as_posix()
         for name, root in self.module_roots().items():
             if path.is_relative_to(root):
                 return f"module://{name}/{path.relative_to(root).as_posix()}"
@@ -158,14 +162,14 @@ class ConfigReferences:
             return f"plugin://{name}/{relative}"
         if path.is_relative_to(self.builtin_root):
             return "ovlab://" + path.relative_to(self.builtin_root).as_posix()
+        for name, root in self.plugin_roots().items():
+            if path.is_relative_to(root):
+                return f"plugin://{name}/{path.relative_to(root).as_posix()}"
         for name in ("experiments", "examples"):
             if path.is_relative_to(self.repository_root / name):
                 return path.relative_to(self.repository_root).as_posix()
         if path.is_relative_to(self.config_root):
             return path.relative_to(self.config_root).as_posix()
-        for name, root in self.plugin_roots().items():
-            if path.is_relative_to(root):
-                return f"plugin://{name}/{path.relative_to(root).as_posix()}"
         raise ConfigReferenceError(f"configuration is outside registered roots: {path}")
 
     def portable(self, reference):

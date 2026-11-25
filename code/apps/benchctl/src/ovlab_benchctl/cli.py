@@ -180,9 +180,9 @@ def _parser() -> argparse.ArgumentParser:
     eval_run = eval_commands.add_parser("run", help="run one experiment through Docker Compose")
     eval_run.add_argument("target", metavar="TARGET", help="evaluation configuration path or plugin:// reference")
     eval_run.add_argument(
-        "--renderer", choices=("egl", "glfw"),
-        help="override deployment.renderer from the experiment",
+        "--renderer", help="select an execution alias declared by the benchmark plugin",
     )
+    eval_run.add_argument("--execution-profile", help="explicit plugin or local benchmark execution configuration")
     eval_run.add_argument(
         "--quantization", help="override with a quantization profile supported by the selected plugin",
     )
@@ -364,11 +364,11 @@ def _parser() -> argparse.ArgumentParser:
     dataset_providers = dataset_commands.add_parser("providers", help="list registered dataset bridges without model imports")
     _output_options(dataset_providers)
     dataset_resolve = dataset_commands.add_parser("resolve", help="resolve a known benchmark dataset without downloading")
-    dataset_resolve.add_argument("--benchmark", choices=("libero",), required=True)
+    dataset_resolve.add_argument("--benchmark", required=True, help="registered dataset provider ID")
     _primary_argument(dataset_resolve, "--suite", "suite", "SUITE")
     _output_options(dataset_resolve)
     dataset_fetch = dataset_commands.add_parser("fetch", help="explicitly acquire and prepare a verified dataset")
-    dataset_fetch.add_argument("--source", choices=("libero", "url"), required=True)
+    dataset_fetch.add_argument("--source", required=True, help="registered dataset provider ID")
     _primary_argument(dataset_fetch, "--name", "name", "NAME")
     dataset_fetch.add_argument("--version", default="1")
     dataset_fetch.add_argument("--url")
@@ -1140,8 +1140,8 @@ def _dispatch(args):
         return result, args.json, None
     if args.command == "plugin":
         if args.plugin_command == "register":
-            from .plugin_projects import register_project
-            return register_project(_repository_root(), args.source, commit=args.commit,
+            from .plugin_projects import register_extension_project
+            return register_extension_project(_repository_root(), args.source, commit=args.commit,
                                     registry_path=args.registry, dry_run=args.dry_run), args.json, None
         from .plugin_catalog import check_project, inspect_project, list_projects, project_roles, project_sources
         from .plugin_sources import sync_sources
@@ -1213,6 +1213,7 @@ def _dispatch(args):
         plan = deployment.plan(
             args.target,
             renderer=args.renderer,
+            execution_profile=args.execution_profile,
             quantization=args.quantization,
             offline=True if args.offline else None,
             project_name=args.project_name,

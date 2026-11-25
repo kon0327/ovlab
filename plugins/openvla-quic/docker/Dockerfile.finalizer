@@ -33,13 +33,13 @@ ENV OVLAB_ROOT=/opt/ovlab \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /opt/ovlab
-COPY external/plugin-openvla-quic/locks/finalizer.requirements.txt /tmp/locks/
+COPY external/extensions/openvla-quic/self/locks/finalizer.requirements.txt /tmp/locks/
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes \
       -r /tmp/locks/finalizer.requirements.txt \
     && rm -rf /tmp/locks
 COPY code /opt/ovlab/code
-COPY external/plugin-openvla-quic /opt/ovlab/external/plugin-openvla-quic
-COPY external/openvla-support /opt/ovlab/external/openvla-support
+COPY external/extensions/openvla-quic/self /opt/ovlab/external/extensions/openvla-quic/self
+COPY external/extensions/openvla-quic/openvla-support /opt/ovlab/external/extensions/openvla-quic/openvla-support
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
 ARG OVLAB_CONFIG_BUNDLE_SHA256=none
@@ -48,8 +48,8 @@ RUN --mount=type=secret,id=ovlab_source_manifest \
     --mount=type=secret,id=ovlab_config_bundle \
     test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
     && bash /tmp/install-ovlab-packages.sh \
-    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla-support \
-    && bash /opt/ovlab/external/plugin-openvla-quic/scripts/install-plugin.sh \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/extensions/openvla-quic/openvla-support \
+    && bash /opt/ovlab/external/extensions/openvla-quic/self/scripts/install-plugin.sh \
     && rm /tmp/install-ovlab-packages.sh \
     && groupadd --gid 10001 ovlab \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ovlab \

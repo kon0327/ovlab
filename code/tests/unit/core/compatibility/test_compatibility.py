@@ -180,3 +180,18 @@ def test_require_compatible_raises_only_for_errors() -> None:
     incompatible = replace(policy, contract_version="x")
     with pytest.raises(ContractCompatibilityError, match="CONTRACT_VERSION_MISMATCH"):
         negotiate_capabilities(benchmark, incompatible).require_compatible()
+
+
+@pytest.mark.parametrize('field, value, expected', [
+    ('control_frequency_hz', 7.0, 'ACTION_CONTROL_FREQUENCY_MISMATCH'),
+    ('minimum', -2.0, 'ACTION_BOUNDS_MISMATCH'),
+    ('maximum', 2.0, 'ACTION_BOUNDS_MISMATCH'),
+])
+def test_native_action_timing_and_bounds_must_match(field, value, expected):
+    benchmark, policy = capability_pair()
+    if field in {"minimum", "maximum"}:
+        import numpy as np
+        value = np.full(policy.output_action_spec.dimension, value, dtype=np.float32)
+    action = replace(policy.output_action_spec, **{field: value})
+    changed = replace(policy, output_action_spec=action)
+    assert expected in issue_codes(benchmark, changed)

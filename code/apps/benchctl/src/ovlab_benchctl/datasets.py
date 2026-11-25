@@ -46,7 +46,6 @@ DATASET_SOURCE_SCHEMA = "ovlab.dataset-source/v1"
 DATASET_RESOLUTION_SCHEMA = "ovlab.dataset-resolution/v1"
 DATASET_MANIFEST_SCHEMA = "ovlab.dataset-manifest/v1"
 DATASET_PREPARATION_SCHEMA = "ovlab.dataset-preparation/v1"
-LIBERO_BRIDGE_VERSION = "1.0.0"
 URL_BRIDGE_VERSION = "1.0.0"
 LOCAL_BRIDGE_VERSION = "1.0.0"
 
@@ -63,165 +62,10 @@ def _validate_name(value: str, label: str) -> str:
     return value
 
 
-@dataclass(frozen=True, slots=True)
-class DatasetRequest:
-    source: str
-    name: str
-    version: str = "1"
-    url: str | None = None
-    sha256: str | None = None
-    archive: str = "auto"
-    preparation: str | None = None
-    local_path: Path | None = None
-    allow_local_http: bool = False
-
-    def __post_init__(self) -> None:
-        _validate_name(self.source, "dataset source")
-        _validate_name(self.name, "dataset name")
-        _validate_name(self.version, "dataset version")
-        if self.sha256 is not None and SHA256_RE.fullmatch(self.sha256) is None:
-            raise DatasetRequestError("dataset SHA-256 must contain 64 lowercase hexadecimal characters")
-        if self.archive not in {"auto", "none", "zip", "tar", "tar.gz", "tgz", "tar.zst"}:
-            raise DatasetRequestError("archive must be auto, none, zip, tar, tar.gz, tgz, or tar.zst")
+from ovlab_core.datasets import DatasetRequest, DatasetResolution, DatasetProvider as DatasetBridge
 
 
-@dataclass(frozen=True, slots=True)
-class DatasetResolution:
-    provider: str
-    logical_name: str
-    source_revision: str
-    source_type: str
-    canonical_locator: str
-    bridge_id: str
-    bridge_version: str
-    expected_digest: str | None
-    preparation_format: str
-    source_metadata: Mapping[str, object] = field(default_factory=dict)
-
-    @property
-    def resolution_id(self) -> str:
-        return identity("dsr", self.identifying_document())
-
-    def identifying_document(self) -> dict[str, object]:
-        return {
-            "schema_version": DATASET_RESOLUTION_SCHEMA,
-            "provider": self.provider,
-            "logical_name": self.logical_name,
-            "source_revision": self.source_revision,
-            "source_type": self.source_type,
-            "canonical_locator": self.canonical_locator,
-            "bridge": {"id": self.bridge_id, "version": self.bridge_version},
-            "expected_digest": self.expected_digest,
-            "preparation_format": self.preparation_format,
-            "source_metadata": dict(self.source_metadata),
-        }
-
-    def as_dict(self) -> dict[str, object]:
-        return {**self.identifying_document(), "resolution_id": self.resolution_id, "state": "resolved"}
-
-
-class DatasetBridge(ABC):
-    """Training-independent dataset provider boundary."""
-
-    bridge_id: str
-    bridge_version: str
-
-    @abstractmethod
-    def capabilities(self) -> Mapping[str, object]: ...
-
-    @abstractmethod
-    def resolve(self, request: DatasetRequest) -> DatasetResolution: ...
-
-    @abstractmethod
-    def acquire(self, resolution: DatasetResolution, destination: Path, progress: Progress | None = None) -> None: ...
-
-    def verify(self, resolution: DatasetResolution, acquired: Path) -> dict[str, object]:
-        # Acquisition provenance is deliberately outside the dataset payload
-        # identity.  Otherwise adding the source record after downloading would
-        # make a provider's expected content digest impossible to satisfy.
-        files, digest, size = inventory(acquired, exclude=("source.json",))
-        if not files:
-            raise DatasetIntegrityError("acquired dataset contains no files")
-        if resolution.expected_digest is not None and digest != resolution.expected_digest:
-            raise DatasetIntegrityError(
-                f"dataset content digest mismatch: expected {resolution.expected_digest}, got {digest}"
-            )
-        return {"files": files, "content_digest": digest, "total_size": size}
-
-    @abstractmethod
-    def prepare(self, resolution: DatasetResolution, acquired: Path, destination: Path) -> dict[str, object]: ...
-
-
-class _HttpMixin:
-    timeout_s = 30.0
-    retries = 3
-
-    @staticmethod
-    def _validate_url(url: str, *, allow_local_http: bool = False) -> None:
-        parsed = urlsplit(url)
-        if parsed.username is not None or parsed.password is not None:
-            raise DatasetSecurityError("dataset URL must not embed credentials")
-        if parsed.scheme != "https":
-            local = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-            if not (allow_local_http and local):
-                raise DatasetSecurityError("dataset URL must use HTTPS")
-        if not parsed.hostname:
-            raise DatasetSecurityError("dataset URL requires a hostname")
-
-    def _open(self, url: str, *, allow_local_http: bool = False):
-        self._validate_url(url, allow_local_http=allow_local_http)
-        response = build_opener().open(Request(url, headers={"User-Agent": "OVLAB-dataset/1"}), timeout=self.timeout_s)
-        final = response.geturl()
-        self._validate_url(final, allow_local_http=allow_local_http)
-        return response
-
-    def _download(
-        self,
-        url: str,
-        target: Path,
-        *,
-        expected_sha256: str | None,
-        allow_local_http: bool = False,
-        progress: Progress | None = None,
-        maximum_bytes: int = 256 * 1024 * 1024 * 1024,
-    ) -> tuple[str, str, int]:
-        partial = target.with_name(target.name + ".partial")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        last_error: BaseException | None = None
-        for attempt in range(1, self.retries + 1):
-            try:
-                with self._open(url, allow_local_http=allow_local_http) as response, partial.open("wb") as stream:
-                    final_url = response.geturl()
-                    total = 0
-                    while True:
-                        block = response.read(8 * 1024 * 1024)
-                        if not block:
-                            break
-                        total += len(block)
-                        if total > maximum_bytes:
-                            raise DatasetSecurityError("dataset download exceeds configured size limit")
-                        stream.write(block)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                actual = sha256_file(partial)
-                if expected_sha256 is not None and actual != expected_sha256:
-                    raise DatasetIntegrityError(
-                        f"download checksum mismatch: expected {expected_sha256}, got {actual}"
-                    )
-                os.replace(partial, target)
-                if progress is not None:
-                    progress(f"downloaded {target.name} ({total} bytes)")
-                return actual, redact_url(final_url), total
-            except KeyboardInterrupt as exc:
-                raise DatasetInterruptedError("dataset download interrupted; partial bytes remain staged") from exc
-            except DatasetIntegrityError:
-                partial.unlink(missing_ok=True)
-                raise
-            except (OSError, URLError) as exc:
-                last_error = exc
-                if attempt < self.retries:
-                    time.sleep(min(2 ** (attempt - 1), 4))
-        raise DatasetUnavailableError(f"dataset download failed after {self.retries} attempts: {last_error}")
+from ovlab_core.dataset_io import _HttpMixin
 
 
 class UrlDatasetBridge(_HttpMixin, DatasetBridge):
@@ -353,157 +197,6 @@ class UrlDatasetBridge(_HttpMixin, DatasetBridge):
         return {"files": files, "content_digest": digest, "total_size": size, "format": resolution.preparation_format}
 
 
-class LiberoDatasetBridge(_HttpMixin, DatasetBridge):
-    bridge_id = "libero"
-    bridge_version = LIBERO_BRIDGE_VERSION
-    repository = "openvla/modified_libero_rlds"
-    revision = "a7c9ae18499b6eea8a32f78a9302327b752b1b5f"
-    suites = {
-        "libero_spatial": "libero_spatial_no_noops",
-        "libero_object": "libero_object_no_noops",
-        "libero_goal": "libero_goal_no_noops",
-        "libero_10": "libero_10_no_noops",
-    }
-    _shard_name = re.compile(r"^.+\.tfrecord-(\d{5})-of-(\d{5})$")
-
-    def capabilities(self) -> Mapping[str, object]:
-        return {"source": "libero", "suites": tuple(self.suites), "preparation_formats": ("openvla-rlds",)}
-
-    def resolve(self, request: DatasetRequest) -> DatasetResolution:
-        if request.name not in self.suites:
-            raise DatasetRequestError(
-                f"unknown LIBERO suite {request.name!r}; supported suites: {', '.join(self.suites)}"
-            )
-        folder = self.suites[request.name]
-        return DatasetResolution(
-            provider="libero",
-            logical_name=request.name,
-            source_revision=self.revision,
-            source_type="huggingface-dataset-snapshot",
-            canonical_locator=f"https://huggingface.co/datasets/{self.repository}/tree/{self.revision}/{folder}/1.0.0",
-            bridge_id=self.bridge_id,
-            bridge_version=self.bridge_version,
-            expected_digest=None,
-            preparation_format="openvla-rlds",
-            source_metadata={
-                "repository": self.repository,
-                "snapshot_revision": self.revision,
-                "dataset_directory": f"{folder}/1.0.0",
-                "tfds_name": folder,
-                "libero_revision": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
-                "license": "MIT",
-                "citation": "OpenVLA (arXiv:2406.09246) and LIBERO",
-            },
-        )
-
-    def _tree(self, resolution: DatasetResolution) -> list[dict[str, object]]:
-        prefix = str(resolution.source_metadata["dataset_directory"])
-        endpoint = (
-            f"https://huggingface.co/api/datasets/{self.repository}/tree/"
-            f"{self.revision}/{prefix}?" + urlencode({"recursive": "true", "expand": "true"})
-        )
-        entries: list[dict[str, object]] = []
-        next_url: str | None = endpoint
-        while next_url:
-            with self._open(next_url) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-                if not isinstance(payload, list):
-                    raise DatasetUnavailableError("Hugging Face dataset tree response is not a list")
-                entries.extend(item for item in payload if isinstance(item, dict) and item.get("type") == "file")
-                link = response.headers.get("Link", "")
-                next_url = None
-                for part in link.split(","):
-                    if 'rel="next"' in part and "<" in part and ">" in part:
-                        next_url = part.split("<", 1)[1].split(">", 1)[0]
-                        break
-        if not entries:
-            raise DatasetUnavailableError("pinned LIBERO dataset snapshot contains no files")
-        return entries
-
-    def acquire(self, resolution: DatasetResolution, destination: Path, progress: Progress | None = None) -> None:
-        destination.mkdir(parents=True, exist_ok=True)
-        if destination.is_symlink() or not destination.is_dir():
-            raise DatasetSecurityError("LIBERO staging destination must be a real directory")
-        prefix = str(resolution.source_metadata["dataset_directory"]).rstrip("/") + "/"
-        expected_paths: set[Path] = set()
-        for entry in self._tree(resolution):
-            remote_path = str(entry.get("path", ""))
-            if not remote_path.startswith(prefix):
-                raise DatasetSecurityError(f"provider returned a file outside requested LIBERO suite: {remote_path}")
-            relative = safe_relative(remote_path[len(prefix):])
-            if relative in expected_paths:
-                raise DatasetIntegrityError(f"provider returned duplicate LIBERO path: {relative}")
-            expected_paths.add(relative)
-            lfs = entry.get("lfs", {}) if isinstance(entry.get("lfs"), dict) else {}
-            expected = lfs.get("oid") if isinstance(lfs.get("oid"), str) else None
-            if isinstance(expected, str) and expected.startswith("sha256:"):
-                expected = expected[7:]
-            if expected is not None and SHA256_RE.fullmatch(expected) is None:
-                expected = None
-            target = destination / relative
-            partial = target.with_name(target.name + ".partial")
-            if partial.is_symlink() or (partial.exists() and not partial.is_file()):
-                raise DatasetSecurityError(f"unsafe partial LIBERO staging path: {relative}")
-            partial.unlink(missing_ok=True)
-            if target.is_symlink() or (target.exists() and not target.is_file()):
-                raise DatasetSecurityError(f"unsafe existing LIBERO staging path: {relative}")
-            expected_size = entry.get("size")
-            size_matches = not isinstance(expected_size, int) or (
-                target.is_file() and target.stat().st_size == expected_size
-            )
-            if target.is_file() and expected is not None and size_matches and sha256_file(target) == expected:
-                if progress is not None:
-                    progress(f"reused {relative.as_posix()} ({target.stat().st_size} bytes)")
-                continue
-            encoded = "/".join(quote(part, safe="") for part in remote_path.split("/"))
-            url = f"https://huggingface.co/datasets/{self.repository}/resolve/{self.revision}/{encoded}?download=true"
-            self._download(url, target, expected_sha256=expected, progress=progress)
-        actual_paths = {
-            path.relative_to(destination)
-            for path in destination.rglob("*")
-            if path.is_file() and path.name != "source.json"
-        }
-        unexpected = actual_paths - expected_paths
-        if unexpected:
-            names = ", ".join(sorted(path.as_posix() for path in unexpected))
-            raise DatasetIntegrityError(f"LIBERO staging contains files outside the pinned snapshot: {names}")
-        atomic_json(destination / "source.json", {
-            "schema_version": DATASET_SOURCE_SCHEMA,
-            "repository": self.repository,
-            "revision": self.revision,
-            "dataset_directory": resolution.source_metadata["dataset_directory"],
-        }, exclusive=False, mode=0o644)
-
-    def prepare(self, resolution: DatasetResolution, acquired: Path, destination: Path) -> dict[str, object]:
-        destination.mkdir(parents=True, exist_ok=False)
-        required = {"dataset_info.json", "features.json"}
-        names = {path.name for path in acquired.iterdir() if path.is_file()}
-        shards = [self._shard_name.fullmatch(name) for name in names if ".tfrecord-" in name]
-        if not required <= names or not shards or any(match is None for match in shards):
-            raise DatasetIntegrityError("LIBERO OpenVLA RLDS snapshot lacks TFDS metadata or TFRecord shards")
-        totals = {int(match.group(2)) for match in shards if match is not None}
-        indices = {int(match.group(1)) for match in shards if match is not None}
-        if len(totals) != 1 or indices != set(range(next(iter(totals)))):
-            raise DatasetIntegrityError("LIBERO OpenVLA RLDS snapshot has an incomplete TFRecord shard set")
-        for source in sorted(acquired.iterdir()):
-            if source.name == "source.json" or not source.is_file():
-                continue
-            os.link(source, destination / source.name)
-        files, digest, size = inventory(destination)
-        info = json.loads((destination / "dataset_info.json").read_text(encoding="utf-8"))
-        sample_count = sum(int(value) for split in info.get("splits", ()) for value in split.get("shardLengths", ()))
-        return {
-            "files": files,
-            "content_digest": digest,
-            "total_size": size,
-            "format": "openvla-rlds",
-            "sample_count": sample_count,
-            "schema": {
-                "observation": "steps.observation.image:uint8[256,256,3]",
-                "instruction": "steps.language_instruction:string",
-                "action": "steps.action:float32[7]",
-            },
-        }
 
 
 class LocalDatasetBridge(DatasetBridge):
@@ -564,23 +257,102 @@ class LocalDatasetBridge(DatasetBridge):
         return {"files": files, "content_digest": digest, "total_size": size, "format": resolution.preparation_format}
 
 
+@dataclass(frozen=True)
+class _RegisteredDatasetProvider:
+    catalog: object
+    reference: str
+    provider_id: str
+    version: str | None
+    capabilities: Mapping[str, object]
+    deployment: object
+
+    def load(self) -> DatasetBridge:
+        bridge = self.catalog.load_provider(self.reference, expected_kind="dataset", contract=DatasetBridge)
+        if bridge.bridge_id != self.provider_id:
+            raise DatasetRequestError(
+                f"dataset provider {self.reference} declares ID {self.provider_id!r}, "
+                f"but its implementation returns {bridge.bridge_id!r}"
+            )
+        if self.version is not None and bridge.bridge_version != self.version:
+            raise DatasetRequestError(
+                f"dataset provider {self.reference} implementation version differs from its declaration"
+            )
+        return bridge
+
+
+def registered_dataset_providers(repository_root=None):
+    """Read available dataset declarations without importing provider code."""
+    from .benchmark_plugins import extension_catalog
+    from .policy_plugins import _root
+    catalog = extension_catalog(_root(repository_root))
+    result = []
+    for project in catalog.list_projects(category="plugin"):
+        if project["status"] != "available":
+            continue
+        manifest = catalog.project_manifest(project["id"])
+        for provider_id, descriptor in manifest["providers"].items():
+            if descriptor["kind"] == "dataset":
+                reference = f"plugin:dataset:{project['id']}/{provider_id}"
+                alias = _validate_name(descriptor.get("provider_id", provider_id), "dataset provider ID")
+                version = descriptor.get("version", descriptor.get("bridge_version"))
+                if version is not None and (not isinstance(version, str) or not version.strip()):
+                    raise DatasetRequestError(f"dataset provider {reference} has an invalid declared version")
+                capabilities = descriptor.get("capabilities", {})
+                if not isinstance(capabilities, Mapping):
+                    raise DatasetRequestError(f"dataset provider {reference} capabilities must be a mapping")
+                result.append(_RegisteredDatasetProvider(
+                    catalog, reference, alias, version, dict(capabilities), descriptor.get("deployment")
+                ))
+    return tuple(result)
+
+
 class DatasetBridgeRegistry:
-    def __init__(self, bridges: tuple[DatasetBridge, ...] | None = None):
-        bridges = bridges or (LiberoDatasetBridge(), UrlDatasetBridge(), LocalDatasetBridge())
-        self._bridges = {bridge.bridge_id: bridge for bridge in bridges}
+    def __init__(self, bridges: tuple[DatasetBridge, ...] | None = None, *, repository_root=None):
+        self._discover_extensions = bridges is None
+        self._repository_root = repository_root
+        self._registered = None
+        if bridges is None:
+            bridges = (UrlDatasetBridge(), LocalDatasetBridge())
+        self._bridges = {}
+        for bridge in bridges:
+            if bridge.bridge_id in self._bridges:
+                raise DatasetRequestError(f"ambiguous dataset provider: {bridge.bridge_id}")
+            self._bridges[bridge.bridge_id] = bridge
+
+    def _discover(self) -> dict[str, _RegisteredDatasetProvider]:
+        if self._registered is None:
+            registrations = (registered_dataset_providers(self._repository_root)
+                             if self._discover_extensions else ())
+            selected = {}
+            for declaration in registrations:
+                if declaration.provider_id in self._bridges or declaration.provider_id in selected:
+                    raise DatasetRequestError(f"ambiguous dataset provider: {declaration.provider_id}")
+                selected[declaration.provider_id] = declaration
+            self._registered = selected
+        return self._registered
 
     def providers(self) -> list[dict[str, object]]:
-        return [
+        registered = self._discover()
+        rows = [
             {"id": key, "version": bridge.bridge_version, "capabilities": dict(bridge.capabilities())}
             for key, bridge in sorted(self._bridges.items())
+            if key not in registered
         ]
+        rows.extend({"id": key, "version": declaration.version,
+                     "capabilities": dict(declaration.capabilities), "provider_ref": declaration.reference}
+                    for key, declaration in registered.items())
+        return sorted(rows, key=lambda row: row["id"])
 
     def get(self, source: str) -> DatasetBridge:
+        registered = self._discover()
+        if source in registered and source not in self._bridges:
+            self._bridges[source] = registered[source].load()
         try:
             return self._bridges[source]
         except KeyError as exc:
             raise DatasetRequestError(
-                f"unknown dataset provider {source!r}; supported providers: {', '.join(sorted(self._bridges))}"
+                f"unknown dataset provider {source!r}; supported providers: "
+                f"{', '.join(sorted(set(self._bridges) | set(registered)))}"
             ) from exc
 
 
@@ -614,24 +386,8 @@ class DatasetStore:
     def resolve(self, request: DatasetRequest) -> DatasetResolution:
         return self.registry.get(request.source).resolve(request)
 
-    @staticmethod
-    def _storage_version(resolution: DatasetResolution) -> str:
-        """Return the portable dataset version used in the public store path.
-
-        A provider revision identifies source provenance, but is not necessarily
-        the dataset's user-facing version.  LIBERO is pinned by a Hugging Face
-        commit while its published TFDS dataset version is the final component
-        of ``dataset_directory`` (currently ``1.0.0``).
-        """
-        version = resolution.source_revision
-        if resolution.provider == "libero":
-            dataset_directory = resolution.source_metadata.get("dataset_directory")
-            if not isinstance(dataset_directory, str):
-                raise DatasetIntegrityError("LIBERO resolution lacks its versioned dataset directory")
-            parts = safe_relative(dataset_directory).parts
-            if len(parts) < 2:
-                raise DatasetIntegrityError("LIBERO dataset directory lacks a dataset version")
-            version = parts[-1]
+    def _storage_version(self, resolution: DatasetResolution) -> str:
+        version = self.registry.get(resolution.bridge_id).publication_version(resolution)
         return _validate_name(version, "dataset version")
 
     @staticmethod
@@ -640,7 +396,7 @@ class DatasetStore:
         if isinstance(recorded, str) and SAFE_ID_RE.fullmatch(recorded) is not None:
             return recorded
         metadata = document.get("source_metadata")
-        if document.get("provider") == "libero" and isinstance(metadata, Mapping):
+        if isinstance(metadata, Mapping):
             dataset_directory = metadata.get("dataset_directory")
             if isinstance(dataset_directory, str):
                 parts = safe_relative(dataset_directory).parts
@@ -790,7 +546,7 @@ class DatasetStore:
     def _materialize(self, request: DatasetRequest, resolution: DatasetResolution, progress: Progress | None = None) -> dict[str, object]:
         self.root.mkdir(parents=True, exist_ok=True)
         bridge = self.registry.get(request.source)
-        staging = self._recoverable_staging(resolution.resolution_id) if isinstance(bridge, LiberoDatasetBridge) else None
+        staging = self._recoverable_staging(resolution.resolution_id) if getattr(bridge, "supports_resume", False) else None
         resumed = staging is not None
         if staging is None:
             staging = self.root / ".staging" / f"{resolution.resolution_id}-{uuid.uuid4().hex}"
@@ -915,7 +671,7 @@ class DatasetStore:
                     raise DatasetIntegrityError(f"dataset file failed integrity verification: {section}/{relative}")
         raw_files, raw_digest, _ = inventory(root / "raw", exclude=("source.json",))
         expected_raw = manifest["raw_content_digest"]
-        # URL manifests inventory only their payload and LIBERO/local include source metadata separately.
+        # URL manifests inventory only their payload and provider/local include source metadata separately.
         if raw_digest != expected_raw:
             bridge = manifest.get("bridge", {}).get("id") if isinstance(manifest.get("bridge"), dict) else None
             if bridge != "url":
@@ -944,3 +700,24 @@ class DatasetStore:
             )
         result = self.verify(dataset_id)
         return {**result, "preparation_format": current, "reused": True, "host_path": self._display(root)}
+
+
+def dataset_image(source, repository_root):
+    registry = DatasetBridgeRegistry(repository_root=repository_root)
+    declaration = registry._discover().get(source)
+    if declaration is None or not isinstance(declaration.deployment, dict):
+        raise DatasetRequestError(f"dataset provider {source!r} has no unique acquisition image")
+    deployment = dict(declaration.deployment)
+    if any(not isinstance(deployment.get(key), str) or not deployment[key]
+           for key in ("role", "image", "image_env")):
+        raise DatasetRequestError(f"dataset provider {source!r} has an invalid acquisition image declaration")
+    from .extensions import ProviderRef
+    project = ProviderRef.parse(declaration.reference).project
+    role = f"{project}/{deployment['role']}"
+    recipe = declaration.catalog.project_builds(project).get(role)
+    if recipe is None or recipe["image"] != deployment["image"]:
+        raise DatasetRequestError(f"dataset provider {source!r} acquisition image differs from its build recipe")
+    if re.fullmatch(r"[A-Z_][A-Z0-9_]*", deployment["image_env"]) is None:
+        raise DatasetRequestError(f"dataset provider {source!r} has an invalid image environment variable")
+    deployment["role"] = role
+    return deployment

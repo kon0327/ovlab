@@ -17,10 +17,10 @@ import uuid
 import numpy as np
 from ovlab_core.experiment_scope import ExperimentScope
 
+from .action_metadata import component_names as _action_component_names, trace_action_spec, shared_action_spec
 from .artifacts.codec import TraceCodec
 from .artifacts.layout import run_key, safe_key
 from .derived import (
-    _action_component_names,
     _canonical_bytes,
     _descriptive_statistics,
     _inside,
@@ -36,7 +36,7 @@ from .permissions import finalize_managed_directory, finalize_managed_tree
 
 
 EXPORT_METADATA_SCHEMA = "ovlab.export-metadata/v2"
-EXPORT_ENGINE_VERSION = "2.1.0"
+EXPORT_ENGINE_VERSION = "2.2.0"
 ISOLATED_TEMPLATE = "isolated-default-v1"
 GROUPED_TEMPLATE = "grouped-default-v1"
 LEGACY_EXPORT_SPEC_SCHEMA = "ovlab.export-spec/v1"
@@ -221,17 +221,11 @@ def _source_record(run_path: Path) -> dict[str, object]:
 
 
 def _suite(model: dict[str, object]) -> str | None:
-    for task in model["tasks"]:
-        task_id = str(task["task_id"])
-        for prefix, suite in (
-            ("libero/10/", "libero_10"),
-            ("libero/spatial/", "libero_spatial"),
-            ("libero/object/", "libero_object"),
-            ("libero/goal/", "libero_goal"),
-        ):
-            if task_id.startswith(prefix):
-                return suite
-    return None
+    suites = tuple(dict.fromkeys(task.get("suite_id") for task in model["tasks"] if task.get("suite_id")))
+    if suites:
+        return suites[0] if len(suites) == 1 else ",".join(suites)
+    from .historical_metadata import legacy_suite
+    return legacy_suite(model["tasks"])
 
 
 def _evaluation_run_paths(runs_root: Path):
@@ -296,7 +290,7 @@ def _episode_data(record: dict[str, object], selected_episode_id: str | None = N
             for observation in trace.observations:
                 for proprioception in observation.proprioception:
                     values = np.asarray(proprioception.values).reshape(-1)
-                    if proprioception.name in {"robot.eef.position", "robot.proprioception"} and values.size >= 3:
+                    if proprioception.name in {"robot.eef.position", "robot.proprioception"} and values.size >= 3 and tuple(proprioception.units[:3]) == ("m", "m", "m"):
                         positions.append([float(value) for value in values[:3]])
                         break
             rows.append({
@@ -310,6 +304,7 @@ def _episode_data(record: dict[str, object], selected_episode_id: str | None = N
                 "terminal_status": episode["terminal_status"],
                 "success": bool(episode["success"]),
                 "instruction": episode["instruction"],
+                "action_spec": trace_action_spec(trace),
                 "actions": actions,
                 "requested_actions": requested,
                 "inference_ms": inference,
@@ -435,7 +430,7 @@ def _action_metric_summary(
 
 def _episode_statistics(episode: dict[str, object]) -> list[dict[str, object]]:
     actions = episode["actions"]
-    components = _action_component_names(max((len(row) for row in actions), default=0))
+    components = _action_component_names(max((len(row) for row in actions), default=0), episode.get("action_spec"))
     series = {
         name: [row[index] for row in actions if len(row) > index]
         for index, name in enumerate(components)
@@ -463,7 +458,7 @@ def _aggregate_statistics(
     group_name: str | None = None,
 ) -> list[dict[str, object]]:
     dimensions = max((len(row) for episode in episodes for row in episode["actions"]), default=0)
-    names = _action_component_names(dimensions)
+    names = _action_component_names(dimensions, shared_action_spec(episodes))
     identity = {"scope": scope, "group": group_name, "run_id": run_id, "task_id": None, "episode_id": None}
     rows = _statistics_rows(
         "applied_action",
@@ -502,7 +497,7 @@ def _episode_timeseries(episode: dict[str, object]) -> list[dict[str, object]]:
         len(episode["rpc_ms"]), len(episode["closed_loop_ms"]), len(episode["eef_positions"]),
     )
     rows = []
-    component_names = _action_component_names(max((len(row) for row in episode["actions"]), default=0))
+    component_names = _action_component_names(max((len(row) for row in episode["actions"]), default=0), episode.get("action_spec"))
     for index in range(count):
         row = {"step": index}
         if index < len(episode["actions"]):
@@ -527,7 +522,7 @@ def _episode_figures(episode: dict[str, object], root: Path) -> list[str]:
     omitted = []
     key = episode["episode_key"]
     actions = np.asarray(episode["actions"], dtype=np.float64)
-    names = _action_component_names(actions.shape[1] if actions.ndim == 2 else 0)
+    names = _action_component_names(actions.shape[1] if actions.ndim == 2 else 0, episode.get("action_spec"))
 
     figure, axis = plt.subplots(figsize=(10, 5))
     if actions.size:
@@ -757,7 +752,7 @@ def _run_overview_figures(record: dict[str, object], episodes: list[dict[str, ob
     _save_figure(figure, root / "success-by-task")
 
     dimensions = max((len(row) for episode in episodes for row in episode["actions"]), default=0)
-    names = _action_component_names(dimensions)
+    names = _action_component_names(dimensions, shared_action_spec(episodes))
     component_values = [
         [row[index] for episode in episodes for row in episode["actions"] if len(row) > index]
         for index in range(dimensions)

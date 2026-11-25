@@ -181,14 +181,24 @@ class ResolvedProvider:
     manifest: dict
 
 
-@dataclass(frozen=True)
 class ResolvedSnapshot:
-    lock: dict
-    locations: dict
+    """Keep frozen identity independent of mutable dictionaries handed to callers."""
+
+    def __init__(self, lock, locations):
+        self._lock = deepcopy(lock)
+        self._locations = deepcopy(locations)
+
+    @property
+    def lock(self):
+        return deepcopy(self._lock)
+
+    @property
+    def locations(self):
+        return deepcopy(self._locations)
 
     @property
     def sha256(self):
-        return hashlib.sha256(_canonical(self.lock)).hexdigest()
+        return hashlib.sha256(_canonical(self._lock)).hexdigest()
 
 
 class UnsupportedProviderKind(ConfigCompatibilityError):
@@ -386,6 +396,19 @@ class ExtensionCatalog:
             controls = _strings(provider.get("control_sources", []), f"extension {project}/{name}.control_sources")
             if set(controls) - {"self", *refs}:
                 raise ConfigSchemaError(f"extension {project}/{name}.control_sources must select declared sources")
+            deployment = provider.get("deployment")
+            if deployment is not None:
+                _mapping(deployment, f"extension {project}/{name} deployment")
+                role = deployment.get("role")
+                if role not in manifest.get("builds", {}):
+                    raise ConfigSchemaError(f"extension {project}/{name} references an unknown build role")
+                build = manifest["builds"][role]
+                if deployment.get("image") != build["image"]:
+                    raise ConfigSchemaError(f"extension {project}/{name} image differs from its build recipe")
+                if set(refs) - {"self", *build.get("sources", [])}:
+                    raise ConfigSchemaError(f"extension {project}/{name} build omits required provider sources")
+                if not isinstance(deployment.get("image_env"), str) or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", deployment["image_env"]):
+                    raise ConfigSchemaError(f"extension {project}/{name} requires an image environment variable")
         configs = _mapping(manifest.get("configs", {}), f"extension {project} configs")
         if set(configs) - {"root", "templates", "checkpoints"}:
             raise ConfigSchemaError(f"extension {project} configs contains unknown fields")
@@ -437,6 +460,9 @@ class ExtensionCatalog:
 
     def resolve_provider(self, reference, *, expected_kind=None, acquire=False):
         ref = ProviderRef.parse(reference)
+        if self.frozen and (self._frozen_snapshot is None or
+                            str(ref) not in self._frozen_snapshot.get("lock", {}).get("providers", {})):
+            raise ConfigReferenceError(f"provider {ref} is absent from the frozen selection")
         if expected_kind is not None and ref.kind != expected_kind:
             raise ConfigCompatibilityError(f"provider {ref} has kind {ref.kind!r}, expected {expected_kind!r}")
         manifest = self.project_manifest(ref.project, acquire=acquire)
@@ -446,6 +472,18 @@ class ExtensionCatalog:
         descriptor = deepcopy(descriptor)
         descriptor["sources"] = [f"{ref.project}/{name}" for name in dict.fromkeys(["self", *descriptor.get("sources", [])])]
         descriptor["control_sources"] = [f"{ref.project}/{name}" for name in descriptor.get("control_sources", [])]
+        def qualify_roles(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key == "role" and isinstance(item, str):
+                        value[key] = f"{ref.project}/{item}"
+                    else:
+                        qualify_roles(item)
+            elif isinstance(value, list):
+                for item in value:
+                    qualify_roles(item)
+        for section in ("deployment", "training", "preparation"):
+            qualify_roles(descriptor.get(section))
         return ResolvedProvider(ref, descriptor, self.project_root(ref.project), deepcopy(manifest))
 
     def project_sources(self, project, *, acquire=False):
@@ -639,10 +677,20 @@ class ExtensionCatalog:
         for candidate in candidates:
             target = candidate.joinpath(*module.split("."))
             expected.update(path.resolve() for path in (target.with_suffix(".py"), target / "__init__.py") if path.is_file())
+        if not expected:
+            raise ConfigReferenceError(f"provider {provider.ref} entrypoint is missing from its selected sources")
         try:
             loaded = importlib.import_module(module)
-            if expected and Path(getattr(loaded, "__file__", "")).resolve() not in expected:
-                raise ConfigCompatibilityError(f"provider {provider.ref} was imported from a different source; restart with the selected catalog")
+            loaded_file = Path(getattr(loaded, "__file__", "")).resolve()
+            if loaded_file not in expected:
+                from .plugin_sources import tree_identity
+                namespace = module.split('.')[0]
+                loaded_package = next((parent for parent in loaded_file.parents if parent.name == namespace), None)
+                matches = loaded_package is not None and any(
+                    (candidate / namespace).is_dir() and tree_identity(candidate / namespace) == tree_identity(loaded_package)
+                    for candidate in candidates)
+                if not matches:
+                    raise ConfigCompatibilityError(f"provider {provider.ref} was imported from a different source; restart with the selected catalog")
             implementation = getattr(loaded, attribute)
             if isinstance(implementation, type):
                 implementation = implementation()

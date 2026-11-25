@@ -10,10 +10,6 @@ from typing import Any
 
 import numpy as np
 
-from ovlab_benchmarks.libero import (
-    InitialStateSelection, LiberoAdapterSettings, LiberoObservationProfile, resolve_renderer_settings,
-)
-from ovlab_benchmarks.libero.actions import libero_action_spec
 from ovlab_core.contracts import (
     ActionRepresentation, ActionSpec, GripperConvention, RotationRepresentation,
 )
@@ -231,46 +227,49 @@ class ConfigResolver:
             "devices": devices, "checkpoints": resolved_checkpoints, "repositories": resolved_repositories,
         }
 
-        execution_profile_doc = None
-        renderer = None
-        if components["benchmark"]["type"] == "libero":
-            configured_renderer = experiment_doc.get("deployment", {}).get("renderer", "egl")
-            reference = execution_profile or {
-                "egl": "ovlab://profiles/egl.yaml",
-                "glfw": "ovlab://profiles/glfw.yaml",
-            }[configured_renderer]
-            if str(reference).startswith(("ovlab:", "plugin:", "module:")):
-                execution_profile_path = self._root_reference(str(reference), "execution_profile")
-            elif Path(reference).is_absolute():
-                execution_profile_path = Path(reference)
-                self.references.origin(execution_profile_path)
-            else:
-                execution_profile_path = self._root_reference(str(reference).removeprefix("configs/"), "execution_profile")
-            execution_profile_doc = self._load_composed(execution_profile_path, "execution_profile")
-            renderer_doc = execution_profile_doc["execution"]["libero"]["renderer"]
-            device_id = renderer_doc.get("device_id")
-            local_renderer = profile.get("execution", {}).get("libero", {}).get("renderer", {})
-            if "device_id" in local_renderer:
-                device_id = local_renderer["device_id"]
-            if device_id is None:
-                device = devices.get("primary_gpu")
-                if device is not None:
-                    if not device.startswith("cuda:") or not device.removeprefix("cuda:").isdigit():
-                        raise ConfigCompatibilityError("LIBERO EGL rendering requires primary_gpu: cuda:<index>")
-                    device_id = int(device.split(":", 1)[1])
-            renderer = resolve_renderer_settings(
-                renderer_doc["backend"], device_id, os.environ if environment is None else environment
-            )
-
-        action_spec = self._action_spec(action_doc)
-        self._cross_validate_refs(experiment_doc, components, action_path, action_spec)
         protocol = self._protocol(components["protocol"])
-        benchmark = self._benchmark(components["benchmark"], protocol, renderer)
+        action_spec = self._action_spec(action_doc)
+        execution_profile_doc = None
+        renderer_metadata = None
+        benchmark_context = None
+        benchmark_owner = None
+        if components["benchmark"]["type"] == "mock":
+            benchmark = self._benchmark(components["benchmark"], protocol, None)
+        else:
+            from .benchmark_plugins import benchmark_for_document, call_benchmark, peer_context
+            from ovlab_core.contracts import BenchmarkResolutionContext
+            benchmark_owner = benchmark_for_document(components["benchmark"], self.repository_root)
+            profiles = benchmark_owner.descriptor.get("execution_profiles", {})
+            configured = experiment_doc.get("deployment", {}).get("renderer")
+            frozen_execution = None
+            if self.references.is_frozen:
+                frozen_execution = json.loads((self.config_root / ".ovlab-bundle.json").read_text()).get("execution_profile")
+            reference = execution_profile or frozen_execution or experiment_doc.get("deployment", {}).get("execution_profile") or (profiles.get(configured) if configured else benchmark_owner.descriptor.get("default_execution_profile"))
+            if configured and profiles and configured not in profiles and not execution_profile and not experiment_doc.get("deployment", {}).get("execution_profile"):
+                raise ConfigCompatibilityError(f"selected benchmark does not support execution profile {configured!r}")
+            if reference is not None:
+                execution_profile_path = (self._root_reference(str(reference), "execution_profile")
+                    if not Path(reference).is_absolute() else Path(reference))
+                self.references.origin(execution_profile_path)
+                execution_profile_doc = self._load_composed(execution_profile_path, "execution_profile")
+                if execution_profile_doc.get("provider") != str(benchmark_owner.ref):
+                    raise ConfigCompatibilityError("execution profile belongs to a different benchmark provider")
+            context = BenchmarkResolutionContext(protocol.base_seed, protocol.maximum_episode_steps,
+                repository_root=self.repository_root, devices=devices, paths={key: str(value) for key,value in paths.items()},
+                environment=values, execution={"profile": execution_profile_doc or {},
+                    "local": profile.get("execution", {}), "deployment": experiment_doc.get("deployment", {})})
+            benchmark = call_benchmark(benchmark_owner, "resolve_settings", components["benchmark"], context)
+            benchmark_context = peer_context(benchmark_owner, benchmark)
+            runtime_metadata = call_benchmark(benchmark_owner, "execution_metadata", benchmark)
+            renderer_metadata = runtime_metadata.get("renderer")
+            if not _action_specs_equal(action_spec, benchmark_context.capabilities.action_spec):
+                raise ConfigCompatibilityError("policy action interface differs from the benchmark native action interface")
+        self._cross_validate_refs(experiment_doc, components, action_path, action_spec, benchmark_context)
         from .policy_plugins import plugin_for_type, call_plugin
         if components["policy"]["type"] != "mock":
             plugin = plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider"))
             resources.update(call_plugin(plugin, "runtime_resources", components["policy"], self.repository_root, values))
-        policy = self._policy(components["policy"], components["benchmark"], action_spec, resolved_checkpoints, devices, environment=values)
+        policy = self._policy(components["policy"], benchmark_context if benchmark_context is not None else components["benchmark"], action_spec, resolved_checkpoints, devices, environment=values)
         metrics = self._metrics(components["metrics"])
         artifact = self._artifacts(components["artifacts"], paths)
         reporting = ReportingSettings(**experiment_doc.get("reporting", {}))
@@ -278,8 +277,7 @@ class ConfigResolver:
             raise ConfigCompatibilityError("protocol requests raw policy output but the policy does not expose it")
         if not components["protocol"]["recording"]["predictions"]:
             raise ConfigCompatibilityError("OVLAB traces always require predictions; recording.predictions must be true")
-        if components["benchmark"]["type"] == "libero" and not components["benchmark"]["settings"]["privileged_signals"]["enabled"]:
-            raise ConfigCompatibilityError("LiberoBenchmarkAdapter always exposes its declared privileged signal registry")
+
 
         scientific_components = deepcopy(components)
         if components["policy"]["type"] != "mock":
@@ -293,7 +291,7 @@ class ConfigResolver:
         if components["policy"]["type"] != "mock":
             from .plugin_identity import scientific_source_identities
             scientific["policy_plugin"] = {
-                "api_version": "1", "descriptor": plugin.descriptor,
+                "api_version": plugin.implementation.api_version, "descriptor": plugin.descriptor,
                 "sources": scientific_source_identities(
                     self.repository_root, plugin.descriptor.get("sources", []), registry=plugin.registry,
                 ),
@@ -322,18 +320,30 @@ class ConfigResolver:
                 "configured": configured_deployment,
                 "resolved": {
                     "profile": resolved_profile,
-                    "renderer": renderer.as_dict() if renderer is not None else None,
+                    "renderer": renderer_metadata,
                 },
             }
         if execution_profile_doc is not None:
             execution["execution_profile"] = execution_profile_doc
-            execution["libero"] = {"renderer": renderer.as_dict()}
+
+        if benchmark_context is not None:
+            from .plugin_identity import scientific_source_identities
+            from .policy_plugins import registry_document
+            identity = benchmark_context.identity
+            scientific["benchmark_plugin"] = {"provider": str(benchmark_owner.ref),
+                "api_version": benchmark_owner.implementation.api_version,
+                "descriptor": benchmark_owner.descriptor,
+                "sources": scientific_source_identities(self.repository_root,
+                    benchmark_owner.descriptor["sources"], registry=registry_document(self.repository_root)),
+                "identity": {"project": identity.plugin_id, "benchmark": identity.benchmark_id, "version": identity.version,
+                             "source_revision": identity.source_revision}, "catalog_sha256": benchmark_context.task_set.catalog_sha256}
+            execution["benchmark"] = {"provider": str(benchmark_owner.ref), "runtime": runtime_metadata}
         return ResolvedExperimentConfig(
             experiment_doc["experiment"]["id"], benchmark, policy, action_spec, metrics, protocol, artifact, reporting,
-            scientific, execution, _hash(scientific), _hash(execution),
+            scientific, execution, _hash(scientific), _hash(execution), benchmark_context,
         )
 
-    def _cross_validate_refs(self, experiment, components, action_path, action_spec):
+    def _cross_validate_refs(self, experiment, components, action_path, action_spec, benchmark_context=None):
         deployment = experiment.get("deployment")
         if deployment is not None:
             from .policy_plugins import plugin_for_type
@@ -347,15 +357,14 @@ class ConfigResolver:
                     f"deployment profile {deployment['profile']!r} is incompatible with policy "
                     f"type {components['policy']['type']!r}; expected {expected_profile!r}"
                 )
-        reference = components["benchmark"]["settings"]["action"]["interface_ref"]
-        benchmark_action_path = self._root_reference(reference, "benchmark.settings.action.interface_ref")
-        if benchmark_action_path != action_path:
-            raise ConfigCompatibilityError("benchmark action interface differs from the policy interface")
-        if components["benchmark"]["type"] == "libero" and not _action_specs_equal(action_spec, libero_action_spec()):
-            raise ConfigCompatibilityError("action interface differs from LiberoBenchmarkAdapter's verified ActionSpec")
+        if benchmark_context is None:
+            reference = components["benchmark"]["settings"]["action"]["interface_ref"]
+            benchmark_action = self._action_spec(self._load_composed(self._root_reference(reference, "benchmark action"), "action_interface"))
+            if not _action_specs_equal(action_spec, benchmark_action):
+                raise ConfigCompatibilityError("benchmark action interface differs from the policy interface")
         if components["policy"]["type"] != "mock":
             from .policy_plugins import plugin_for_type, call_plugin
-            call_plugin(plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider")), "validate_observation", components["policy"], components["benchmark"])
+            call_plugin(plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider")), "validate_observation", components["policy"], benchmark_context if benchmark_context is not None else components["benchmark"])
 
     @staticmethod
     def _action_spec(doc):
@@ -404,22 +413,7 @@ class ConfigResolver:
                 tuple(settings["terminal_outcomes"]), obs["camera"], (obs["height"], obs["width"], 3),
                 obs["proprioception"], settings["privileged_signals"]["enabled"],
             )
-        if renderer is None:
-            raise ConfigCompatibilityError("LIBERO benchmark requires an execution renderer profile")
-        suite = {"libero_spatial": "LIBERO-Spatial", "libero_object": "LIBERO-Object",
-                 "libero_goal": "LIBERO-Goal", "libero_10": "LIBERO-10"}[settings["suite"]]
-        task_indices = None if settings["task_indices"] == "all" else tuple(settings["task_indices"])
-        camera_names = [obs["cameras"]["primary"]["native_name"]]
-        if "wrist" in obs["cameras"]:
-            camera_names.append(obs["cameras"]["wrist"]["native_name"])
-        return LiberoAdapterSettings(
-            suite_names=(suite,), task_indices=task_indices,
-            camera_names=tuple(camera_names), camera_width=obs["width"], camera_height=obs["height"],
-            observation_profile=LiberoObservationProfile(obs["profile"]), maximum_episode_steps=protocol.maximum_episode_steps,
-            initialization_settling_steps=settings["initialization"]["settling_steps"],
-            initial_state_selection=InitialStateSelection(settings["initialization"]["state_selection"]),
-            base_seed=protocol.base_seed, renderer=renderer,
-        )
+        raise ConfigCompatibilityError("benchmark settings require its registered SDK provider")
 
     @with_registry
     def _policy(self, doc, benchmark_doc, action_spec, checkpoints, devices, *, environment=None):

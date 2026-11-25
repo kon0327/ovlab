@@ -9,8 +9,3 @@ paths:
 
 devices:
   primary_gpu: cuda:0
-
-execution:
-  libero:
-    renderer:
-      device_id: 0

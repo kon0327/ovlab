@@ -15,7 +15,7 @@ from ovlab_core.experiment_scope import ExperimentScope
 
 from .policy_plugins import with_registry
 from .application import OvlabApplication
-from .datasets import DatasetRequest, DatasetStore, LiberoDatasetBridge
+from .datasets import DatasetRequest, DatasetStore
 from .image_metadata import IMAGE_CONTRACT_LABEL
 from .strict_yaml import load
 from .training_errors import DatasetUnavailableError, TrainingRuntimeError
@@ -148,8 +148,6 @@ class TrainingDeployment:
         if reference.startswith("dataset-"):
             raise DatasetUnavailableError(f"immutable dataset {reference} is missing and cannot be inferred")
         provider, name = reference.split("/", 1)
-        if provider != "libero":
-            raise DatasetUnavailableError("automatic training acquisition supports only known LIBERO selectors")
         datasets_root = self.model_data_root / "datasets"
         datasets_root.mkdir(parents=True, exist_ok=True)
         command = [
@@ -159,11 +157,11 @@ class TrainingDeployment:
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700",
             "--env", "OVLAB_MODEL_DATA_ROOT=/var/lib/ovlab/model-data",
             "--mount", f"type=bind,source={datasets_root},target=/var/lib/ovlab/model-data/datasets",
-            dataset_image, "dataset", "fetch", "--source", "libero", "--name", name, "--json",
+            dataset_image, "dataset", "fetch", "--source", provider, "--name", name, "--json",
         ]
         completed = self.runner(command, check=False, stdout=sys.stderr)
         if completed.returncode != 0:
-            raise DatasetUnavailableError(f"explicit LIBERO acquisition container failed with exit code {completed.returncode}")
+            raise DatasetUnavailableError(f"explicit {provider} acquisition container failed with exit code {completed.returncode}")
 
     @with_registry
     def run(self, profile_reference: str | Path, *, allow_dataset_download: bool = False,
@@ -197,9 +195,6 @@ class TrainingDeployment:
             "offline-dataset-ro-base-ro-training-run-rw-v1",
             plugin_role=selected_image["role"],
         )
-        dataset_image, dataset_digest = self._docker_image(
-            "OVLAB_DATASET_IMAGE", "ovlab-dataset:local", "dataset-write-only-or-finalizer-v1"
-        )
         selected_finalizer = finalizer_image(profile.document, self.repository_root)
         finalizer_image_reference, finalizer_digest = self._docker_image(
             selected_finalizer["image_env"], selected_finalizer["image"],
@@ -221,6 +216,10 @@ class TrainingDeployment:
                     raise DatasetUnavailableError(
                         f"dataset {reference!r} is missing; fetch it explicitly or repeat train run with --allow-dataset-download"
                     )
+                from .datasets import dataset_image
+                acquisition = dataset_image(provider, self.repository_root)
+                _, dataset_digest = self._docker_image(acquisition["image_env"], acquisition["image"],
+                    "dataset-write-only-or-finalizer-v1", plugin_role=acquisition["role"])
                 self._explicit_dataset_acquisition(profile, dataset_digest)
         gpu_count, vram_gib = self._gpu() if selected_image.get("gpu", True) else (0, 0.0)
         plan = TrainingPlanner(self.repository_root, self.model_data_root).plan(

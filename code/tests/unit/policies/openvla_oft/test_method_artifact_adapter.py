@@ -47,7 +47,7 @@ def _resolved():
         profile.write_text((REPOSITORY / "config/local/example.yaml").read_text())
         return ConfigResolver(root / "configs", repository_root=root).resolve(
             references["oft"], local_profile=profile,
-            execution_profile="ovlab://profiles/egl.yaml", environment={})
+            execution_profile="plugin://libero/execution/egl.yaml", environment={})
 
 
 def test_registered_method_is_strict_native_oft_and_accounts_all_adaptation_components():

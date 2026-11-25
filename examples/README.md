@@ -30,7 +30,11 @@ and evaluation evidence even though a two-step rollout cannot establish useful
 task performance. Copy an example into `experiments/` before creating a real
 study, then select suitable data, episode limits and compute resources.
 
-[`policy-plugin/`](policy-plugin/README.md) is the independent developer example
-for implementing and registering another plugin. Model plugin category examples
+[`policy-plugin/`](policy-plugin/README.md) demonstrates an independent model
+project and persistent CPU serving. [`benchmark-plugin/`](benchmark-plugin/README.md)
+adds a separately registered CPU benchmark and the public paired evaluation,
+metric and report/export workflow. Their setup scripts generate explicit
+registry, checkpoint and machine-profile overrides without changing root
+registration. Model plugin category examples
 describe local extensions; they are templates requiring appropriate checkpoints,
 datasets and benchmark input contracts before execution.

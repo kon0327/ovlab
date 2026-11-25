@@ -24,7 +24,7 @@ from .strict_yaml import load
 from .training_identity import atomic_json
 
 
-_CONTRACT = "resolved-checkpoint-quantization-config-bundle-v2"
+_CONTRACT = "policy-rpc-v2-config-bundle-v3"
 
 
 def _hash(document):
@@ -154,6 +154,7 @@ class ModelDeployment:
             command += ["--mount", docker_bind(mount["source"], mount["target"])]
             if mount.get("environment"): env[mount["environment"]] = mount["target"]
         env["OVLAB_PLUGIN_REGISTRY"] = "/opt/ovlab/configs/plugins/registry.json"
+        env["OVLAB_EXTENSION_REGISTRY"] = "/opt/ovlab/configs/extensions/registry.json"
         env["OVLAB_LOCAL_PROFILE"] = "/opt/ovlab/configs/plugins/runtime-profile.yaml"
         for key, value in env.items():
             command += ["--env", f"{key}={value}"]

@@ -6,7 +6,7 @@ import pytest
 from helpers.contexts import make_run_context, make_step_context
 from helpers.fake_libero import FakeLiberoBackend, fake_libero_episode
 from ovlab_benchmarks import BenchmarkActionRequest, BenchmarkLifecycleError
-from ovlab_benchmarks.libero import (
+from ovlab_libero import (
     LiberoAdapterSettings,
     LiberoBenchmarkAdapter,
     LiberoConfigurationError,

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+import numpy as np
 
 from .contracts.actions import ActionSpec
 from .contracts.capabilities import (
@@ -121,10 +122,16 @@ def _check_action(benchmark: ActionSpec, policy: ActionSpec) -> list[Compatibili
         ("gripper_convention", "GRIPPER_CONVENTION_MISMATCH"),
         ("units", "ACTION_UNIT_MISMATCH"),
         ("dtype", "ACTION_DTYPE_MISMATCH"),
+        ("control_frequency_hz", "ACTION_CONTROL_FREQUENCY_MISMATCH"),
     )
     for field_name, code in checks:
         if getattr(benchmark, field_name) != getattr(policy, field_name):
             issues.append(_issue(code, f"action_spec.{field_name}", "benchmark and policy declarations differ"))
+    for field_name in ("minimum", "maximum"):
+        left, right = getattr(benchmark, field_name), getattr(policy, field_name)
+        if (left is None) != (right is None) or (left is not None and not np.array_equal(left, right)):
+            issues.append(_issue("ACTION_BOUNDS_MISMATCH", f"action_spec.{field_name}",
+                                 "benchmark and policy action bounds differ"))
     return issues
 
 

@@ -22,7 +22,7 @@ kind: local_profile
 id: example-plugin-local
 paths:
   checkpoint_root: {json.dumps(str(data / 'checkpoints/huggingface'))}
-  dataset_root: {json.dumps(str(data / 'datasets/libero'))}
+  dataset_root: {json.dumps(str(data / 'datasets'))}
   runs_root: {json.dumps(str(data / 'runs'))}
 devices:
   primary_gpu: cpu

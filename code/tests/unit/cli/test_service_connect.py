@@ -86,7 +86,7 @@ def test_health_is_ready_only_after_initialization_and_does_not_consume_service(
     first = app.service_health(socket)
     second = app.service_health(socket)
     assert first["ready"] is True and second["ready"] is True
-    assert first["protocol_version"] == "ovlab-policy-rpc/1.0.0"
+    assert first["protocol_version"] == "ovlab-policy-rpc/2.0.0"
     assert first["prediction_count"] == 0 and first["trace_created"] is False
     assert thread.is_alive()
 

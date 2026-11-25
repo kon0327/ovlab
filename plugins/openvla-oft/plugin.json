@@ -54,7 +54,7 @@
   "providers": {
     "openvla-oft": {
       "kind": "policy",
-      "api_version": "1",
+      "api_version": "2",
       "config_type": "openvla_oft",
       "id": "openvla-oft",
       "family": "openvla_oft",
@@ -73,13 +73,11 @@
         "image": "ovlab-policy-openvla-oft:local",
         "image_env": "OVLAB_OFT_IMAGE",
         "policy_service": "policy-openvla-oft",
-        "benchmark_service": "benchmark-oft",
         "quantization": [
           "none",
           "8bit",
           "4bit"
-        ],
-        "observation_profile": "native_oft"
+        ]
       },
       "artifact_forms": [
         "merged_backbone_with_auxiliary_components"

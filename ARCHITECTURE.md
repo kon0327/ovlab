@@ -6,14 +6,22 @@ isolated policy services, canonical evidence, offline reporting, dataset
 management and training. Configuration, contract and wire-protocol versions are
 independent of the product version and are identified explicitly below.
 
-Policy implementation discovery, model-specific validation and adapter construction
-are delegated to versioned plugins. The registry binds source projects/commits and
-build recipes; `external/` is an ignored materialization workspace. The developer
+Policy and benchmark discovery, owner-specific validation and adapter construction
+are delegated to versioned plugins. The common `ovlab.extensions/v1` registry
+binds logical projects to local directories or immutable Git commits. Each
+`ovlab.extension/v1` manifest declares its category and typed providers. Selected
+locks identify portable source/declaration closure separately from materialized
+locations; `external/` is an ignored workspace. The developer
 contract, lifecycle, example and migration procedure are in
 [POLICY_PLUGINS.md](docs/POLICY_PLUGINS.md). Generic evaluation services are generated
 from one shared Compose template; policy families do not add branches to the core
 resolver or new Compose service stanzas. Specialized training components retain
 their own training algorithms and configuration interfaces.
+
+The [extension migration and qualification record](docs/EXTENSION_ARCHITECTURE.md)
+tracks the staged rollout. The current API v2/LIBERO integration is being
+qualified; describing these boundaries does not establish a completed native or
+image smoke gate. Metric/report runtime modularization is subsequent work.
 
 ## 1. Design goals
 
@@ -106,15 +114,15 @@ They share managed storage with deployment but never run as part of a benchmark.
 ovlab/
 ├── code/
 │   ├── packages/      dependency-light contracts and reusable boundaries
-│   ├── policies/      concrete OpenVLA-family policy adapters and services
 │   ├── apps/          CLI composition root and experiment runner
 │   └── tests/         unit, contract, integration and marked real tests
+├── plugins/           independent policy/benchmark projects and shared model support
 ├── config/            tracked OVLAB component defaults (ovlab://)
 ├── configs/           ignored user component extensions
 ├── experiments/       ignored user experiment specifications
 ├── examples/          maintained verification scenarios and integration example
 ├── deploy/            Dockerfiles, Compose topology, locks and environments
-├── external/          pinned upstream sources and the OpenVLA-QuIC fork
+├── external/          ignored materialized sources selected by registered projects
 └── ovlab              launcher for the host CLI
 ```
 
@@ -123,7 +131,8 @@ The Python packages form a layered dependency graph:
 ```mermaid
 flowchart BT
     Core["ovlab-core<br/>immutable contracts + compatibility"]
-    Bench["ovlab-benchmarks<br/>benchmark boundary + LIBERO adapter"]
+    Bench["ovlab-benchmarks<br/>benchmark SDK + catalog contracts"]
+    Libero["ovlab-libero<br/>concrete benchmark + dataset provider"]
     PolicySDK["ovlab-policy-sdk<br/>policy lifecycle boundary"]
     Metrics["ovlab-metrics<br/>pure offline metric plug-ins"]
     Common["ovlab-openvla-common<br/>prompt, observation and action codecs"]
@@ -136,6 +145,8 @@ flowchart BT
     Benchctl["ovlab-benchctl<br/>composition root and CLI"]
 
     Bench --> Core
+    Libero --> Bench
+    Libero --> Core
     PolicySDK --> Core
     Metrics --> Core
     Common --> Core
@@ -147,12 +158,10 @@ flowchart BT
     Lora --> Vanilla
     Lora --> Common
     Lora --> Remote
-    Lora -. service configuration .-> Benchctl
     OFT --> Core
     OFT --> PolicySDK
     OFT --> Common
     OFT --> Remote
-    OFT -. service configuration .-> Benchctl
     QuIC --> Core
     QuIC --> PolicySDK
     QuIC --> Remote
@@ -164,10 +173,6 @@ flowchart BT
     Benchctl --> Bench
     Benchctl --> Metrics
     Benchctl --> Remote
-    Benchctl --> Vanilla
-    Benchctl --> Lora
-    Benchctl --> OFT
-    Benchctl --> QuIC
 ```
 
 Important ownership rules are:
@@ -180,12 +185,17 @@ Important ownership rules are:
 - `ovlab-remote-policy` makes a remote policy look like an ordinary
   `PolicyAdapter`; model-specific code remains behind the service boundary.
 - `ovlab-benchctl` is deliberately the top-level composition root. It converts
-  YAML documents into owner-defined settings and selects concrete adapters.
-- The merged-LoRA and OFT service entry modules currently reuse
-  `ConfigResolver` from `ovlab-benchctl`, while the composition root lazily
-  imports their adapters. The dotted back-edges in the diagram are real
-  integration coupling, not dependencies of the runner loop; a future service
-  bootstrap package could remove this cycle.
+  YAML documents into owner-defined settings and selects providers through the
+  common catalog. Core SDKs and plugin control contracts do not import it.
+- `ovlab_benchmarks.plugin` provides standard-library control hooks;
+  `ovlab_benchmarks.catalog` provides typed task/capability utilities. Concrete
+  LIBERO control/runtime/configuration/renderer code belongs to `plugins/libero`.
+- Policy API `"2"` consumes canonical `BenchmarkContext`, containing identity,
+  capabilities, selected task identity and explicit method claims. A model
+  integration never reads a peer's YAML; standalone serving receives no peer.
+- Task catalogs contain portable descriptions. Concrete projects bind native
+  task handles/initial states at runtime and recheck their capabilities and
+  selected task identities against the declared contract.
 - The production report engine currently lives in `ovlab-runner` because it
   consumes runner artifacts. It reads canonical runs as immutable inputs and
   writes reports and exports under the managed data root.
@@ -254,10 +264,12 @@ runtime images.
 
 ## 5. Production benchmark topology
 
-Production execution uses two containers selected by the experiment:
-
-- `openvla`: `benchmark-openvla` + `policy-openvla` for Vanilla and merged LoRA;
-- `oft`: `benchmark-oft` + `policy-openvla-oft` for native OFT.
+Production execution uses a selected policy provider and benchmark provider.
+The policy owns its model image, checkpoint needs and runtime resources. The
+benchmark owns its image/build role, execution environment, renderer, mounts
+and GPU requirements. The orchestrator combines the pair using the shared
+Compose template and verifies both image identities before container startup.
+Adding a model does not assign a benchmark image or renderer to that model.
 
 ```mermaid
 flowchart LR
@@ -391,15 +403,15 @@ flowchart LR
     Trace --> Metrics
 ```
 
-The RPC protocol is `ovlab-policy-rpc/1.0.0`, transported as canonical JSON in
-a four-byte network-order length-prefixed frame over AF_UNIX. It enforces frame
+The RPC protocol is `ovlab-policy-rpc/2.0.0`, transported as canonical JSON in
+a four-byte network-order length-prefixed frame over AF_UNIX or TCP. It enforces frame
 and array size limits, exact keys, request IDs, episode IDs, step freshness,
 shape/layout/dtype declarations and duplicate rejection.
 
-Vanilla requests use the original primary-camera-only payload. The extended
-schema supports declared named RGB observations and float32 proprioception for
-OFT while preserving backward compatibility. Both forms carry only lifecycle
-identifiers, the authoritative benchmark instruction and declared policy input.
+Requests carry named images and proprioception with their declared numeric
+types, shapes, encodings, units and timestamps. Predictions retain the declared
+ActionSpec dimensions, numeric type and gripper convention. Payloads carry only
+lifecycle identifiers, the authoritative benchmark instruction and declared policy input.
 Reward, success, arbitrary observation metadata, contacts, object poses and
 simulator state are not representable in the prediction schema.
 
@@ -673,11 +685,16 @@ carry their own explicit version.
 
 ### Add a benchmark
 
-1. Implement `BenchmarkAdapter` without coupling it to a policy package.
-2. Declare stable tasks, observation/action capabilities and a signal registry.
-3. Map privileged/evaluation data only to `SignalValue`.
-4. Add strict configuration and contract tests.
-5. Add a runtime image/profile only if its dependency stack requires one.
+1. Register a project with an `ovlab.extension/v1` manifest and a qualified
+   `kind: benchmark` provider implementing `BenchmarkPlugin` API `"1"`.
+2. Own its configuration, stable task catalog, observation/action capabilities,
+   native bindings and signal registry; expose a canonical peer context.
+3. Implement `BenchmarkAdapter` without policy-package dependencies. Map
+   privileged/evaluation data only to `SignalValue`.
+4. Declare lightweight deployment requirements, execution profiles, sources,
+   recipes and locks in the project; keep native imports lazy.
+5. Check static compatibility and initialized capability/task bindings, then
+   qualify the public pipeline through canonical metrics/report/export.
 
 ### Add a policy method
 
@@ -686,7 +703,8 @@ carry their own explicit version.
    applicable.
 3. Expose a generic method descriptor and immutable checkpoint identity.
 4. Serve it through `PolicyService`; do not add model-specific runner logic.
-5. Add a Compose profile only after the provider is runnable and validated.
+5. Declare its policy deployment requirements and qualify it with a separately
+   selected benchmark through the shared Compose template.
 
 ### Add a metric
 
@@ -725,13 +743,15 @@ repair source evidence while rendering.
 | Training ownership | `code/apps/benchctl/src/ovlab_benchctl/training_deployment.py` |
 | Core contracts | `code/packages/ovlab-core/src/ovlab_core/contracts/` |
 | Capability negotiation | `code/packages/ovlab-core/src/ovlab_core/compatibility.py` |
-| LIBERO adapter | `code/packages/ovlab-benchmarks/src/ovlab_benchmarks/libero/` |
+| Extension catalog/selected lock | `code/apps/benchctl/src/ovlab_benchctl/extensions.py` |
+| Benchmark SDK | `code/packages/ovlab-benchmarks/src/ovlab_benchmarks/` |
+| LIBERO project/adapter | `plugins/libero/extension.json`, `plugins/libero/src/ovlab_libero/` |
 | RPC protocol/service | `code/packages/ovlab-remote-policy/src/ovlab_remote_policy/` |
 | Runner and episode loop | `code/apps/runner/src/ovlab_runner/runner.py`, `execution.py` |
 | Trace persistence | `code/apps/runner/src/ovlab_runner/artifacts/` |
 | Metrics | `code/packages/ovlab-metrics/src/ovlab_metrics/` |
 | Reporting and exports | `code/apps/runner/src/ovlab_runner/derived.py`, `exports.py` |
-| Runtime topology | `deploy/compose/compose.yaml` |
+| Runtime topology | `code/apps/benchctl/src/ovlab_benchctl/plugins/compose-template.json` |
 | Portable experiments | `examples/experiments/` and ignored user `experiments/` |
 | Resource identities | Plugin-owned `configs/registry/default.yaml` and explicit user catalogs |
-| External source pins | Versioned policy/source/build registry (`ovlab.plugins/v1`) |
+| External source pins | Project-owned `ovlab.extension/v1` manifests, registered through `ovlab.extensions/v1`, and selected `ovlab.extension-lock/v1` snapshots |

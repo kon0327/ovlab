@@ -5,10 +5,10 @@ import pytest
 
 from helpers.contexts import make_episode_context
 from helpers.fake_libero import fake_raw_observation
-from ovlab_benchmarks.libero import LiberoActionError, LiberoAdapterSettings, LiberoObservationError, LiberoObservationProfile
-from ovlab_benchmarks.libero.actions import libero_action_spec, validate_action
-from ovlab_benchmarks.libero.observations import map_observation
-from ovlab_benchmarks.libero.signals import map_signals, signal_registry
+from ovlab_libero import LiberoActionError, LiberoAdapterSettings, LiberoObservationError, LiberoObservationProfile
+from ovlab_libero.actions import libero_action_spec, validate_action
+from ovlab_libero.observations import map_observation
+from ovlab_libero.signals import map_signals, signal_registry
 from ovlab_core.contracts import GripperConvention, SignalAccess, StepId
 
 

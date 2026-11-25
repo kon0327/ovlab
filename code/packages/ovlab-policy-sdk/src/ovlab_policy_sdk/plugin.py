@@ -69,7 +69,12 @@ class PolicyPlugin(ABC):
 
     @abstractmethod
     def identity(self, capabilities: PolicyCapabilities) -> Mapping[str, object]:
-        """Return model_identity, method_identity and runtime_versions for RPC."""
+        """Return RPC model/normalization/prompt/codec identity and runtime_versions.
+
+        The optional method_descriptor records adaptation or method identity.
+        Values must be serializable metadata; no runtime objects or paths that
+        would require access to the registering host belong in this response.
+        """
 
     def validate_document(self, doc: dict, path: str) -> None:
         """Optional validation for kinds declared in registry document_kinds."""

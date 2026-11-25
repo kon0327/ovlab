@@ -38,7 +38,7 @@ def test_capabilities_and_checkpoint_identity(settings, runtime):
 
 
 def test_service_identity_preserves_vanilla_method_and_quantization(settings, runtime):
-    from ovlab_remote_policy.openvla_service import _identity_provider
+    from ovlab_openvla_vanilla.service import _identity_provider
 
     capabilities = OpenVlaVanillaAdapter(settings, runtime).initialize(make_run_context())
     identity = _identity_provider(capabilities)

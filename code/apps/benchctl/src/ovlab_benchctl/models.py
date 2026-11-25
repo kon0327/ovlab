@@ -8,7 +8,7 @@ import os
 import uuid
 
 from ovlab_benchmarks import BenchmarkSettings
-from ovlab_core.contracts import ActionSpec, Metadata, normalize_metadata
+from ovlab_core.contracts import ActionSpec, BenchmarkContext, Metadata, normalize_metadata
 from ovlab_runner import (
     ActionExecutionPolicy, ArtifactStoreSettings, EpisodeErrorPolicy,
     ExperimentPlan, MetricAvailabilityPolicy, RunConfigurationSnapshot, TraceRecordingPolicy,
@@ -170,6 +170,7 @@ class ResolvedExperimentConfig:
     execution_config: Metadata
     scientific_config_hash: str
     execution_config_hash: str
+    benchmark_context: BenchmarkContext | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.experiment_id, str) or not self.experiment_id.strip():
@@ -229,6 +230,17 @@ class ResolvedExperimentConfig:
                 "experiment_name": experiment.get("name", self.experiment_id),
                 "experiment_tags": experiment.get("tags", ()),
                 "policy_configuration": policy.get("settings", {}),
+                **({"benchmark_identity": {
+                    "plugin_id": self.benchmark_context.identity.plugin_id,
+                    "benchmark_id": self.benchmark_context.identity.benchmark_id,
+                    "version": self.benchmark_context.identity.version,
+                    "source_revision": self.benchmark_context.identity.source_revision,
+                    "metadata": dict(self.benchmark_context.identity.metadata),
+                }, "benchmark_task_set": {
+                    "catalog_id": self.benchmark_context.task_set.catalog_id,
+                    "catalog_sha256": self.benchmark_context.task_set.catalog_sha256,
+                    "suite_ids": self.benchmark_context.task_set.suite_ids,
+                }} if self.benchmark_context is not None else {}),
                 "scientific_config_hash": self.scientific_config_hash,
                 "execution_config_hash": self.execution_config_hash,
             },

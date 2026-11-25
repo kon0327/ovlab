@@ -21,7 +21,7 @@ settings:
     synchronize_inference: true
   action:
     codec: "openvla-to-libero-v1"
-    action_interface: "ovlab://interfaces/actions/libero-osc-pose-v1.yaml"
+    action_interface: "plugin://openvla-quic/interfaces/action.yaml"
   raw_output:
     enabled: false
   quic:

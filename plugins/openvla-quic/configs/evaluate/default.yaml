@@ -4,7 +4,6 @@ schema_version: "0.1.0"
 kind: "experiment"
 deployment:
   profile: "quic"
-  renderer: "egl"
 components:
   policy: "plugin://openvla-quic/policy/default.yaml"
 resources:

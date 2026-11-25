@@ -20,7 +20,7 @@ package depends on the other.
 
 ## Model plugins
 
-The versioned `ovlab_policy_sdk.plugin.PolicyPlugin` API connects external model
+The versioned `ovlab_policy_sdk.plugin.PolicyPluginV2` API (`"2"`) connects external model
 projects to configuration, Docker builds, serving and evaluation. See the
 [developer guide](../../../docs/POLICY_PLUGINS.md) and
 [standalone example](../../../examples/policy-plugin/).
@@ -30,8 +30,16 @@ hooks are stateless and run on the host; model and episode state belong to the
 adapter. The settings returned by `resolve_settings` must expose the structural
 `PolicySettings.record_raw_output: bool` contract.
 
+`resolve_settings` receives canonical `BenchmarkContext` with identity,
+capabilities, selected task identity and explicit method claims, or `None` for
+standalone serving. It never receives another project's benchmark YAML.
+`describe_capabilities` declares input/action requirements before model loading;
+adapter initialization reports and validates the actual contract. The API v1
+base remains a migration compatibility surface, not the starting point for new
+projects.
 
-Training and checkpoint preparation extensions are documented in [TRAINING.md](TRAINING.md).
+
+Training and checkpoint preparation extensions are documented in [TRAINING.md](../../../TRAINING.md).
 
 `ovlab_policy_sdk.strict_yaml` provides the same strict configuration parser used
 by OVLAB, without importing its orchestration package. Plugins can use `load`,

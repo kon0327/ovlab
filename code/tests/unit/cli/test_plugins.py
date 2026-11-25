@@ -105,23 +105,17 @@ def external_plugin(tmp_path, monkeypatch):
     (root / 'deploy/docker').mkdir()
     (root / 'deploy/docker/base-images.lock').write_text('fixture base lock')
     (root / 'VERSION').write_text('0.2.0')
-    # Keep the legacy expanded registry covered alongside project registration
-    # tests. This fixture intentionally supplies an independently wired adapter.
-    manifest = json.loads((ROOT / 'examples/policy-plugin/plugin.json').read_text())
-    registry = {'schema_version': 'ovlab.plugins/v1',
-                'sources': {'example-policy': {'kind': 'local', 'path': 'examples/policy-plugin'}},
-                'plugins': manifest['plugins'], 'builds': manifest['builds']}
-    registry['plugins']['example_policy']['sources'] = ['example-policy']
-    registry['builds']['policy-example'].update(dockerfile='external/example-policy/Dockerfile', sources=['example-policy'])
+    shutil.copytree(ROOT / 'examples/benchmark-plugin', root / 'examples/benchmark-plugin')
+    registry = json.loads((ROOT / 'examples/benchmark-plugin/registry.json').read_text())
     shutil.copyfile(ROOT / 'examples/policy-plugin/configs/resources.yaml', root / 'configs/resources/registry.yaml')
     write_registry(root, registry)
     monkeypatch.delenv('OVLAB_PLUGIN_REGISTRY', raising=False)
-    policy = {'schema_version': '0.1.0', 'kind': 'policy', 'type': 'example_policy', 'settings': {
+    policy = {'schema_version': '0.1.0', 'kind': 'policy', 'type': 'example_policy', 'provider': 'plugin:policy:example-policy/constant', 'settings': {
         'checkpoint_id': 'example-constant', 'input': {}, 'runtime': {'quantization': 'none'},
-        'action': {'action_interface': 'ovlab://interfaces/actions/mock-delta-gripper-v1.yaml'}, 'raw_output': {'enabled': False}}}
+        'action': {'action_interface': 'plugin://example-policy/interfaces/planar-v1.yaml'}, 'raw_output': {'enabled': False}}}
     path = root / 'configs/policies/example.yaml'
     path.write_text(dumps(policy))
-    experiment = load(root / 'examples/experiments/mock-smoke.yaml')
+    experiment = load(root / 'examples/benchmark-plugin/configs/evaluate.yaml')
     experiment['components']['policy'] = 'policies/example.yaml'
     experiment['components']['protocol'] = 'protocols/example.yaml'
     experiment['resources']['registry'] = 'resources/registry.yaml'
@@ -154,16 +148,16 @@ def test_external_plugin_resolves_predicts_and_plans_deployment_and_evaluation(e
     caps = adapter.initialize(run)
     adapter.reset_episode(episode)
     prediction = adapter.predict(observation)
-    assert prediction.actions.shape == (1, 3)
+    assert prediction.actions.shape == (1, 2)
     assert (prediction.actions == 0).all()
-    assert plugin.implementation.identity(caps)['method_identity']['id'] == 'example-constant'
+    assert plugin.implementation.identity(caps)['method_descriptor']['id'] == 'example-constant'
     adapter.end_episode(episode)
     adapter.close()
     deployment = ModelDeployment(root, environment={})
     plan = deployment.plan('example')
     preview = deployment.run(plan, dry_run=True)
-    assert preview['role'] == 'policy-example'
-    assert preview['build_command'][-1] == 'policy-example'
+    assert preview['role'] == 'example-policy/policy-example'
+    assert preview['build_command'][-1] == 'example-policy/policy-example'
     assert '/opt/ovlab/configs/plugins/registry.json' in ' '.join(preview['run_command'])
     bundle_builder = ConfigBundleBuilder(root)
     bundle_before_sync = bundle_builder.build('configs/deploy/example.yaml', None, kind='deployment')
@@ -172,12 +166,12 @@ def test_external_plugin_resolves_predicts_and_plans_deployment_and_evaluation(e
     assert bundle.sha256 == bundle_before_sync.sha256
     with bundle_builder.materialize(bundle) as config:
         document = json.loads((config / 'plugins/registry.json').read_text())
-        assert document['plugins']['example_policy']['entrypoint'] == 'example_policy.plugin:plugin'
-        assert len(document['source_identities']['example-policy']['content_sha256']) == 64
+        assert document['plugins']['plugin:policy:example-policy/constant']['entrypoint'] == 'example_policy.plugin:plugin'
+        assert len(document['source_identities']['example-policy/self']['content_sha256']) == 64
     assert not config.exists()
     evaluation = load(root / 'experiments/evaluation/example-plugin.yaml')
     evaluation['components']['policy'] = 'policies/example.yaml'
-    evaluation['deployment'] = {'profile': 'example', 'renderer': 'egl'}
+    evaluation['deployment'] = {'profile': 'example'}
     (root / 'experiments/evaluation/example-compose.yaml').write_text(dumps(evaluation))
     compose = ComposeDeployment(root, environment={})
     evaluation_plan = compose.plan('example-compose', env_file='deploy/compose/.env.example')
@@ -210,7 +204,7 @@ def test_registry_build_dispatch_handles_new_role_and_cleans_secret_files(extern
     plans = build_images(root, ['policy-example'], isolated_sources=False, runner=runner)
     assert len(calls) == 1
     assert plans[0]['image'] == 'ovlab-policy-example:local'
-    assert str(root / 'external/example-policy/Dockerfile') in calls[0]
+    assert str(root / 'external/extensions/example-policy/self/Dockerfile') in calls[0]
     assert any('plugin-registry.sha256=' in value for value in calls[0])
     assert f"OVLAB_VERSION={(root / 'VERSION').read_text().strip()}" in calls[0]
     assert all(not path.exists() for path in secrets)
@@ -239,8 +233,8 @@ def test_isolated_build_combines_model_source_and_separate_adapter_without_exter
         {'kind': 'git', 'url': model.as_uri(), 'commit': pinned}
         if kind == 'git' else {'kind': 'local', 'path': str(model)}
     )
-    registry['plugins']['example_policy']['sources'].append('model-code')
-    registry['builds']['policy-example']['sources'].append('model-code')
+    registry['plugins']['plugin:policy:example-policy/constant']['sources'].append('model-code')
+    registry['builds']['example-policy/policy-example']['sources'].append('model-code')
     write_registry(root, registry)
     git(root, 'init', '-q')
     git(root, 'config', 'user.name', 'Fixture')
@@ -262,7 +256,7 @@ def test_isolated_build_combines_model_source_and_separate_adapter_without_exter
         assert context != root
         assert kwargs['cwd'] == context
         assert (context / 'external/model-code/model.py').read_text() == 'VERSION = 1\n'
-        assert (context / 'external/example-policy/src/example_policy/plugin.py').is_file()
+        assert (context / 'external/extensions/example-policy/self/src/example_policy/plugin.py').is_file()
         assert Path(command[command.index('--file') + 1]).is_relative_to(context)
         for index, value in enumerate(command):
             if value == '--secret':
@@ -363,7 +357,7 @@ def test_isolated_offline_build_reads_pinned_git_objects_without_dirty_checkout_
     pinned = git(upstream, 'rev-parse', 'HEAD')
     registry = registry_document(root)
     registry['sources']['model-code'] = {'kind': 'git', 'url': upstream.as_uri(), 'commit': pinned}
-    registry['builds']['policy-example']['sources'].append('model-code')
+    registry['builds']['example-policy/policy-example']['sources'].append('model-code')
     write_registry(root, registry)
     sync_sources(root, ['model-code'])
     cached = root / 'external/model-code'
@@ -388,7 +382,7 @@ def test_isolated_offline_build_reads_pinned_git_objects_without_dirty_checkout_
     assert result[0]['isolated_sources'] is True
     assert git(cached, 'status', '--porcelain') == status
     assert (cached / 'model.py').read_text() == 'dirty development changes'
-    assert not (root / 'external/example-policy').exists()
+    assert not (root / 'external/extensions/example-policy/self').exists()
 
 
 def test_bundled_experiment_resolves_and_serves_without_git_or_source_inspection(external_plugin, monkeypatch):
@@ -400,8 +394,8 @@ def test_bundled_experiment_resolves_and_serves_without_git_or_source_inspection
     registry = registry_document(root)
     remote = {'kind': 'git', 'url': 'https://example.invalid/model.git', 'commit': 'a' * 40}
     registry['sources']['remote-model'] = remote
-    registry['plugins']['example_policy']['sources'].append('remote-model')
-    registry['builds']['policy-example']['sources'].append('remote-model')
+    registry['plugins']['plugin:policy:example-policy/constant']['sources'].append('remote-model')
+    registry['builds']['example-policy/policy-example']['sources'].append('remote-model')
     write_registry(root, registry)
     experiment = 'experiments/evaluation/example-plugin.yaml'
     resolver = ConfigResolver(root / 'configs', repository_root=root)
@@ -433,11 +427,14 @@ def test_bundled_experiment_resolves_and_serves_without_git_or_source_inspection
 
     monkeypatch.setattr(ovlab_remote_policy.service, 'PolicyService', Service)
     with builder.materialize(bundle) as config:
+        worker_root = root / 'isolated-worker'
+        shutil.copytree(config, worker_root / 'configs')
+        config = worker_root / 'configs'
         environment = {
             'OVLAB_PLUGIN_REGISTRY': str(config / 'plugins/registry.json'),
             'OVLAB_LOCAL_PROFILE': str(config / 'plugins/runtime-profile.yaml'),
         }
-        worker = ConfigResolver(config, repository_root=root, environment=environment).resolve(
+        worker = ConfigResolver(config, repository_root=worker_root, environment=environment).resolve(
             config / experiment, local_profile=environment['OVLAB_LOCAL_PROFILE'],
         )
         assert worker.scientific_config == host.scientific_config
@@ -445,11 +442,10 @@ def test_bundled_experiment_resolves_and_serves_without_git_or_source_inspection
         assert worker.scientific_config['policy_plugin']['sources']['remote-model'] == remote
         # Exercise the evaluation service path too; standalone deploy uses a
         # different resolver and did not expose this regression.
-        app = OvlabApplication(root, environment=environment)
-        app.config_root = config
+        app = OvlabApplication(worker_root, environment=environment)
         result = app.serve(config / experiment, host='127.0.0.1', port=8123)
         assert result['closed'] is True
-        assert captured['method_identity']['id'] == 'example-constant'
+        assert captured['method_descriptor']['id'] == 'example-constant'
 
 
 def test_service_startup_selects_external_plugin_without_builtin_settings_dispatch(external_plugin, monkeypatch):
@@ -471,7 +467,7 @@ def test_service_startup_selects_external_plugin_without_builtin_settings_dispat
     app = OvlabApplication(root, environment={'OVLAB_LOCAL_PROFILE': str(root / 'configs/local/example.yaml')})
     result = app.serve('configs/deploy/example.yaml', host='127.0.0.1', port=8123)
     assert result['closed'] is True
-    assert captured['method_identity']['id'] == 'example-constant'
+    assert captured['method_descriptor']['id'] == 'example-constant'
 
 
 def test_listing_and_policy_deploy_planning_need_only_standard_library(external_plugin):
@@ -480,7 +476,7 @@ def test_listing_and_policy_deploy_planning_need_only_standard_library(external_
     env['PYTHONPATH'] = os.pathsep.join(str(path) for path in (ROOT / 'code').glob('**/src'))
     completed = subprocess.run([sys.executable, '-S', '-m', 'ovlab_benchctl.cli', 'deploy', 'run', 'example', '--dry-run', '--json'], env=env, text=True, capture_output=True)
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert json.loads(completed.stdout)['result']['role'] == 'policy-example'
+    assert json.loads(completed.stdout)['result']['role'] == 'example-policy/policy-example'
 
 
 def test_existing_image_is_rejected_before_checkpoint_when_plugin_source_changed(external_plugin, monkeypatch):
@@ -495,9 +491,9 @@ def test_existing_image_is_rejected_before_checkpoint_when_plugin_source_changed
         if command[:3] == ['docker', 'container', 'inspect']:
             return SimpleNamespace(returncode=1, stdout='', stderr='No such container')
         return SimpleNamespace(returncode=0, stdout=json.dumps([{'Config': {'Labels': {
-            IMAGE_CONTRACT_LABEL: 'resolved-checkpoint-quantization-config-bundle-v2',
+            IMAGE_CONTRACT_LABEL: 'policy-rpc-v2-config-bundle-v3',
             'io.github.ovlab.service.transport': 'tcp-persistent-v1',
-            'io.github.ovlab.role': 'policy-example', PLUGIN_BUILD_LABEL: '0'*64}}}]), stderr='')
+            'io.github.ovlab.role': 'example-policy/policy-example', PLUGIN_BUILD_LABEL: '0'*64}}}]), stderr='')
 
     owner = ModelDeployment(root, environment={'OVLAB_MODEL_DATA_ROOT': str(root/'data')}, runner=docker)
     monkeypatch.setattr(owner, '_checkpoint', lambda plan: pytest.fail('stale image must fail before checkpoint resolution'))
@@ -529,15 +525,15 @@ def test_invalid_registrations_fail_before_import_or_fetch(external_plugin, muta
     from copy import deepcopy
     root = external_plugin
     registry = registry_document(root)
-    plugin = registry['plugins']['example_policy']
-    if mutation == 'omitted-source': registry['builds']['policy-example']['sources'] = []
+    plugin = registry['plugins']['plugin:policy:example-policy/constant']
+    if mutation == 'omitted-source': registry['builds']['example-policy/policy-example']['sources'] = []
     if mutation == 'different-image': plugin['deployment']['image'] = 'different:local'
     if mutation == 'reserved-service': plugin['deployment']['policy_service'] = 'reporting'
-    if mutation == 'recipe-escape': registry['builds']['policy-example']['dockerfile'] = '../outside/Dockerfile'
+    if mutation == 'recipe-escape': registry['builds']['example-policy/policy-example']['dockerfile'] = '../outside/Dockerfile'
     if mutation == 'duplicate-document':
         plugin['document_kinds'] = ['custom_descriptor']
         registry['plugins']['second'] = deepcopy(plugin)
-        registry['plugins']['second'].update(id='second', config_type='second')
+        registry['plugins']['second'].update(id='second', config_type='second', provider_ref='plugin:policy:second/default')
     write_registry(root, registry)
     with pytest.raises(ConfigSchemaError, match=message):
         registry_document(root)
@@ -548,8 +544,8 @@ def test_explicit_python_environment_selects_registry_without_process_mutation(e
     from ovlab_benchctl.application import OvlabApplication
     root = external_plugin
     registry = registry_document(root)
-    registry['builds']['policy-example']['image'] = 'example-override:local'
-    registry['plugins']['example_policy']['deployment']['image'] = 'example-override:local'
+    registry['builds']['example-policy/policy-example']['image'] = 'example-override:local'
+    registry['plugins']['plugin:policy:example-policy/constant']['deployment']['image'] = 'example-override:local'
     override = root/'override.json'
     override.write_text(json.dumps(registry))
     monkeypatch.setenv('OVLAB_PLUGIN_REGISTRY', '/nonexistent-global-registry.json')
@@ -605,7 +601,7 @@ def test_build_detects_mutated_staged_source_and_cleans_secrets(external_plugin)
     def docker(command, **kwargs):
         for index, value in enumerate(command):
             if value == '--secret': secrets.append(Path(command[index+1].split('src=',1)[1]))
-        (root/'external/example-policy/src/example_policy/runtime.py').write_text('# changed during build')
+        (root/'external/extensions/example-policy/self/src/example_policy/runtime.py').write_text('# changed during build')
         return SimpleNamespace(returncode=0)
 
     with pytest.raises(ConfigCompatibilityError, match='changed during build'):
@@ -755,8 +751,9 @@ def test_import_cache_cannot_silently_reuse_a_different_local_checkout(external_
     assert original.implementation is original.implementation
     second = root/'other-project'
     shutil.copytree(root/'examples/policy-plugin', second)
+    (second/'src/example_policy/plugin.py').write_text((second/'src/example_policy/plugin.py').read_text()+'\n# distinct implementation\n')
     registry = registry_document(root)
-    registry['sources']['example-policy']['path'] = str(second)
+    registry['sources']['example-policy/self']['path'] = str(second)
     write_registry(root, registry)
     with pytest.raises(ConfigCompatibilityError, match='different source; restart'):
         plugin_for_type('example_policy', root).implementation

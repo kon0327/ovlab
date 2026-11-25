@@ -42,7 +42,7 @@ class Docker:
             }])
         elif command[:3] == ["docker", "image", "inspect"]:
             value = json.dumps([{"Id": "image-1", "Config": {"Labels": {
-                IMAGE_CONTRACT_LABEL: "resolved-checkpoint-quantization-config-bundle-v2",
+                IMAGE_CONTRACT_LABEL: "policy-rpc-v2-config-bundle-v3",
                 "io.github.ovlab.service.transport": "tcp-persistent-v1",
                 "io.github.ovlab.role": self.plan.role,
                 PLUGIN_BUILD_LABEL: plugin_build_identity(ROOT, self.plan.role)}}}])
@@ -75,7 +75,7 @@ def test_model_deployment_builds_only_policy_and_retains_a_verified_service(depl
     result = owner.run(plan)
     assert result["status"] == "ready"
     builds = [command for command in docker.commands if command[0] == "bash"]
-    assert len(builds) == 1 and builds[0][-1] == "policy-openvla"
+    assert len(builds) == 1 and builds[0][-1] == "openvla/policy-openvla"
     command = next(command for command in docker.commands if command[:2] == ["docker", "run"])
     assert "127.0.0.1:8123:8000" in command
     assert command[-1] == "--persistent"
@@ -96,7 +96,7 @@ def test_model_deployment_dry_run_has_no_docker_or_disk_side_effects(deployment)
     assert result["side_effects_performed"] is False
     assert not docker.commands and not owner.state_root.exists()
     offline = owner.run(owner.plan("configs/.tests/deploy/openvla.yaml", offline=True), dry_run=True)
-    assert offline["build_command"][-2:] == ["policy-openvla", "--offline"]
+    assert offline["build_command"][-2:] == ["openvla/policy-openvla", "--offline"]
 
 
 def test_deployment_rejects_existing_container_and_cleans_failed_start(deployment):

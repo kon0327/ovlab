@@ -4,7 +4,7 @@ ENV MAX_JOBS=4 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git=1:2.34.1-1ubuntu1.17 ca-certificates=20260601~22.04.1 \
     && rm -rf /var/lib/apt/lists/*
-COPY external/plugin-openvla-quic/locks/flash-attn.requirements.txt /tmp/flash-attn.requirements.txt
+COPY external/extensions/openvla-quic/self/locks/flash-attn.requirements.txt /tmp/flash-attn.requirements.txt
 RUN python -m pip wheel --no-cache-dir --no-deps --no-build-isolation --require-hashes \
       -r /tmp/flash-attn.requirements.txt -w /wheelhouse \
     && python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
@@ -22,28 +22,28 @@ ENV OVLAB_ROOT=/opt/ovlab \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /opt/ovlab
-COPY external/plugin-openvla-quic/locks/quic-openvla.requirements.txt /tmp/requirements.txt
+COPY external/extensions/openvla-quic/self/locks/quic-openvla.requirements.txt /tmp/requirements.txt
 RUN rm -rf /opt/conda/lib/python3.10/site-packages/networkx /opt/conda/lib/python3.10/site-packages/networkx-*.dist-info \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation --require-hashes -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 COPY --from=wheel-builder /wheelhouse /wheelhouse
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation /wheelhouse/*.whl && rm -rf /wheelhouse
 COPY code /opt/ovlab/code
-COPY external/plugin-openvla-quic /opt/ovlab/external/plugin-openvla-quic
-COPY external/openvla-support /opt/ovlab/external/openvla-support
+COPY external/extensions/openvla-quic/self /opt/ovlab/external/extensions/openvla-quic/self
+COPY external/extensions/openvla-quic/openvla-support /opt/ovlab/external/extensions/openvla-quic/openvla-support
 COPY deploy/config /opt/ovlab/deploy/config
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
-COPY external/openvla-quic /opt/ovlab/external/openvla-quic
-COPY external/quic-peft-vla /opt/ovlab/external/quic-peft-vla
+COPY external/extensions/openvla-quic/openvla-quic /opt/ovlab/external/extensions/openvla-quic/openvla-quic
+COPY external/extensions/openvla-quic/quic-peft-vla /opt/ovlab/external/extensions/openvla-quic/quic-peft-vla
 ARG OVLAB_CONFIG_BUNDLE_SHA256=none
 RUN --mount=type=secret,id=ovlab_plugin_registry \
     --mount=type=secret,id=ovlab_config_bundle \
     test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
-    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/quic-peft-vla \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/extensions/openvla-quic/quic-peft-vla \
     && bash /tmp/install-ovlab-packages.sh \
-    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla-support \
-    && bash /opt/ovlab/external/plugin-openvla-quic/scripts/install-plugin.sh \
-    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/openvla-quic \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/extensions/openvla-quic/openvla-support \
+    && bash /opt/ovlab/external/extensions/openvla-quic/self/scripts/install-plugin.sh \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/ovlab/external/extensions/openvla-quic/openvla-quic \
     && python -m pip check \
     && rm /tmp/install-ovlab-packages.sh \
     && groupadd --gid 10001 ovlab \

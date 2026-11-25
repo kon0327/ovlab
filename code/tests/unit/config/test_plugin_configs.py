@@ -84,6 +84,8 @@ def test_bundle_contains_project_code_configs_and_resolves_without_original_proj
     (root / "examples").mkdir()
     shutil.copytree(ROOT / "config", root / "config")
     registry = json.loads((ROOT / "plugins/registry.json").read_text())
+    for source in registry.get("infrastructure", {}).get("sources", {}).values():
+        if source["kind"] == "local": source["path"] = str(ROOT / source["path"])
     for item in registry["projects"].values():
         item["source"]["path"] = str(ROOT / item["source"]["path"])
     (root / "configs/plugins/registry.json").write_text(json.dumps(registry))
@@ -91,7 +93,7 @@ def test_bundle_contains_project_code_configs_and_resolves_without_original_proj
         "schema_version": "0.1.0", "kind": "experiment",
         "extends": "plugin://openvla/evaluate/default.yaml",
         "experiment": {"id": "plugin-eval", "name": "Plugin evaluation", "tags": ["test"]},
-        "components": {"benchmark": "ovlab://benchmarks/libero.yaml", "metrics": "ovlab://metrics/default.yaml",
+        "components": {"benchmark": "plugin://libero/benchmark/default.yaml", "metrics": "ovlab://metrics/default.yaml",
                        "protocol": "ovlab://protocols/smoke.yaml", "artifacts": "ovlab://artifacts/default.yaml"},
     }))
     profile = tmp_path / "machine.yaml"
@@ -101,12 +103,12 @@ def test_bundle_contains_project_code_configs_and_resolves_without_original_proj
     expected = ConfigResolver(root / "configs", repository_root=root).resolve(
         "examples/eval.yaml", local_profile=profile, environment={})
     builder = ConfigBundleBuilder(root)
-    bundle = builder.build("examples/eval.yaml", "ovlab://profiles/egl.yaml")
+    bundle = builder.build("examples/eval.yaml", "plugin://libero/execution/egl.yaml")
     paths = {row["path"] for row in bundle.files}
     assert "plugins/configs/openvla/policy/default.yaml" in paths
     assert "plugins/configs/openvla/registry/default.yaml" in paths
     assert "plugins/projects/openvla/src/ovlab_openvla_vanilla/plugin.py" in paths
-    assert "ovlab/benchmarks/libero.yaml" in paths
+    assert "plugins/configs/libero/benchmark/default.yaml" in paths
     assert all(not Path(path).is_absolute() and ".." not in Path(path).parts for path in paths)
     with builder.materialize(bundle) as frozen:
         worker = tmp_path / "worker"

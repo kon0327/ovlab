@@ -29,8 +29,8 @@ origins. Mappings merge recursively; sequences and scalars replace their parent.
 device and artifact resources through an explicitly selected machine profile,
 and checks action/observation compatibility. Scientific hashes exclude resolved
 machine paths/devices and renderer choices; execution hashes include them.
-Renderer profiles are `ovlab://profiles/egl.yaml` and
-`ovlab://profiles/glfw.yaml`. `MUJOCO_GL` and `MUJOCO_EGL_DEVICE_ID` remain
+Renderer profiles are `plugin://libero/execution/egl.yaml` and
+`plugin://libero/execution/glfw.yaml`. `MUJOCO_GL` and `MUJOCO_EGL_DEVICE_ID` remain
 explicit diagnostic overrides and enter execution provenance.
 
 Docker deployments freeze the selected transitive configuration closure and

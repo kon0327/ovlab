@@ -36,6 +36,8 @@ def write_training_profile(path, method='lora'):
 def register_models(repository):
     repository = Path(repository)
     document = json.loads((ROOT / 'plugins/registry.json').read_text())
+    for source in document.get("infrastructure", {}).get("sources", {}).values():
+        if source["kind"] == "local": source["path"] = str(ROOT / source["path"])
     for name, registration in document['projects'].items():
         registration['source']['path'] = str(ROOT / 'plugins' / name)
     (repository / 'plugins').mkdir(parents=True, exist_ok=True)

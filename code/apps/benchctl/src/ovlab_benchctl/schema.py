@@ -83,11 +83,13 @@ def validate_experiment(doc, path):
         deployment = mapping(
             doc["deployment"],
             f"{path}.deployment",
-            required=("profile", "renderer"),
-            optional=("offline",),
+            required=("profile",),
+            optional=("renderer", "execution_profile", "offline"),
         )
         non_empty_string(deployment["profile"], f"{path}.deployment.profile")
-        enum(deployment["renderer"], ("egl", "glfw"), f"{path}.deployment.renderer")
+        if "renderer" in deployment: non_empty_string(deployment["renderer"], f"{path}.deployment.renderer")
+        if "execution_profile" in deployment:
+            non_empty_string(deployment["execution_profile"], f"{path}.deployment.execution_profile")
         if "offline" in deployment:
             exact_type(deployment["offline"], bool, f"{path}.deployment.offline")
     if "reporting" in doc:
@@ -103,7 +105,7 @@ def validate_experiment(doc, path):
 
 def validate_benchmark(doc, path):
     header(doc, path, "benchmark", typed=True)
-    mapping(doc, path, required=("schema_version", "kind", "type", "settings"), optional=("extends",))
+    mapping(doc, path, required=("schema_version", "kind", "type", "settings"), optional=("extends", "provider"))
     if doc["type"] == "mock":
         settings = mapping(doc["settings"], f"{path}.settings", required=(
             "task_count", "maximum_episode_steps", "modify_actions", "terminal_outcomes",
@@ -131,37 +133,9 @@ def validate_benchmark(doc, path):
         signals = mapping(settings["privileged_signals"], f"{path}.settings.privileged_signals", required=("enabled",))
         exact_type(signals["enabled"], bool, f"{path}.settings.privileged_signals.enabled")
         return
-    if doc["type"] != "libero": raise ConfigSchemaError(f"{path}.type supports only 'libero' or 'mock'")
-    settings = mapping(doc["settings"], f"{path}.settings", required=(
-        "suite", "task_indices", "observation", "initialization", "action", "privileged_signals"))
-    enum(settings["suite"], ("libero_spatial", "libero_object", "libero_goal", "libero_10"), f"{path}.settings.suite")
-    if settings["task_indices"] != "all":
-        exact_type(settings["task_indices"], list, f"{path}.settings.task_indices")
-        if any(type(item) is not int or item < 0 for item in settings["task_indices"]):
-            raise ConfigSchemaError(f"{path}.settings.task_indices must be 'all' or non-negative integers")
-    obs = mapping(settings["observation"], f"{path}.settings.observation", required=(
-        "profile", "cameras", "width", "height", "color_space", "dtype"))
-    enum(obs["profile"], ("primary_rgb", "native_oft"), f"{path}.settings.observation.profile")
-    camera_keys = ("primary", "wrist") if obs["profile"] == "native_oft" else ("primary",)
-    cameras = mapping(obs["cameras"], f"{path}.settings.observation.cameras", required=camera_keys)
-    primary = mapping(cameras["primary"], f"{path}.settings.observation.cameras.primary", required=("native_name", "canonical_name"))
-    for key in primary: exact_type(primary[key], str, f"{path}.settings.observation.cameras.primary.{key}")
-    if "wrist" in cameras:
-        wrist = mapping(cameras["wrist"], f"{path}.settings.observation.cameras.wrist", required=("native_name", "canonical_name"))
-        for key in wrist: exact_type(wrist[key], str, f"{path}.settings.observation.cameras.wrist.{key}")
-    for key in ("width", "height"):
-        exact_type(obs[key], int, f"{path}.settings.observation.{key}")
-        if obs[key] <= 0: raise ConfigSchemaError(f"{path}.settings.observation.{key} must be positive")
-    enum(obs["color_space"], ("rgb",), f"{path}.settings.observation.color_space")
-    enum(obs["dtype"], ("uint8",), f"{path}.settings.observation.dtype")
-    init = mapping(settings["initialization"], f"{path}.settings.initialization", required=("state_selection", "settling_steps"))
-    enum(init["state_selection"], ("rollout_index", "seeded"), f"{path}.settings.initialization.state_selection")
-    exact_type(init["settling_steps"], int, f"{path}.settings.initialization.settling_steps")
-    if init["settling_steps"] < 0: raise ConfigSchemaError(f"{path}.settings.initialization.settling_steps must be non-negative")
-    action = mapping(settings["action"], f"{path}.settings.action", required=("interface_ref",))
-    exact_type(action["interface_ref"], str, f"{path}.settings.action.interface_ref")
-    signals = mapping(settings["privileged_signals"], f"{path}.settings.privileged_signals", required=("enabled",))
-    exact_type(signals["enabled"], bool, f"{path}.settings.privileged_signals.enabled")
+    from .benchmark_plugins import benchmark_for_document, call_benchmark
+    from .policy_plugins import _root
+    call_benchmark(benchmark_for_document(doc, _root()), "validate_benchmark", doc, path)
 
 
 def validate_policy(doc, path):
@@ -377,29 +351,15 @@ def validate_local_profile(doc, path):
                     f"{path}.resources.checkpoints.{resource_id}.local_path must be absolute"
                 )
     if "execution" in doc:
-        execution = mapping(doc["execution"], f"{path}.execution", required=("libero",))
-        libero = mapping(execution["libero"], f"{path}.execution.libero", required=("renderer",))
-        renderer = mapping(libero["renderer"], f"{path}.execution.libero.renderer", required=("device_id",))
-        exact_type(renderer["device_id"], int, f"{path}.execution.libero.renderer.device_id")
-        if renderer["device_id"] < 0:
-            raise ConfigSchemaError(f"{path}.execution.libero.renderer.device_id must be non-negative")
+        mapping(doc["execution"], f"{path}.execution", optional=tuple(doc["execution"]) if isinstance(doc["execution"], dict) else ())
 
 
 def validate_execution_profile(doc, path):
     header(doc, path, "execution_profile", identified=True)
-    mapping(doc, path, required=("schema_version", "kind", "id", "execution"))
-    execution = mapping(doc["execution"], f"{path}.execution", required=("libero",))
-    libero = mapping(execution["libero"], f"{path}.execution.libero", required=("renderer",))
-    renderer = mapping(
-        libero["renderer"], f"{path}.execution.libero.renderer", required=("backend",), optional=("device_id",)
-    )
-    enum(renderer["backend"], ("egl", "glfw"), f"{path}.execution.libero.renderer.backend")
-    if "device_id" in renderer and renderer["device_id"] is not None:
-        exact_type(renderer["device_id"], int, f"{path}.execution.libero.renderer.device_id")
-        if renderer["device_id"] < 0:
-            raise ConfigSchemaError(f"{path}.execution.libero.renderer.device_id must be non-negative")
-    if renderer["backend"] == "glfw" and "device_id" in renderer:
-        raise ConfigSchemaError(f"{path}.execution.libero.renderer.device_id is applicable only to EGL")
+    mapping(doc, path, required=("schema_version", "kind", "id", "execution", "provider"))
+    from .benchmark_plugins import benchmark_for_reference, call_benchmark
+    from .policy_plugins import _root
+    call_benchmark(benchmark_for_reference(doc["provider"], _root()), "validate_execution_profile", doc, path)
 
 
 def validate_artifacts(doc, path):

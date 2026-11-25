@@ -1,6 +1,7 @@
 """Deterministic reports, videos, and whole-run integrity inventories."""
 
 from __future__ import annotations
+from .historical_metadata import renderer_metadata
 
 import hashlib
 import json
@@ -279,11 +280,7 @@ def build_run_report(run_path: str | Path, *, final_manifest=None) -> dict[str, 
         values = _json(metric_file)
         task_metrics.extend(values)
     all_metrics.extend(task_metrics)
-    renderer = (
-        final_manifest.get("metadata", {})
-        .get("benchmark_runtime", {})
-        .get("libero_renderer")
-    )
+    renderer = renderer_metadata(final_manifest.get("metadata", {}).get("benchmark_runtime", {}))
     detected = renderer.get("detected_renderer") if isinstance(renderer, dict) else None
     renderer_classification = "unknown"
     if isinstance(detected, dict) and "llvmpipe" in str(detected.get("renderer", "")).lower():

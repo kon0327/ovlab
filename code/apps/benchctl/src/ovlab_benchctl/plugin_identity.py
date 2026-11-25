@@ -1,4 +1,4 @@
-"""Portable identities binding policy images to their registered implementation."""
+"""Portable identities binding extension images to their registered implementation."""
 from __future__ import annotations
 
 import hashlib
@@ -63,6 +63,8 @@ def scientific_source_identities(repository_root, names, *, registry):
 def plugin_build_identity(repository_root, role, *, registry=None, rows=None):
     root = Path(repository_root).resolve()
     registry = registry if registry is not None else registry_document(root)
+    from .policy_plugins import resolve_build_role
+    role = resolve_build_role(role, registry)
     build = registry["builds"][role]
     names = build.get("sources", [])
     if rows is None:
@@ -72,7 +74,8 @@ def plugin_build_identity(repository_root, role, *, registry=None, rows=None):
     recipes = {}
     for relative in ("deploy/docker/base-images.lock", build["dockerfile"], *build.get("locks", [])):
         # Files inside registered sources are already bound by commit/content.
-        if any(Path(relative).is_relative_to(Path("external") / name) for name in names):
+        from .plugin_sources import managed_source_relative
+        if any(Path(relative).is_relative_to(managed_source_relative(name)) for name in names):
             continue
         path = root / relative
         if not path.is_file():
@@ -80,7 +83,7 @@ def plugin_build_identity(repository_root, role, *, registry=None, rows=None):
         recipes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
     payload = {
         "schema_version": "ovlab.plugin-build/v1", "role": role, "build": build,
-        "plugins": {key: value for key, value in registry["plugins"].items()
+        "providers": {key: value for table in ("plugins", "benchmarks", "datasets") for key, value in registry.get(table, {}).items()
                     if value.get("deployment", {}).get("role") == role},
         "sources": identities, "recipes": recipes,
     }
@@ -89,7 +92,7 @@ def plugin_build_identity(repository_root, role, *, registry=None, rows=None):
 
 def verify_plugin_image(labels, repository_root, role):
     if labels.get("io.github.ovlab.role") != role:
-        raise ConfigCompatibilityError(f"policy image role differs from registered role {role!r}; rebuild it")
+        raise ConfigCompatibilityError(f"extension image role differs from registered role {role!r}; rebuild it")
     expected = plugin_build_identity(repository_root, role)
     if labels.get(PLUGIN_BUILD_LABEL) != expected:
-        raise ConfigCompatibilityError(f"policy image does not match registered plugin sources/recipe for {role}; rebuild it")
+        raise ConfigCompatibilityError(f"extension image does not match registered plugin sources/recipe for {role}; rebuild it")

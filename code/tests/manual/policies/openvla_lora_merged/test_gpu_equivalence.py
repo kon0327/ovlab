@@ -36,7 +36,7 @@ def _settings():
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
         os.environ["OVLAB_MANUAL_EVALUATION_CONFIG"],
         local_profile=Path(profile).resolve(),
-        execution_profile="ovlab://profiles/egl.yaml",
+        execution_profile="plugin://libero/execution/egl.yaml",
         environment={},
     )
     return replace(resolved.policy_settings, record_raw_output=True)

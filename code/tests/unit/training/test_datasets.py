@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ovlab_libero.dataset import LiberoDatasetBridge
+
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import os
@@ -14,7 +16,6 @@ from ovlab_benchctl.datasets import (
     DatasetBridgeRegistry,
     DatasetRequest,
     DatasetStore,
-    LiberoDatasetBridge,
     LocalDatasetBridge,
     UrlDatasetBridge,
 )

@@ -136,7 +136,7 @@
   function profileMethod(source, phase) {
     if (phase === 'train') return source.document.training.mode === 'peft' ? source.document.training.peft.method : 'full';
     const policy = catalog.components.policy.find(item => item.ref === source.document.components.policy);
-    return catalog.plugins?.[policy?.document.type]?.family || policy?.document.type || 'other';
+    return C.pluginForPolicy(catalog, policy?.document)?.family || policy?.document.type || 'other';
   }
   function profileField(item, phase) {
     const local = item.node.config?.[phase]?.profile, inherited = item.parent !== null ? C.flatten(workflow).find(node => node.path === item.parent).state[phase]?.profile : undefined;

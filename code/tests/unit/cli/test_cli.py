@@ -325,7 +325,7 @@ def test_plugin_list_shows_projects_and_inspect_shows_their_variants():
     assert all(header in compact.stdout for header in ("ID", "KIND", "VERSION", "SOURCE", "LOCATION", "COMMIT", "VARIANTS"))
     detailed = _run("plugin", "list", "--detail")
     document = json.loads(detailed.stdout)
-    assert {row["id"] for row in document} == {"openvla", "openvla-oft", "openvla-quic"}
+    assert {row["id"] for row in document} == {"openvla", "openvla-oft", "openvla-quic", "libero"}
     project = next(row for row in document if row["id"] == "openvla")
     assert project["variants"] == ["vanilla", "lora"]
     inspected = _run("plugin", "inspect", "openvla", "--json")
@@ -701,7 +701,7 @@ def test_dry_run_is_deterministic_and_has_no_filesystem_side_effects(tmp_path):
     assert not runs.exists()
     real = _run("_native-run", "examples/experiments/mock-smoke.yaml", "--json", environment=env)
     assert real.returncode == 3
-    assert "production CLI run currently requires LIBERO" in json.loads(real.stdout)["errors"][0]["message"]
+    assert "benchmark configuration requires an explicit provider binding" in json.loads(real.stdout)["errors"][0]["message"]
     assert not runs.exists()
 
 
@@ -1121,8 +1121,8 @@ def test_project_build_selects_all_owned_recipes_including_training(monkeypatch,
     selected = {project} if project else set(registry["projects"])
     assert set(captured["roles"]) == {name for name, recipe in registry["builds"].items()
                                       if recipe.get("project") in selected}
-    assert "training-openvla" in captured["roles"]
-    assert "benchmark" not in captured["roles"]
+    assert "openvla/training-openvla" in captured["roles"]
+    assert ("libero/benchmark" in captured["roles"]) == (project is None)
 
 
 def test_report_recompute_is_read_only_in_the_reporting_image_without_exports(tmp_path):

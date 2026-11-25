@@ -4,7 +4,7 @@ from contract.adapters.conformance import assert_policy_conformance
 from helpers.contexts import make_run_context
 from helpers.fake_openvla import FakeOpenVlaRuntime, SequenceClock
 from helpers.mock_benchmark import MockBenchmark
-from ovlab_benchmarks.libero.actions import libero_action_spec
+from ovlab_libero.actions import libero_action_spec
 from ovlab_core import negotiate_capabilities
 from ovlab_core.contracts import (
     BenchmarkCapabilities, ColorSpace, ImageEncoding, ImageObservation, ImageObservationSpec,

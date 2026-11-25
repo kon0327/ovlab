@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from ovlab_benchmarks.libero import LiberoAdapterSettings, LiberoRendererBackend
+from ovlab_libero import LiberoAdapterSettings, LiberoRendererBackend
 from ovlab_core.contracts import GripperConvention
 from ovlab_metrics import ActionModificationMetricConfig, RepeatedNoOpMetricConfig
 from ovlab_openvla_common import OpenVlaArtifactForm, OpenVlaMethodFamily, action_specs_match
@@ -38,6 +38,8 @@ def workspace(tmp_path):
     (root / "experiments").mkdir()
     shutil.copytree(REPOSITORY / "config", root / "config")
     registry = json.loads((REPOSITORY / "plugins/registry.json").read_text())
+    for source in registry.get("infrastructure", {}).get("sources", {}).values():
+        if source["kind"] == "local": source["path"] = str(REPOSITORY / source["path"])
     for entry in registry["projects"].values():
         entry["source"]["path"] = str(REPOSITORY / entry["source"]["path"])
     (root / "configs/plugins/registry.json").write_text(json.dumps(registry))
@@ -60,7 +62,7 @@ def scenario(root, *, model="vanilla", quantization="none", suite="libero_10", r
     policy = f"plugin://{project}/policy/" + ("lora.yaml" if model == "lora" else "default.yaml")
     write(root, "configs/policy/local.yaml", {"schema_version": "0.1.0", "kind": "policy", "extends": policy,
         "settings": {"runtime": {"quantization": quantization}}})
-    benchmark = {"schema_version": "0.1.0", "kind": "benchmark", "extends": "ovlab://benchmarks/libero.yaml",
+    benchmark = {"schema_version": "0.1.0", "kind": "benchmark", "extends": "plugin://libero/benchmark/default.yaml",
                  "settings": {"suite": suite, "task_indices": [0]}}
     if model == "oft":
         benchmark["settings"]["observation"] = {"profile": "native_oft", "cameras": {
@@ -103,7 +105,11 @@ def test_shipped_complete_components_are_schema_valid(workspace):
         "profiles/glfw.yaml": "execution_profile", "artifacts/default.yaml": "artifact_store",
         "registry/default.yaml": "resource_registry", "local/example.yaml": "local_profile"}
     for reference, kind in components.items():
-        assert resolver(workspace).load_component("ovlab://" + reference, kind)["kind"] == kind
+        relocated = {"benchmarks/libero.yaml": "benchmark/default.yaml",
+                     "interfaces/actions/libero-osc-pose-v1.yaml": "interfaces/osc-pose-v1.yaml",
+                     "profiles/egl.yaml": "execution/egl.yaml", "profiles/glfw.yaml": "execution/glfw.yaml"}
+        uri = "plugin://libero/" + relocated[reference] if reference in relocated else "ovlab://" + reference
+        assert resolver(workspace).load_component(uri, kind)["kind"] == kind
     for project in ("openvla", "openvla-oft"):
         assert resolver(workspace).load_component(f"plugin://{project}/policy/default.yaml", "policy")["kind"] == "policy"
     # QuIC policy is intentionally a template until a real adapter identity is bound.
@@ -139,7 +145,7 @@ def test_runtime_quantization_changes_scientific_hash(workspace, tmp_path):
 
 
 def test_resolver_constructs_owner_settings_and_verified_interfaces(workspace, tmp_path):
-    resolved = resolve(workspace, scenario(workspace, suite="libero_spatial"), tmp_path, execution_profile="ovlab://profiles/egl.yaml")
+    resolved = resolve(workspace, scenario(workspace, suite="libero_spatial"), tmp_path, execution_profile="plugin://libero/execution/egl.yaml")
     assert isinstance(resolved.benchmark_settings, LiberoAdapterSettings)
     assert isinstance(resolved.policy_settings, OpenVlaVanillaSettings)
     assert resolved.benchmark_settings.suite_names == ("LIBERO-Spatial",)
@@ -260,8 +266,8 @@ def test_checkpoint_local_path_is_execution_only(workspace, tmp_path):
 
 def test_renderer_profiles_are_execution_only(workspace, tmp_path):
     experiment = scenario(workspace)
-    egl = resolve(workspace, experiment, tmp_path, execution_profile="ovlab://profiles/egl.yaml")
-    glfw = resolve(workspace, experiment, tmp_path, execution_profile="ovlab://profiles/glfw.yaml")
+    egl = resolve(workspace, experiment, tmp_path, execution_profile="plugin://libero/execution/egl.yaml")
+    glfw = resolve(workspace, experiment, tmp_path, execution_profile="plugin://libero/execution/glfw.yaml")
     assert egl.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.EGL
     assert glfw.benchmark_settings.renderer.resolved_backend is LiberoRendererBackend.GLFW
     assert egl.benchmark_settings.renderer.device_id == 0
@@ -292,11 +298,11 @@ def test_deployment_profile_must_match_policy(workspace, tmp_path):
 
 def test_unsupported_renderer_is_rejected_without_native_imports(workspace, tmp_path):
     experiment = scenario(workspace)
-    renderer = workspace / "config/profiles/egl.yaml"
+    renderer = write(workspace, "configs/execution/invalid.yaml", load(REPOSITORY / "plugins/libero/configs/execution/egl.yaml"))
     update(renderer, lambda d: d["execution"]["libero"]["renderer"].update(backend="vulkan"))
     before = {name for name in sys.modules if name in {"mujoco", "robosuite"} or name.startswith("libero.libero")}
     with pytest.raises(ConfigSchemaError, match="egl, glfw"):
-        resolve(workspace, experiment, tmp_path, execution_profile="ovlab://profiles/egl.yaml")
+        resolve(workspace, experiment, tmp_path, execution_profile="execution/invalid.yaml")
     after = {name for name in sys.modules if name in {"mujoco", "robosuite"} or name.startswith("libero.libero")}
     assert before == after
 
@@ -316,7 +322,7 @@ def test_resolved_config_is_deterministic_parseable_and_immutable(workspace, tmp
 
 def test_unknown_key_is_rejected_after_composition(workspace):
     write(workspace, "configs/benchmark/local.yaml", {"schema_version": "0.1.0", "kind": "benchmark",
-        "extends": "ovlab://benchmarks/libero.yaml", "unknown_setting": True})
+        "extends": "plugin://libero/benchmark/default.yaml", "unknown_setting": True})
     with pytest.raises(ConfigSchemaError, match="unknown keys"):
         resolver(workspace).load_component("benchmark/local.yaml", "benchmark")
 
@@ -344,8 +350,10 @@ def test_cross_component_camera_mismatch_is_rejected(workspace, tmp_path):
 
 def test_cross_component_action_convention_mismatch_is_rejected(workspace, tmp_path):
     experiment = scenario(workspace)
-    update(workspace / "config/interfaces/actions/libero-osc-pose-v1.yaml", lambda d: d.update(gripper_convention="open_positive"))
-    with pytest.raises(ConfigCompatibilityError, match="ActionSpec"):
+    action = write(workspace, "configs/interfaces/custom.yaml", load(REPOSITORY / "plugins/libero/configs/interfaces/osc-pose-v1.yaml"))
+    update(action, lambda d: d.update(gripper_convention="open_positive"))
+    update(workspace / "configs/policy/local.yaml", lambda d: d["settings"].update(action={"action_interface": "interfaces/custom.yaml"}))
+    with pytest.raises(ConfigCompatibilityError, match="native action interface"):
         resolve(workspace, experiment, tmp_path)
 
 
@@ -353,7 +361,7 @@ def test_policy_action_interface_must_match_benchmark(workspace, tmp_path):
     experiment = scenario(workspace)
     update(workspace / "configs/policy/local.yaml", lambda d: d["settings"].update(
         action={"action_interface": "ovlab://interfaces/actions/mock-delta-gripper-v1.yaml"}))
-    with pytest.raises(ConfigCompatibilityError, match="benchmark action interface differs"):
+    with pytest.raises(ConfigCompatibilityError, match="native action interface"):
         resolve(workspace, experiment, tmp_path)
 
 
@@ -366,3 +374,26 @@ def test_reporting_changes_only_derived_identity(workspace, tmp_path):
     assert enabled.scientific_config_hash == disabled.scientific_config_hash
     assert enabled.execution_config_hash == disabled.execution_config_hash
     assert enabled.reporting_settings.enabled and not disabled.reporting_settings.enabled
+
+
+def test_explicit_local_execution_profile_is_composed_frozen_and_used(workspace, tmp_path):
+    from ovlab_benchctl.config_bundle import ConfigBundleBuilder
+    experiment = scenario(workspace)
+    write(workspace, 'configs/execution/selected.yaml', {
+        'schema_version':'0.1.0', 'kind':'execution_profile',
+        'extends':'plugin://libero/execution/egl.yaml', 'id':'selected-machine-execution',
+        'execution':{'libero':{'renderer':{'device_id':2}}}})
+    update(experiment, lambda doc: doc['deployment'].update(execution_profile='execution/selected.yaml'))
+    host = resolve(workspace, experiment, tmp_path)
+    assert host.benchmark_settings.renderer.device_id == 2
+    builder = ConfigBundleBuilder(workspace)
+    bundle = builder.build('experiments/local.yaml', None)
+    assert bundle.execution_profile == 'execution/selected.yaml'
+    assert {'execution/selected.yaml', 'plugins/configs/libero/execution/egl.yaml'} <= {row['path'] for row in bundle.files}
+    with builder.materialize(bundle) as frozen:
+        worker = tmp_path / 'worker-execution'
+        shutil.copytree(frozen, worker / 'configs')
+        loaded = ConfigResolver(worker / 'configs', repository_root=worker).resolve(
+            worker / 'configs' / bundle.experiment, local_profile=profile(tmp_path, suffix='worker'), environment={})
+        assert loaded.benchmark_settings.renderer.device_id == 2
+        assert loaded.scientific_config_hash == host.scientific_config_hash

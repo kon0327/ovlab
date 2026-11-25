@@ -1,0 +1,37 @@
+{
+  "schema_version": "ovlab.extension/v1",
+  "id": "example-benchmark",
+  "category": "plugin",
+  "version": "1.0.0",
+  "description": "CPU task benchmark with opaque IDs, no renderer, dataset or GPU.",
+  "sources": {},
+  "providers": {
+    "planar": {
+      "kind": "benchmark",
+      "api_version": "1",
+      "config_type": "example_planar",
+      "entrypoint": "example_benchmark.plugin:plugin",
+      "runtime_status": "experimental",
+      "sources": [],
+      "deployment": {
+        "role": "benchmark-example",
+        "image": "ovlab-benchmark-example:local",
+        "image_env": "OVLAB_EXAMPLE_BENCHMARK_IMAGE",
+        "benchmark_service": "benchmark-example",
+        "gpu": false
+      }
+    }
+  },
+  "builds": {
+    "benchmark-example": {
+      "dockerfile": "Dockerfile",
+      "image": "ovlab-benchmark-example:local",
+      "sources": [],
+      "locks": []
+    }
+  },
+  "configs": {
+    "root": "configs",
+    "templates": {"benchmark": ["benchmark.yaml"], "evaluate": ["evaluate.yaml"]}
+  }
+}

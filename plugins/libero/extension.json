@@ -1,0 +1,95 @@
+{
+  "schema_version": "ovlab.extension/v1",
+  "id": "libero",
+  "category": "plugin",
+  "version": "0.2.0",
+  "description": "LIBERO benchmark and pinned RLDS dataset integration.",
+  "sources": {
+    "libero": {
+      "kind": "git",
+      "url": "https://github.com/Lifelong-Robot-Learning/LIBERO.git",
+      "commit": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
+      "path": "external/libero"
+    }
+  },
+  "providers": {
+    "libero": {
+      "kind": "benchmark",
+      "api_version": "1",
+      "config_type": "libero",
+      "id": "libero",
+      "entrypoint": "ovlab_libero.plugin:plugin",
+      "runtime_status": "implemented",
+      "sources": [
+        "libero"
+      ],
+      "deployment": {
+        "role": "benchmark",
+        "image": "ovlab-benchmark-libero:local",
+        "image_env": "OVLAB_BENCHMARK_IMAGE",
+        "benchmark_service": "benchmark",
+        "gpu": true
+      },
+      "execution_profiles": {
+        "egl": "plugin://libero/execution/egl.yaml",
+        "glfw": "plugin://libero/execution/glfw.yaml"
+      },
+      "default_execution_profile": "plugin://libero/execution/egl.yaml",
+      "authoring": {
+        "task_groups": {
+          "path": "src/ovlab_libero/task_catalog.json",
+          "collection": "tasks",
+          "group_by": "native_suite",
+          "label": "name"
+        }
+      }
+    },
+    "rlds": {
+      "kind": "dataset",
+      "api_version": "1",
+      "version": "1.0.0",
+      "entrypoint": "ovlab_libero.dataset:LiberoDatasetBridge",
+      "runtime_status": "implemented",
+      "sources": [],
+      "provider_id": "libero",
+      "deployment": {
+        "role": "dataset",
+        "image": "ovlab-dataset:local",
+        "image_env": "OVLAB_DATASET_IMAGE"
+      }
+    }
+  },
+  "builds": {
+    "benchmark": {
+      "dockerfile": "docker/Dockerfile",
+      "image": "ovlab-benchmark-libero:local",
+      "sources": [
+        "libero"
+      ],
+      "locks": [
+        "locks/benchmark.pylock.toml",
+        "locks/benchmark.requirements.txt"
+      ]
+    },
+    "dataset": {
+      "dockerfile": "docker/Dockerfile.dataset",
+      "image": "ovlab-dataset:local",
+      "sources": [],
+      "locks": [
+        "locks/dataset.pylock.toml",
+        "locks/dataset.requirements.txt"
+      ]
+    }
+  },
+  "configs": {
+    "root": "configs",
+    "templates": {
+      "benchmark": [
+        "benchmark/default.yaml"
+      ],
+      "execution": [
+        "execution/egl.yaml"
+      ]
+    }
+  }
+}

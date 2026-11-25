@@ -122,6 +122,29 @@ def test_explicit_provider_selection_ignores_unused_remote_project(tmp_path, mon
     assert _tree(tmp_path) == before
 
 
+def test_runtime_projection_ignores_invalid_unselected_project(tmp_path):
+    from ovlab_benchctl.policy_plugins import registry_document
+
+    policy = _project(tmp_path / 'policy', category='plugin', identifier='isolation-policy')
+    valid = json.loads((policy / 'extension.json').read_text())
+    valid['providers']['default']['family'] = 'isolation'
+    _write_json(policy / 'extension.json', valid)
+    broken = _project(tmp_path / 'broken', category='plugin', identifier='broken')
+    manifest = json.loads((broken / 'extension.json').read_text())
+    manifest['providers']['default']['entrypoint'] = 'invalid-entrypoint'
+    _write_json(broken / 'extension.json', manifest)
+    root = tmp_path / 'host'
+    catalog = _registry(root, {'isolation-policy': _local(policy), 'broken': _local(broken)})
+
+    projected = registry_document(root)
+    assert set(projected['plugins']) == {POLICY_REF}
+    assert set(projected['projects']) == {'isolation-policy'}
+    assert set(catalog.config_roots()) == {'isolation-policy'}
+    assert catalog.resolve_provider(POLICY_REF).ref.project == 'isolation-policy'
+    with pytest.raises(ConfigSchemaError, match='entrypoint'):
+        catalog.resolve_provider('plugin:policy:broken/default')
+
+
 def test_provider_reference_retains_category_kind_project_and_provider():
     reference = ProviderRef("plugin", "policy", "isolation-policy", "default")
     assert str(reference) == POLICY_REF
@@ -194,3 +217,41 @@ def test_module_configuration_rejects_ambiguous_or_escaping_paths(tmp_path, refe
 
     with pytest.raises((ConfigReferenceError, ConfigSchemaError)):
         catalog.config_path(reference)
+
+
+def test_runtime_projection_preserves_equal_local_source_and_build_names(tmp_path):
+    from ovlab_benchctl.policy_plugins import registry_document
+    projects = {}
+    for name in ('first', 'second'):
+        source = _project(tmp_path / name, category='plugin', identifier=name)
+        (source / 'Dockerfile').write_text('FROM scratch\n')
+        (source / 'upstream').mkdir()
+        (source / 'upstream/implementation.py').write_text(f'identity = {name!r}\n')
+        manifest = json.loads((source / 'extension.json').read_text())
+        manifest['providers'] = {'native': {'kind':'benchmark', 'api_version':'1',
+            'entrypoint':'fixture:plugin', 'config_type':'shared_type', 'sources':['upstream'],
+            'deployment':{'role':'benchmark', 'image':f'fixture-{name}:local', 'image_env':'OVLAB_BENCHMARK_IMAGE'}}}
+        manifest['sources'] = {'upstream': {'kind':'local', 'path':'upstream'}}
+        manifest['builds'] = {'benchmark': {'dockerfile':'Dockerfile', 'image':f'fixture-{name}:local', 'sources':['upstream']}}
+        _write_json(source / 'extension.json', manifest)
+        projects[name] = _local(source)
+    root = tmp_path / 'host'
+    _registry(root, projects)
+    projected = registry_document(root)
+    assert set(projected['builds']) == {'first/benchmark', 'second/benchmark'}
+    assert set(projected['sources']) == {'first/self', 'first/upstream', 'second/self', 'second/upstream'}
+    assert {row['provider_ref'] for row in projected['benchmarks'].values()} == {
+        'plugin:benchmark:first/native', 'plugin:benchmark:second/native'}
+    assert projected['builds']['first/benchmark']['dockerfile'] == 'external/extensions/first/self/Dockerfile'
+
+
+def test_snapshot_callers_cannot_mutate_recorded_identity_or_locations(tmp_path):
+    source = _project(tmp_path / 'source', category='module', identifier='fixture-module')
+    catalog = _registry(tmp_path / 'host', {'fixture-module':_local(source)})
+    snapshot = catalog.snapshot(config_refs=('module://fixture-module/sample.yaml',))
+    expected = snapshot.sha256
+    snapshot.lock['projects'].clear()
+    snapshot.locations['projects'].clear()
+    assert snapshot.sha256 == expected
+    assert 'fixture-module' in snapshot.lock['projects']
+    assert 'fixture-module' in snapshot.locations['projects']

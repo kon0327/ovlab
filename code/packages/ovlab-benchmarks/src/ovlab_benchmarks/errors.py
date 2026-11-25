@@ -1,6 +1,10 @@
 """Benchmark adapter exceptions."""
 
-from ovlab_core.contracts import AdapterState
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ovlab_core.contracts import AdapterState
 
 
 class BenchmarkAdapterError(Exception):

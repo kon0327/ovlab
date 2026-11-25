@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from ovlab_benchctl import ConfigResolver
-from ovlab_benchmarks.libero import LiberoBenchmarkAdapter, LiberoRendererBackend
+from ovlab_libero import LiberoBenchmarkAdapter, LiberoRendererBackend
 from ovlab_core.contracts import (
     GripperConvention,
     ImageEncoding,
@@ -103,7 +103,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     resolved = ConfigResolver(REPOSITORY / "configs", repository_root=REPOSITORY).resolve(
         os.environ["OVLAB_MANUAL_EVALUATION_CONFIG"],
         local_profile=_profile(),
-        execution_profile="ovlab://profiles/egl.yaml",
+        execution_profile="plugin://libero/execution/egl.yaml",
     )
     renderer = resolved.benchmark_settings.renderer
     assert renderer.requested_backend is LiberoRendererBackend.EGL
@@ -182,7 +182,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
         assert spec.units == ("normalized_command",) * 7
         assert action_specs_match(spec, benchmark.capabilities.action_spec)
         handshake = policy.handshake
-        assert handshake["protocol_version"] == "ovlab-policy-rpc/1.0.0"
+        assert handshake["protocol_version"] == "ovlab-policy-rpc/2.0.0"
         assert handshake["model_identity"]["configured_source"] == CHECKPOINT
         assert handshake["model_identity"]["snapshot_revision"] == CHECKPOINT_REVISION
         assert handshake["model_identity"]["openvla_git_commit"] == OPENVLA_COMMIT
@@ -249,7 +249,7 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
         assert prediction.action_spec.gripper_convention is GripperConvention.CLOSED_POSITIVE
         assert prediction.inference_duration_ns == prediction.metadata["service_inference_duration_ns"] > 0
         assert prediction.metadata["rpc_round_trip_duration_ns"] >= prediction.inference_duration_ns
-        assert prediction.metadata["rpc_protocol_version"] == "ovlab-policy-rpc/1.0.0"
+        assert prediction.metadata["rpc_protocol_version"] == "ovlab-policy-rpc/2.0.0"
     assert all(action.selected_chunk_index == 0 for action in trace.executed_actions)
     assert all(
         action.requested_action.tobytes() == action.applied_action.tobytes()
@@ -284,9 +284,9 @@ def test_one_bounded_libero10_rollout_over_isolated_rpc():
     assert remote_manifest["method_descriptor"] == handshake["method_descriptor"]
     assert started["scientific_config_hash"] == resolved.scientific_config_hash
     assert started["execution_config_hash"] == resolved.execution_config_hash
-    assert started["runtime"]["benchmark"]["libero_renderer"]["resolved_backend"] == "egl"
-    assert started["runtime"]["policy"]["remote_policy"]["protocol_version"] == "ovlab-policy-rpc/1.0.0"
-    completed_renderer = completed["metadata"]["benchmark_runtime"]["libero_renderer"]
+    assert started["runtime"]["benchmark"]["renderer"]["resolved_backend"] == "egl"
+    assert started["runtime"]["policy"]["remote_policy"]["protocol_version"] == "ovlab-policy-rpc/2.0.0"
+    completed_renderer = completed["metadata"]["benchmark_runtime"]["renderer"]
     assert completed_renderer["resolved_backend"] == "egl"
     assert completed_renderer["detected_renderer"]["renderer"]
     assert completed["metadata"]["policy_runtime"]["remote_policy"]["model_identity"]["snapshot_revision"] == CHECKPOINT_REVISION

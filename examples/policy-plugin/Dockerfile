@@ -5,13 +5,13 @@ FROM ovlab-reporting:local
 USER root
 COPY code /opt/ovlab/code
 COPY deploy/docker/install-ovlab-packages.sh /tmp/install-ovlab-packages.sh
-COPY external/plugin-example-policy /opt/ovlab/external/plugin-example-policy
+COPY external/extensions/example-policy/self /opt/ovlab/external/extensions/example-policy/self
 ARG OVLAB_CONFIG_BUNDLE_SHA256=none
 RUN --mount=type=secret,id=ovlab_plugin_registry \
     --mount=type=secret,id=ovlab_config_bundle \
     test -n "$OVLAB_CONFIG_BUNDLE_SHA256" \
     && bash /tmp/install-ovlab-packages.sh \
-    && python -m pip install --no-deps --no-build-isolation /opt/ovlab/external/plugin-example-policy \
+    && python -m pip install --no-deps --no-build-isolation /opt/ovlab/external/extensions/example-policy/self \
     && rm /tmp/install-ovlab-packages.sh \
     && install -d -o 10001 -g 10001 -m 0700 /run/ovlab
 
@@ -22,7 +22,7 @@ ARG OVLAB_LOCK_SHA256
 ARG OVLAB_DOCKERFILE_SHA256
 ARG OVLAB_IMAGE_REFERENCE
 ARG OVLAB_VERSION
-LABEL io.github.ovlab.deployment.contract="resolved-checkpoint-quantization-config-bundle-v2" \
+LABEL io.github.ovlab.deployment.contract="policy-rpc-v2-config-bundle-v3" \
       io.github.ovlab.service.transport="tcp-persistent-v1" \
       io.github.ovlab.role="policy-example" \
       org.opencontainers.image.revision="$OVLAB_REVISION" \

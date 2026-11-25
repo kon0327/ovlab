@@ -5,14 +5,14 @@ import pytest
 
 from helpers.contexts import make_episode_context, make_run_context
 from helpers.fake_libero import FakeLiberoBackend
-from ovlab_benchmarks.libero import (
+from ovlab_libero import (
     InitialStateSelection,
     LiberoAdapterSettings,
     LiberoBenchmarkAdapter,
     LiberoConfigurationError,
     LiberoObservationProfile,
 )
-from ovlab_benchmarks.libero.tasks import select_initial_state_index
+from ovlab_libero.tasks import select_initial_state_index
 
 
 def test_discovery_preserves_native_order_and_stable_ids() -> None:

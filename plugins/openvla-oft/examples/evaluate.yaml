@@ -10,7 +10,7 @@ experiment:
   tags:
     - "example"
 components:
-  benchmark: "ovlab://benchmarks/libero.yaml"
+  benchmark: "plugin://libero/benchmark/default.yaml"
   metrics: "ovlab://metrics/default.yaml"
   protocol: "ovlab://protocols/smoke.yaml"
   artifacts: "ovlab://artifacts/default.yaml"

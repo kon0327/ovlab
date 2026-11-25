@@ -139,7 +139,7 @@ class Doctor:
         try:
             plan = deployment.plan(experiment, env_file=env_file)
             bundle = ConfigBundleBuilder(self.root).build(
-                plan.experiment, deployment._RENDERER_EXECUTION_PROFILES[plan.renderer],
+                plan.experiment, plan.execution_profile,
             )
         except (OSError, ValueError, RuntimeError, KeyError) as exc:
             self._add("experiment", "error", f"experiment cannot be deployed: {exc}",
@@ -164,7 +164,7 @@ class Doctor:
             elif explicit_dataset is not None:
                 self._directory("datasets", explicit_dataset, required=True)
             else:
-                self._directory("datasets", runs.parent / "datasets/libero", required=False)
+                self._directory("datasets", runs.parent / "datasets", required=False)
 
         if not docker_ready:
             self._add("images", "skipped", "Docker daemon is unavailable")

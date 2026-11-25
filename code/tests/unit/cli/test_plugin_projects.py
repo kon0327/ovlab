@@ -14,7 +14,7 @@ from ovlab_benchctl.config_bundle import ConfigBundleBuilder
 from ovlab_benchctl.errors import ConfigCompatibilityError, ConfigSchemaError
 from ovlab_benchctl.errors import ConfigReferenceError
 from ovlab_benchctl.plugin_build import build_images
-from ovlab_benchctl.plugin_projects import register_project
+from ovlab_benchctl.plugin_projects import register_extension_project as register_project
 from ovlab_benchctl.policy_plugins import plugin_for_type, registry_document, registry_scope
 from ovlab_benchctl.strict_yaml import dumps, load
 
@@ -44,11 +44,14 @@ def project(tmp_path, monkeypatch):
     shutil.copytree(ROOT / 'deploy/scripts', root / 'deploy/scripts')
     shutil.copytree(ROOT / 'examples/policy-plugin', plugin)
     (plugin / 'src/example_policy').rename(plugin / 'src/registered_policy')
-    manifest = json.loads((plugin / 'plugin.json').read_text())
-    manifest['plugins']['example_policy']['entrypoint'] = 'registered_policy.plugin:plugin'
-    (plugin / 'plugin.json').write_text(json.dumps(manifest))
+    manifest = json.loads((plugin / 'extension.json').read_text())
+    manifest['providers']['constant']['entrypoint'] = 'registered_policy.plugin:plugin'
+    (plugin / 'extension.json').write_text(json.dumps(manifest))
     (root / 'configs/plugins').mkdir(exist_ok=True)
-    (root / 'configs/plugins/registry.json').write_text(json.dumps({'schema_version': 'ovlab.plugins/v2', 'plugins': {}}))
+    (root / 'configs/extensions').mkdir()
+    shutil.copytree(ROOT / 'examples/benchmark-plugin', root / 'examples/benchmark-plugin')
+    (root / 'configs/extensions/registry.json').write_text(json.dumps({'schema_version': 'ovlab.extensions/v1',
+        'projects': {'example-benchmark': {'source': {'kind':'local','path':'examples/benchmark-plugin'}}}}))
     (root / 'deploy/docker').mkdir()
     (root / 'deploy/docker/base-images.lock').write_text('fixture')
     (root / 'VERSION').write_text('0.2.0')
@@ -64,9 +67,9 @@ def project(tmp_path, monkeypatch):
 def configure_experiment(root):
     override = {'schema_version': '0.1.0', 'kind': 'policy', 'type': 'example_policy',
                 'extends': 'plugin://example-policy/policy.yaml',
-                'settings': {'action': {'action_interface': 'ovlab://interfaces/actions/mock-delta-gripper-v1.yaml'}}}
+                'settings': {'action': {'action_interface': 'plugin://example-policy/interfaces/planar-v1.yaml'}}}
     (root / 'configs/policies/custom.yaml').write_text(dumps(override))
-    experiment = load(root / 'examples/experiments/mock-smoke.yaml')
+    experiment = load(root / 'examples/benchmark-plugin/configs/evaluate.yaml')
     experiment['components']['policy'] = 'policies/custom.yaml'
     experiment['resources']['registry'] = 'plugin://example-policy/resources.yaml'
     (root / 'experiments/evaluation/custom.yaml').write_text(dumps(experiment))
@@ -79,15 +82,15 @@ def test_local_registration_discovers_capabilities_and_configurations(project):
     assert result['project'] == 'example-policy'
     registry = registry_document(root)
     assert registry['projects']['example-policy']['checkpoint_catalogs'] == ['resources.yaml']
-    assert registry['plugins']['example_policy']['capabilities']['quantization'] == ['none']
+    assert registry['plugins']['plugin:policy:example-policy/constant']['capabilities']['quantization'] == ['none']
     plugin = plugin_for_type('example_policy', root)
-    assert plugin.implementation.api_version == '1'
+    assert plugin.implementation.api_version == '2'
     assert not (root / 'external').exists()
-    assert register_project(root, str(source))['policy_types'] == ['example_policy']
-    registration = json.loads((root / 'configs/plugins/registry.json').read_text())
-    registration['plugins']['example-policy']['source']['path'] = '../independent-plugin'
-    (root / 'configs/plugins/registry.json').write_text(json.dumps(registration))
-    assert register_project(root, str(source))['policy_types'] == ['example_policy']
+    assert register_project(root, str(source))['providers'] == ['constant']
+    registration = json.loads((root / 'configs/extensions/registry.json').read_text())
+    registration['projects']['example-policy']['source']['path'] = '../independent-plugin'
+    (root / 'configs/extensions/registry.json').write_text(json.dumps(registration))
+    assert register_project(root, str(source))['providers'] == ['constant']
 
 
 def test_remote_registration_pins_manifest_and_adapter_without_manual_checkout(project):
@@ -98,22 +101,24 @@ def test_remote_registration_pins_manifest_and_adapter_without_manual_checkout(p
     git(source, 'commit', '-qam', 'later upstream')
     register_project(root, source.as_uri(), commit=pinned)
     registry = registry_document(root)
-    assert registry['sources']['plugin-example-policy']['commit'] == pinned
-    assert plugin_for_type('example_policy', root).implementation.api_version == '1'
+    assert registry['sources']['example-policy/self']['commit'] == pinned
+    assert plugin_for_type('example_policy', root).implementation.api_version == '2'
     assert not (root / 'external').exists()
     assert (root / 'plugins/.cache').is_dir()
-    cached = root / 'plugins/.cache/example-policy' / pinned / 'external/plugin-example-policy'
+    from ovlab_benchctl.extensions import ExtensionCatalog
+    cached = ExtensionCatalog(root).project_root('example-policy')
     (cached / 'README.md').write_text('unregistered cached edits')
+    assert 'example-policy' not in registry_document(root)['projects']
     with pytest.raises(ConfigCompatibilityError, match='differs from its pinned commit'):
-        registry_document(root)
+        plugin_for_type('example_policy', root, provider='plugin:policy:example-policy/constant')
 
 
 def test_remote_dry_run_does_not_acquire_or_write_project(project):
     root, source = project
-    before = (root / 'configs/plugins/registry.json').read_bytes()
+    before = (root / 'configs/extensions/registry.json').read_bytes()
     result = register_project(root, 'https://example.invalid/plugin.git', commit='a' * 40, dry_run=True)
     assert result['side_effects_performed'] is False
-    assert (root / 'configs/plugins/registry.json').read_bytes() == before
+    assert (root / 'configs/extensions/registry.json').read_bytes() == before
     assert not (root / 'plugins').exists()
     with pytest.raises(ConfigSchemaError, match='Git commit'):
         register_project(root, 'https://example.invalid/plugin.git', commit='main')
@@ -121,36 +126,36 @@ def test_remote_dry_run_does_not_acquire_or_write_project(project):
 
 def test_remote_plugin_cannot_acquire_undeclared_host_filesystem_dependencies(project):
     root, source = project
-    manifest = json.loads((source / 'plugin.json').read_text())
+    manifest = json.loads((source / 'extension.json').read_text())
     manifest['sources']['host-files'] = {'kind': 'local', 'path': str(root / 'configs')}
-    (source / 'plugin.json').write_text(json.dumps(manifest))
+    (source / 'extension.json').write_text(json.dumps(manifest))
     initialize(source)
-    before = (root / 'configs/plugins/registry.json').read_bytes()
+    before = (root / 'configs/extensions/registry.json').read_bytes()
     with pytest.raises(ConfigCompatibilityError, match='local dependencies must stay inside'):
         register_project(root, source.as_uri(), commit=git(source, 'rev-parse', 'HEAD'))
-    assert (root / 'configs/plugins/registry.json').read_bytes() == before
+    assert (root / 'configs/extensions/registry.json').read_bytes() == before
 
 
 @pytest.mark.parametrize('options', [{'offline': True}, {'dry_run': True}])
 def test_uncached_remote_manifest_is_not_fetched_for_offline_or_dry_run(project, options):
     root, source = project
-    registration = {'schema_version': 'ovlab.plugins/v2', 'plugins': {'unknown': {'source': {
+    registration = {'schema_version': 'ovlab.extensions/v1', 'projects': {'unknown': {'source': {
         'kind': 'git', 'url': 'https://example.invalid/plugin.git', 'commit': 'a' * 40}}}}
-    (root / 'configs/plugins/registry.json').write_text(json.dumps(registration))
-    with pytest.raises(ConfigReferenceError, match='no cached manifest'):
-        build_images(root, **options)
+    (root / 'configs/extensions/registry.json').write_text(json.dumps(registration))
+    with pytest.raises(ConfigReferenceError, match='unknown or ambiguous'):
+        build_images(root, ['unknown/policy'], **options)
     assert not (root / 'plugins').exists()
 
 
 def test_invalid_manifest_does_not_change_registry(project):
     root, source = project
-    before = (root / 'configs/plugins/registry.json').read_bytes()
-    manifest = json.loads((source / 'plugin.json').read_text())
-    manifest['plugins']['example_policy']['deployment']['image'] = 'unrelated:image'
-    (source / 'plugin.json').write_text(json.dumps(manifest))
+    before = (root / 'configs/extensions/registry.json').read_bytes()
+    manifest = json.loads((source / 'extension.json').read_text())
+    manifest['providers']['constant']['deployment']['image'] = 'unrelated:image'
+    (source / 'extension.json').write_text(json.dumps(manifest))
     with pytest.raises(ConfigSchemaError, match='image differs'):
         register_project(root, str(source))
-    assert (root / 'configs/plugins/registry.json').read_bytes() == before
+    assert (root / 'configs/extensions/registry.json').read_bytes() == before
 
 
 def test_build_bakes_explicit_user_extensions_and_selected_plugin(project):
@@ -162,7 +167,7 @@ def test_build_bakes_explicit_user_extensions_and_selected_plugin(project):
 
     def docker(command, **kwargs):
         context = Path(command[-1])
-        assert (context / 'external/plugin-example-policy/src/registered_policy/plugin.py').is_file()
+        assert (context / 'external/extensions/example-policy/self/src/registered_policy/plugin.py').is_file()
         for index, value in enumerate(command):
             if value != '--secret':
                 continue
@@ -177,7 +182,7 @@ def test_build_bakes_explicit_user_extensions_and_selected_plugin(project):
         return SimpleNamespace(returncode=0)
 
     plans = build_images(root, config=experiment, runner=docker)
-    assert len(plans) == 1 and plans[0]['role'] == 'policy-example'
+    assert {plan['role'] for plan in plans} == {'example-policy/policy-example', 'example-benchmark/benchmark-example'}
     assert len(plans[0]['config_bundle_sha256']) == 64
     assert 'OVLAB_CONFIG_BUNDLE_SHA256=' + plans[0]['config_bundle_sha256'] in plans[0]['command']
     assert archives and all(not path.exists() for path in archives)
@@ -192,9 +197,9 @@ def test_build_bakes_explicit_user_extensions_and_selected_plugin(project):
 def test_plugin_can_declare_quantization_profiles_without_changing_core(project):
     from ovlab_benchctl.model_deployment import ModelDeployment
     root, source = project
-    manifest = json.loads((source / 'plugin.json').read_text())
-    manifest['plugins']['example_policy']['deployment']['quantization'].append('vendor-int3')
-    (source / 'plugin.json').write_text(json.dumps(manifest))
+    manifest = json.loads((source / 'extension.json').read_text())
+    manifest['providers']['constant']['deployment']['quantization'].append('vendor-int3')
+    (source / 'extension.json').write_text(json.dumps(manifest))
     implementation = source / 'src/registered_policy/plugin.py'
     implementation.write_text(implementation.read_text().replace(
         "runtime['quantization'] != 'none'", "runtime['quantization'] not in {'none', 'vendor-int3'}"))
@@ -244,12 +249,12 @@ def test_flat_layout_plugin_control_code_is_available_in_frozen_worker(project, 
 def test_project_check_rejects_missing_declared_configuration_template(project):
     from ovlab_benchctl.plugin_catalog import check_project
     root, source = project
-    manifest_path = source / 'plugin.json'
+    manifest_path = source / 'extension.json'
     manifest = json.loads(manifest_path.read_text())
     manifest.setdefault('configs', {})['templates'] = {'evaluate': ['missing.yaml']}
     manifest_path.write_text(json.dumps(manifest))
     register_project(root, str(source))
-    with pytest.raises(ConfigReferenceError, match='missing its evaluate template'):
+    with pytest.raises(ConfigReferenceError, match='missing its configuration template'):
         check_project(root, 'example-policy')
 
 
@@ -257,14 +262,14 @@ def test_plugin_cli_selection_uses_project_identity_not_variant_or_policy_type(p
     from ovlab_benchctl import cli
     from ovlab_benchctl.plugin_catalog import check_project, list_projects
     root, source = project
-    manifest_path = source / 'plugin.json'
+    manifest_path = source / 'extension.json'
     manifest = json.loads(manifest_path.read_text())
-    manifest['plugins']['example_policy']['id'] = 'constant-variant'
+    manifest['providers']['constant']['id'] = 'constant-variant'
     manifest_path.write_text(json.dumps(manifest))
     register_project(root, str(source))
     monkeypatch.setenv('OVLAB_ROOT', str(root))
-    assert list_projects(root)[0]['id'] == 'example-policy'
+    assert 'example-policy' in {row['id'] for row in list_projects(root)}
     assert check_project(root, 'example-policy')['model_loaded'] is False
     for invalid in ('constant-variant', 'example_policy'):
-        with pytest.raises(ConfigReferenceError, match='unknown plugin project'):
+        with pytest.raises(ConfigReferenceError, match='unknown extension project'):
             cli._dispatch(cli._parser().parse_args(['plugin', 'inspect', invalid]))

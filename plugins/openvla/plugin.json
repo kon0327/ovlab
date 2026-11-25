@@ -84,7 +84,7 @@
   "providers": {
     "vanilla": {
       "kind": "policy",
-      "api_version": "1",
+      "api_version": "2",
       "config_type": "openvla_vanilla",
       "id": "vanilla",
       "family": "openvla",
@@ -103,13 +103,11 @@
         "image": "ovlab-policy-openvla:local",
         "image_env": "OVLAB_OPENVLA_IMAGE",
         "policy_service": "policy-openvla",
-        "benchmark_service": "benchmark-openvla",
         "quantization": [
           "none",
           "8bit",
           "4bit"
-        ],
-        "observation_profile": "primary_rgb"
+        ]
       },
       "capabilities": {
         "observation": {
@@ -241,7 +239,7 @@
     },
     "lora": {
       "kind": "policy",
-      "api_version": "1",
+      "api_version": "2",
       "config_type": "openvla_lora_merged",
       "id": "lora",
       "family": "lora",
@@ -260,13 +258,11 @@
         "image": "ovlab-policy-openvla:local",
         "image_env": "OVLAB_OPENVLA_IMAGE",
         "policy_service": "policy-openvla",
-        "benchmark_service": "benchmark-openvla",
         "quantization": [
           "none",
           "8bit",
           "4bit"
-        ],
-        "observation_profile": "primary_rgb"
+        ]
       },
       "artifact_forms": [
         "merged_full_weights"

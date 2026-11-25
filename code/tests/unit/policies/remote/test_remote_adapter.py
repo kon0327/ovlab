@@ -27,7 +27,7 @@ def test_mock_remote_lifecycle_handshake_action_and_separate_timing(
     capabilities = policy.initialize(run)
     assert policy.client.health()["state"] == "ready"
     assert capabilities.output_action_spec.gripper_convention is GripperConvention.CLOSED_POSITIVE
-    assert policy.handshake["protocol_version"] == "ovlab-policy-rpc/1.0.0"
+    assert policy.handshake["protocol_version"] == "ovlab-policy-rpc/2.0.0"
     assert policy.handshake["action_codec_identity"]["application_count"] == 1
     policy.reset_episode(episode)
     prediction = policy.predict(observation)
@@ -53,7 +53,7 @@ def test_optional_method_descriptor_preserves_vanilla_protocol_compatibility(
     run, _ = contexts
     policy = RemotePolicyAdapter(UnixPolicyClient(socket_path, request_timeout_s=2))
     policy.initialize(run)
-    assert policy.handshake["protocol_version"] == "ovlab-policy-rpc/1.0.0"
+    assert policy.handshake["protocol_version"] == "ovlab-policy-rpc/2.0.0"
     assert policy.handshake["method_descriptor"] == {
         "family": "lora",
         "artifact_form": "merged_full_weights",

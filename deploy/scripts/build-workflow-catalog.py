@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import ast
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -74,9 +73,11 @@ def _build_catalog(root):
                         catalog['components'][kind], reference)
     component_kinds = {'benchmark': 'benchmark', 'policy': 'policy', 'protocol': 'protocol',
                        'metric_set': 'metrics', 'artifact_store': 'artifacts'}
+    from ovlab_benchctl.benchmark_plugins import extension_catalog
+    extensions = extension_catalog(root)
     project_roots = plugin_config_roots(root)
     for project, config_root in project_roots.items():
-        files.add(plugin_project_root(project, root) / 'plugin.json')
+        files.add(extensions.project_root(project) / extensions.project_metadata(project)['manifest'])
         for path in sorted(config_root.rglob('*.yaml')):
             if path.is_symlink() or not path.resolve().is_relative_to(config_root):
                 continue
@@ -93,7 +94,7 @@ def _build_catalog(root):
                     document = bundle.load_component(r, s, validate_document=False)
                     if s == 'policy':
                         from ovlab_benchctl.policy_plugins import plugin_for_type, call_plugin
-                        owner = plugin_for_type(document['type'], root)
+                        owner = plugin_for_type(document['type'], root, provider=document.get('provider'))
                         call_plugin(owner, 'validate_checkpoint_template', document, r)
                     return document
                 collect(path, component,
@@ -105,13 +106,28 @@ def _build_catalog(root):
                 reference = f'plugin://{project}/{path.relative_to(config_root).as_posix()}'
                 collect(path, lambda r=reference: bundle.load_component(r, 'experiment', validate_document=False),
                         catalog['evaluation'], reference)
-    task_source = root / 'external/libero/libero/libero/benchmark/libero_suite_task_map.py'
-    if task_source.is_file():
-        files.add(task_source)
-        for statement in ast.parse(task_source.read_text()).body:
-            if isinstance(statement, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'libero_task_map' for t in statement.targets):
-                catalog['tasks'] = ast.literal_eval(statement.value)
-                break
+    # Optional table metadata belongs to the registered project. Reading the
+    # pinned JSON resource does not import a simulator or inspect external/.
+    for project in project_roots:
+        manifest = extensions.project_manifest(project)
+        project_root = extensions.project_root(project)
+        for provider in manifest['providers'].values():
+            declaration = provider.get('authoring', {}).get('task_groups')
+            if not declaration:
+                continue
+            path = (project_root / declaration['path']).resolve()
+            if not path.is_relative_to(project_root) or not path.is_file():
+                raise ValueError('authoring task table escapes or is missing from its project')
+            files.add(path)
+            table = json.loads(path.read_text())
+            rows = table[declaration['collection']]
+            for row in rows:
+                group, label = row[declaration['group_by']], row[declaration['label']]
+                if not isinstance(group, str) or not isinstance(label, str):
+                    raise ValueError('authoring task groups and labels must be strings')
+                labels = catalog['tasks'].setdefault(group, [])
+                if label not in labels:
+                    labels.append(label)
     # Include all component inputs (also inherited parents) and planner rules in
     # the snapshot identity, without importing any model or GPU implementation.
     files.update((root / 'config').rglob('*.yaml'))
@@ -123,10 +139,11 @@ def _build_catalog(root):
         if '.generated' not in path.parts:
             if path.is_relative_to(root):
                 reference = path.relative_to(root).as_posix()
-            elif path.name == 'plugin.json':
+            elif path.name in {'plugin.json', 'extension.json'}:
                 reference = 'plugin-manifest:' + load_manifest_id(path)
             else:
-                reference = bundle.references.reference(path)
+                owner = next((project for project in project_roots if path.is_relative_to(extensions.project_root(project))), None)
+                reference = ('project-source:' + owner + '/' + path.relative_to(extensions.project_root(owner)).as_posix()) if owner else bundle.references.reference(path)
             digest.update(reference.encode() + b'\0' + path.read_bytes())
     catalog['source_sha256'] = digest.hexdigest()
     return catalog

@@ -12,7 +12,7 @@ _ENV_RESERVED = {"OVLAB_PLUGIN_REGISTRY", "OVLAB_CONFIG_BUNDLE_SHA256", "OVLAB_R
                  "OVLAB_LOCAL_PROFILE", "OVLAB_EXECUTION_PROFILE", "OVLAB_DEPLOYMENT_PROFILE"}
 
 
-def validate_runtime_mounts(mounts, *, check_files=False):
+def validate_runtime_mounts(mounts, *, check_files=False, protect_tmp=True):
     if not isinstance(mounts, (list, tuple)):
         raise ConfigCompatibilityError("plugin runtime_mounts must return a list of directory mappings")
     result, targets, environment = [], [], set()
@@ -27,7 +27,8 @@ def validate_runtime_mounts(mounts, *, check_files=False):
         container = PurePosixPath(target)
         if ".." in container.parts or container.as_posix() != target:
             raise ConfigCompatibilityError("plugin mount target must be normalized")
-        if any(container.is_relative_to(path) or path.is_relative_to(container) for path in (*_RESERVED, *targets)):
+        reserved = _RESERVED if protect_tmp else tuple(path for path in _RESERVED if path != PurePosixPath("/tmp"))
+        if any(container.is_relative_to(path) or path.is_relative_to(container) for path in (*reserved, *targets)):
             raise ConfigCompatibilityError(f"plugin mount target overlaps a reserved or another mount: {target}")
         targets.append(container)
         key = mount.get("environment")

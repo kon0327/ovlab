@@ -28,6 +28,7 @@ def _action_specs_equal(first: ActionSpec, second: ActionSpec) -> bool:
         "gripper_convention",
         "units",
         "dtype",
+        "control_frequency_hz",
     )
     if any(getattr(first, name) != getattr(second, name) for name in fields):
         return False

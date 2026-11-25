@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from ovlab_benchmarks.libero.tasks import NativeTaskRecord, resolve_native_suite
+from ovlab_libero.tasks import NativeTaskRecord, resolve_native_suite
 from ovlab_core.contracts import (
     EpisodeContext,
     EpisodeId,
