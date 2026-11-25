@@ -269,7 +269,7 @@ class ConfigResolver:
         if components["policy"]["type"] != "mock":
             plugin = plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider"))
             resources.update(call_plugin(plugin, "runtime_resources", components["policy"], self.repository_root, values))
-        policy = self._policy(components["policy"], benchmark_context if benchmark_context is not None else components["benchmark"], action_spec, resolved_checkpoints, devices, environment=values)
+        policy = self._policy(components["policy"], benchmark_context, action_spec, resolved_checkpoints, devices, environment=values)
         metrics = self._metrics(components["metrics"])
         artifact = self._artifacts(components["artifacts"], paths)
         reporting = ReportingSettings(**experiment_doc.get("reporting", {}))
@@ -364,7 +364,7 @@ class ConfigResolver:
                 raise ConfigCompatibilityError("benchmark action interface differs from the policy interface")
         if components["policy"]["type"] != "mock":
             from .policy_plugins import plugin_for_type, call_plugin
-            call_plugin(plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider")), "validate_observation", components["policy"], benchmark_context if benchmark_context is not None else components["benchmark"])
+            call_plugin(plugin_for_type(components["policy"]["type"], self.repository_root, provider=components["policy"].get("provider")), "validate_observation", components["policy"], benchmark_context)
 
     @staticmethod
     def _action_spec(doc):
@@ -416,13 +416,13 @@ class ConfigResolver:
         raise ConfigCompatibilityError("benchmark settings require its registered SDK provider")
 
     @with_registry
-    def _policy(self, doc, benchmark_doc, action_spec, checkpoints, devices, *, environment=None):
+    def _policy(self, doc, benchmark_context, action_spec, checkpoints, devices, *, environment=None):
         settings = doc["settings"]
         if doc["type"] == "mock":
             return MockPolicySettings(settings["horizon"], settings["deterministic"], settings["input"]["camera"], settings["input"]["proprioception"], action_spec, settings["raw_output"]["enabled"])
         from .policy_plugins import plugin_for_type, call_plugin
         values = dict(os.environ if environment is None else environment)
-        resolved = call_plugin(plugin_for_type(doc["type"], self.repository_root, provider=doc.get("provider")), "resolve_settings", doc, benchmark_doc, action_spec, checkpoints, devices, repository_root=self.repository_root, environment=values)
+        resolved = call_plugin(plugin_for_type(doc["type"], self.repository_root, provider=doc.get("provider")), "resolve_settings", doc, benchmark_context, action_spec, checkpoints, devices, repository_root=self.repository_root, environment=values)
         if type(getattr(resolved, "record_raw_output", None)) is not bool:
             raise ConfigCompatibilityError(f"plugin {doc['type']} settings must expose boolean record_raw_output")
         return resolved

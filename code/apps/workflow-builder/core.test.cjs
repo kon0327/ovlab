@@ -181,12 +181,13 @@ test('new plugin methods, policy types and quantization come from descriptors', 
   const trainRef = 'plugin://future-model/train/default.yaml';
   const policy = C.clone(catalog.components.policy.find(item => item.ref === 'plugin://openvla-quic/policy/default.yaml').document);
   policy.type = 'future_policy';
+  policy.provider = 'plugin:policy:future-model/default';
   next.components.policy.push({ref: policyRef, document: policy});
   const training = C.clone(catalog.training.find(item => item.ref === 'plugin://openvla-quic/train/default.yaml').document);
   training.trainer = {id: 'future-model', implementation: 'future-trainer'};
   training.training.peft.method = 'future-method';
   next.training.push({ref: trainRef, document: training});
-  next.plugins.future_policy = {id: 'future', project: 'future-model', family: 'future-family',
+  next.plugins[policy.provider] = {provider_ref: policy.provider, config_type: 'future_policy', id: 'future', project: 'future-model', family: 'future-family',
     deployment: {profile: 'future-model', quantization: ['none', 'int2']}, capabilities: {
       training: {implementations: ['future-trainer'], methods: ['future-method']},
       checkpoint_binding: {training_methods: ['future-method']}}};
@@ -203,4 +204,29 @@ test('partial plugin defaults require explicit scenario composition', () => {
   const document = {schema_version: 'ovlab.experiment/v1', kind: 'workflow', id: 'partial', name: 'Partial',
     execute: ['evaluate'], config: {evaluate: {profile: 'plugin://openvla/evaluate/default.yaml'}}};
   assert.ok(errors(document).some(issue => issue.message.includes('experiment details')));
+});
+
+
+test('benchmark execution profiles are optional and owned by the selected provider', () => {
+  const next = C.clone(catalog), document = preset('openvla-eval.yaml');
+  const entry = C.resolve(C.flatten(document)[0], 'evaluate', next);
+  const provider = entry.components.benchmark.provider;
+  assert.ok(next.benchmarks[provider]);
+  next.benchmarks[provider].execution_profiles = {cpu: 'plugin://custom/execution/cpu.yaml'};
+  next.benchmarks[provider].default_execution_profile = 'plugin://custom/execution/cpu.yaml';
+  C.set(document, 'config.evaluate.patch.deployment.renderer', undefined);
+  assert.deepEqual(C.analyze(document, next).issues.filter(issue => issue.severity === 'error'), []);
+  C.set(document, 'config.evaluate.patch.deployment.renderer', 'cpu');
+  assert.deepEqual(C.analyze(document, next).issues.filter(issue => issue.severity === 'error'), []);
+  C.set(document, 'config.evaluate.patch.deployment.renderer', 'egl');
+  assert.ok(C.analyze(document, next).issues.some(issue => issue.message.includes('execution profile')));
+});
+
+test('benchmark provider selection is explicit even without a renderer override', () => {
+  for (const provider of [null, '', 'plugin:benchmark:missing/default', 'plugin:policy:openvla/vanilla']) {
+    const document = preset('openvla-eval.yaml');
+    C.set(document, 'config.evaluate.patch.deployment.renderer', undefined);
+    C.set(document, 'config.evaluate.component_patches.benchmark.provider', provider);
+    assert.ok(errors(document).some(issue => issue.message.includes('benchmark provider')));
+  }
 });

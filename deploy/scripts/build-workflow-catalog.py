@@ -30,7 +30,7 @@ def _build_catalog(root):
     bundle = ConfigBundleBuilder(root)
     catalog = {'version': 1, 'generated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
                'training': [], 'evaluation': [], 'workflows': [], 'components': {}, 'tasks': {}, 'excluded': [],
-               'plugins': registry_document(root)['plugins']}
+               'plugins': registry_document(root)['plugins'], 'benchmarks': registry_document(root)['benchmarks']}
     files = set()
 
     def collect(path, callback, destination, reference):

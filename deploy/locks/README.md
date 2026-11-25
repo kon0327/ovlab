@@ -1,8 +1,9 @@
 # Dependency locks
 
-This directory owns infrastructure locks for benchmark, reporting and dataset
-images. Model runtime/training/finalizer locks live in their respective projects:
+This directory owns infrastructure locks for the reporting image. Benchmark,
+dataset and model runtime/training/finalizer locks live in their projects:
 
+- [`plugins/libero/locks/`](../../plugins/libero/locks/) for benchmark and dataset.
 - [`plugins/openvla/locks/`](../../plugins/openvla/locks/) for Vanilla and LoRA.
 - [`plugins/openvla-oft/locks/`](../../plugins/openvla-oft/locks/) for native OFT.
 - [`plugins/openvla-quic/locks/`](../../plugins/openvla-quic/locks/) for QuIC.
@@ -17,8 +18,8 @@ checks and integration smoke.
 For example, using the target Python runtime:
 
 ```bash
-python -m pip lock --output deploy/locks/benchmark.pylock.toml -r deploy/locks/benchmark.in
-python deploy/scripts/render_requirements_lock.py deploy/locks/benchmark.pylock.toml deploy/locks/benchmark.requirements.txt
+python -m pip lock --output plugins/libero/locks/benchmark.pylock.toml -r plugins/libero/locks/benchmark.in
+python deploy/scripts/render_requirements_lock.py plugins/libero/locks/benchmark.pylock.toml plugins/libero/locks/benchmark.requirements.txt
 ```
 
 The benchmark closure explicitly selects headless runtime dependencies instead

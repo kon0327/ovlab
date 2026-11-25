@@ -1,4 +1,4 @@
-"""Public policy plugin API v1, independent of orchestration/model libraries."""
+"""Public policy plugin API v2, independent of orchestration/model libraries."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -41,7 +41,7 @@ class PolicyPlugin(ABC):
     the host during planning, before the model's runtime dependencies exist.
     """
 
-    api_version = "1"
+    api_version = "2"
 
     @abstractmethod
     def validate_policy(self, doc: dict, path: str) -> None:
@@ -58,10 +58,13 @@ class PolicyPlugin(ABC):
         self.validate_policy(doc, path)
 
     @abstractmethod
-    def resolve_settings(self, doc: dict, benchmark_doc: dict, action_spec: ActionSpec,
+    def resolve_settings(self, doc: dict, benchmark_context: BenchmarkContext | None, action_spec: ActionSpec,
                          checkpoints: Mapping, devices: Mapping, *,
                          repository_root: Path, environment: Mapping[str, str]) -> PolicySettings:
-        """Construct settings from validated documents and resolved resources."""
+        """Resolve model settings from canonical peer contracts and resources.
+
+        Standalone serving receives None; a model never reads benchmark YAML.
+        """
 
     @abstractmethod
     def create_adapter(self, settings: PolicySettings) -> PolicyAdapter:
@@ -87,12 +90,16 @@ class PolicyPlugin(ABC):
     def describe_document(self, doc: dict) -> Mapping:
         return self.resolve_document(doc)
 
-    def validate_observation(self, doc: dict, benchmark_doc: dict) -> None:
+    @abstractmethod
+    def describe_capabilities(self, settings: PolicySettings) -> PolicyCapabilities:
+        """Declare static inputs/actions without constructing or loading a model."""
+
+    def validate_observation(self, doc: dict, benchmark_context: BenchmarkContext) -> None:
         """Check named inputs, shapes and preprocessing compatibility."""
 
-    def deployment_context(self, policy: dict, deployment: dict) -> dict:
-        """Provide settings context for standalone serving without a benchmark."""
-        return {"settings": {"observation": deepcopy(deployment.get("input", {}))}}
+    def deployment_context(self, policy: dict, deployment: dict) -> None:
+        """Standalone serving has no benchmark peer or scientific task identity."""
+        return None
 
     def validate_checkpoint(self, entry: dict, path: str) -> None:
         """Validate plugin-specific artifact/method metadata beyond file hashes."""
@@ -108,40 +115,3 @@ class PolicyPlugin(ABC):
     def runtime_mounts(self, doc: dict, repository_root: Path, environment: Mapping) -> list[dict]:
         """Return absolute source/target directories, optionally environment/required_files."""
         return []
-
-    def accepts_settings(self, settings: object) -> bool:
-        """Compatibility hook for older direct callers; normal startup selects by type."""
-        return False
-
-    def accepts_capabilities(self, capabilities: PolicyCapabilities) -> bool:
-        """Compatibility hook for older direct identity-provider callers."""
-        return False
-
-
-class PolicyPluginV2(PolicyPlugin):
-    """Policy API using canonical peer descriptions instead of benchmark YAML.
-
-    This additive contract leaves v1 integrations unchanged until the composition
-    root and every selected integration migrate together. Standalone serving
-    passes ``None`` and validates its explicit input/action contract separately;
-    it must not invent benchmark qualification from a normalization key.
-    """
-
-    api_version = "2"
-
-    @abstractmethod
-    def resolve_settings(self, doc: dict, benchmark_context: BenchmarkContext | None, action_spec: ActionSpec,
-                         checkpoints: Mapping, devices: Mapping, *,
-                         repository_root: Path, environment: Mapping[str, str]) -> PolicySettings:
-        """Resolve model settings without reading a peer's configuration schema."""
-
-    @abstractmethod
-    def describe_capabilities(self, settings: PolicySettings) -> PolicyCapabilities:
-        """Describe policy inputs/actions without constructing or loading a model."""
-
-    def validate_observation(self, doc: dict, benchmark_context: BenchmarkContext) -> None:
-        """Validate named inputs and plugin-owned methodological constraints."""
-
-    def deployment_context(self, policy: dict, deployment: dict) -> None:
-        """Standalone serving has no benchmark peer or scientific task identity."""
-        return None

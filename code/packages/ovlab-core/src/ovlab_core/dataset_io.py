@@ -78,4 +78,3 @@ class _HttpMixin:
                 if attempt < self.retries:
                     time.sleep(min(2 ** (attempt - 1), 4))
         raise DatasetUnavailableError(f"dataset download failed after {self.retries} attempts: {last_error}")
-

@@ -36,6 +36,7 @@
       },
       "default_execution_profile": "plugin://libero/execution/egl.yaml",
       "authoring": {
+        "task_selection": {"format": "indices"},
         "task_groups": {
           "path": "src/ovlab_libero/task_catalog.json",
           "collection": "tasks",

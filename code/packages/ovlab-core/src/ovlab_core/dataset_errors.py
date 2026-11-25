@@ -21,5 +21,3 @@ class DatasetSecurityError(DatasetError):
 
 class DatasetInterruptedError(DatasetError):
     """Acquisition stopped before publication."""
-
-

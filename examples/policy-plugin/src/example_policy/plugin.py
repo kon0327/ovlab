@@ -1,6 +1,6 @@
 """Minimal third-party integration: no OVLAB orchestration or model imports."""
 from dataclasses import dataclass
-from ovlab_policy_sdk.plugin import PolicyPluginV2, PolicyPluginCompatibilityError, PolicyPluginReferenceError
+from ovlab_policy_sdk.plugin import PolicyPlugin, PolicyPluginCompatibilityError, PolicyPluginReferenceError
 from ovlab_policy_sdk.validation import mapping, non_empty_string
 
 
@@ -11,7 +11,7 @@ class Settings:
     record_raw_output: bool = False
 
 
-class ExamplePlugin(PolicyPluginV2):
+class ExamplePlugin(PolicyPlugin):
     def validate_policy(self, doc, path):
         settings = mapping(doc['settings'], f'{path}.settings', required=('checkpoint_id', 'input', 'runtime', 'action', 'raw_output'))
         non_empty_string(settings['checkpoint_id'], f'{path}.settings.checkpoint_id')

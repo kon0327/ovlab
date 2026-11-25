@@ -2,8 +2,8 @@
 
 This document records the approved staged migration from policy-only project
 registration to a common plugin/module registry and a standalone LIBERO project.
-It is a development plan and evidence log, not a claim that the new runtime has
-already passed qualification. The starting revision is `6196ecb` on
+It is a development plan and evidence log; qualification applies to the exact
+gates and runs recorded below. The starting revision is `6196ecb` on
 `feat/benchmark-plugin-architecture`.
 
 ## Scope and ownership
@@ -240,9 +240,9 @@ for this preparation. Recheck current workloads before future runtime smoke.
   qualified API v2 production deployment or LIBERO image.
 - Stage 4 is complete: API v2 model/benchmark composition, public CPU and native
   LIBERO workflows, metrics/report/export and read-only integrity checks passed.
-- Stage 5 is in progress: installed pinned-Git regression, final API compatibility
-  cleanup, repeated smoke and documentation/cleanup. External publication remains
-  separate future work.
+- Stage 5 is complete: installed pinned-Git regression, API compatibility cleanup,
+  repeated public CPU/native GPU smoke and scoped cleanup. External publication
+  and metric/report runtime modules remain separate future work.
 
 ## Implementation evidence
 
@@ -327,3 +327,94 @@ Selected immutable image IDs for this qualification:
 This is pipeline/lifecycle qualification, not a model-quality experiment. Dataset,
 base checkpoint and native LIBERO assets were reused read-only; no user source
 checkout was modified. OpenVLA/OFT images were not used by this native gate.
+
+
+### Stage 5 final review
+
+Policy API v1 and first-match `accepts_settings`/`accepts_capabilities` discovery
+are removed. `PolicyPlugin` is the canonical API `"2"`; standalone context is
+`None`, and model hooks receive canonical peer contracts. Internal legacy-shaped
+worker data remains a projection of the single neutral registration authority.
+Historical artifact readers remain read-only.
+
+The pinned-Git installed-worker regression builds three control SDK/application
+wheels offline, installs them into an isolated target and registers two independent
+local Git remotes at exact commits. Branch heads then contain unusable newer
+code. After freezing, it removes host projects, remotes and caches, and runs
+Python with `-I -S`, an empty home and no Git on PATH. Network/subprocess
+tripwires remain active. Both providers and their bundled task catalog load
+from the selected frozen closure; NumPy and native/model runtimes are absent.
+
+Final regression: **1,168 passed** (unit, contract, selected isolation/CPU/Git
+integration and model packaging). Report/export plus editor/resolver parity:
+**48 passed, 2 skipped**; both skips are optional Playwright browser modules.
+The offline editor's direct Node suite passed **21 tests**, and JavaScript syntax
+checks passed. Browser UI interaction tests remain unexecuted because the test
+environment does not supply Playwright/Chromium. No browser dependency was
+installed into the user's environment. The temporary checksum-verified Node
+runtime was isolated under `/tmp`.
+
+Review removed fixed renderer choices from the editor: execution aliases and
+defaults come from the selected benchmark descriptor. It also validates policy
+provider/config-type agreement. LIBERO owns all benchmark/dataset lock inputs,
+including `.in` files. Empty old benchmark/config directories and generated
+Python caches were removed.
+
+Historical compatibility was checked against
+`plugin-pipeline-smoke-eval_2026-11-20_19-41-46_a5acc158`: canonical verify and
+metric recomputation passed, and all 43 canonical file hashes stayed unchanged.
+The original OpenVLA, OFT and QuIC working trees remained clean.
+
+The final API2 CPU run is
+`cpu-plugin-example_2026-11-25_12-27-18_92e96a4d`, with frozen bundle
+`b95c59c4a4df91d9ce4f62cb232fdad50a2233856e263e153c5c05e8f3998799`.
+Canonical verify, metric recompute, report verify and isolated export verify all
+passed; all 58 canonical files kept identical hashes. Final production-image
+and repeated GPU qualification are recorded below.
+
+
+### Repeated native GPU and final image gate
+
+All ten registered production roles built successfully through the isolated
+source path. The three model projects and LIBERO also passed `plugin check`
+inside their clean runtime images with `--network none --read-only`, without
+host source or configuration mounts. This qualifies installed control imports
+for all four projects; numerical native execution is qualified by the QuIC
+workflow, not by the other model image builds.
+
+Workflow: `plugin-pipeline-smoke_2026-11-25_12-38-28_2370e27c09`. Training: `plugin-pipeline-smoke-train_2026-11-25_13-39-01_f6e0a2cc`; optimizer steps: **3**; finalized adapter: `checkpoint-8c942c92de1630d747148e02b49c2ca0`.
+Evaluation: `plugin-pipeline-smoke-eval_2026-11-25_12-41-57_9978f0c2` (one two-step native LIBERO rollout).
+Frozen bundle: `dad1be5a61b7038047badf894ec425b90762139e79e002fb5e7d41a03e4bc108`.
+Both services exited 0, Compose cleanup completed, and training/evaluation
+reports and exports completed. Canonical verify, metric recomputation (all
+results agree), report verify and export verify succeeded. All 43 evaluation
+canonical file hashes remained unchanged.
+
+| Image | Qualified image ID |
+| --- | --- |
+| `ovlab-reporting:local` | `sha256:5c527ac4c1c56e7085aa9e98b1deeeb23977c1815e1fe6598dcdc6222b07b7e2` |
+| `ovlab-policy-openvla:local` | `sha256:7b0fcf9fd691db4b06518178cfc3d2309c7e8052fe97fa844eecb06684e5f1c8` |
+| `ovlab-training-openvla:local` | `sha256:22bb83b7c53c3b9564cc421c2bed4634f5db7b843232ead4afa0ff8f3112227c` |
+| `ovlab-finalizer-openvla:local` | `sha256:16c9c2904395e016177ea9f6093fed7e13a4bd7c61a65e3d594d825651f7858a` |
+| `ovlab-policy-openvla-oft:local` | `sha256:60545f6e9acdcd44e8ff91020bb39045d5d83ff1b22c627e1bb049f9a05fc612` |
+| `ovlab-policy-openvla-quic:local` | `sha256:d65a71df30e5c42a46a09a8781ce398712e33da38140e8a42071fd2911a5defa` |
+| `ovlab-training-openvla-quic:local` | `sha256:d49b1c92d984c587731a8ea7e8aceb06fc17590bfcad5c1377a1c167fdfc63b9` |
+| `ovlab-finalizer-openvla-quic:local` | `sha256:6b7d7b94c0e8e18e91746a5757d999b37e458342313cf3c47d859756ed6a714b` |
+| `ovlab-benchmark-libero:local` | `sha256:cc13d2427dc0cc0b510754e2e8d6eefce42909cb13f76c92b9c13625456b8da2` |
+| `ovlab-dataset:local` | `sha256:aa3f93f69b0f5f5cab929a80e2b755b7bc088886a3dad9dfcd19b2429e2bca4f` |
+
+The third review also rejected unknown/mismatched benchmark providers in the
+editor when no renderer override is present, and reserved the neutral registry,
+root and experiment/config paths against plugin mount environment overrides.
+The direct Node suite passed 21 tests; the final host deployment/model/plugin
+and resolver-parity gate passed **98 tests**. The latter guard is host-side
+validation and does not change the selected workers' RPC or numerical contract.
+
+Successful native workflow artifacts remain under their named `ovlab-data`
+run/export roots. Final CPU evidence is archived under
+`/tmp/ovlab-extension-qualification/cpu/`; JSON verification evidence and final
+smoke logs are beside it. Generated private CPU registry/profile files,
+intermediate failed smoke data, test-only images, temporary test directories,
+Node runtime and Python caches are removed. Existing user containers, source
+checkouts, datasets, base weights, local profile and Compose environment remain
+untouched.

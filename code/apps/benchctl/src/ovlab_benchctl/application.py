@@ -377,21 +377,7 @@ class OvlabApplication:
         return resolved
 
     @staticmethod
-    def _policy_adapter(settings):
-        if isinstance(settings, MockPolicySettings):
-            raise ConfigCompatibilityError("mock policy adapters are test-only and unavailable to production CLI")
-        from .policy_plugins import registered_plugins, call_plugin
-        for plugin in registered_plugins():
-            if plugin.descriptor.get("entrypoint") and call_plugin(plugin, "accepts_settings", settings):
-                return call_plugin(plugin, "create_adapter", settings)
-        raise ConfigCompatibilityError("settings do not belong to a registered policy plugin")
-
-    @staticmethod
     def _identity_provider(capabilities):
-        from .policy_plugins import registered_plugins, call_plugin
-        for plugin in registered_plugins():
-            if plugin.descriptor.get("entrypoint") and call_plugin(plugin, "accepts_capabilities", capabilities):
-                return OvlabApplication._with_deployment_identity(call_plugin(plugin, "identity", capabilities))
         if capabilities.component_name not in {"mock-policy", "handshake-only-policy", "qualification-test-policy"}:
             raise ConfigCompatibilityError(
                 f"no registered service identity provider for {capabilities.component_name!r}"
@@ -480,8 +466,10 @@ class OvlabApplication:
             policy_type = resolved.scientific_config["components"]["policy"]["type"]
         policy_document = resolved.scientific_config["components"]["policy"] if hasattr(resolved, "scientific_config") else {}
         plugin = plugin_for_type(policy_type, self.repository_root, provider=policy_document.get("provider")) if policy_type and policy_type != "mock" else None
+        if plugin is None and adapter_factory is None:
+            raise ConfigCompatibilityError("policy serving requires an explicitly selected plugin; mock adapters are test-only")
         adapter = (adapter_factory(resolved.policy_settings) if adapter_factory else
-                   call_plugin(plugin, "create_adapter", resolved.policy_settings) if plugin else self._policy_adapter(resolved.policy_settings))
+                   call_plugin(plugin, "create_adapter", resolved.policy_settings))
         socket = Path(socket_path) if socket_path is not None else self.default_socket(path)
         if port is None:
             socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

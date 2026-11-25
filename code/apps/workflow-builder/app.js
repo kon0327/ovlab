@@ -173,7 +173,7 @@
     let body = profileField(item, 'evaluate');
     if (resolved && !resolved.unavailable) {
       const {document: doc, components} = resolved, policy = components.policy, method = C.family(resolved, 'evaluate');
-      body += `<div class="profile-info"><strong>${esc(methodLabel(method))}</strong> · ${esc(policy?.settings?.checkpoint_id || 'mock policy')}<br>${esc(doc.deployment ? doc.deployment.profile + ' deployment · ' + doc.deployment.renderer : 'Native mock evaluation')}</div>`;
+      body += `<div class="profile-info"><strong>${esc(methodLabel(method))}</strong> · ${esc(policy?.settings?.checkpoint_id || 'mock policy')}<br>${esc(doc.deployment ? doc.deployment.profile + ' deployment · ' + (doc.deployment.execution_profile || doc.deployment.renderer || resolved.benchmarkPlugin?.default_execution_profile || 'benchmark default') : 'Native mock evaluation')}</div>`;
       body += '<div class="field"><label for="checkpoint-source">Checkpoint source</label><select id="checkpoint-source" data-checkpoint><option value="__inherit__" ' + (!own(local, 'checkpoint_from') ? 'selected' : '') + '>' + esc(own(inherited, 'checkpoint_from') ? 'Inherit · ' + (inherited.checkpoint_from || '<root>') + ':train' : 'Configured policy checkpoint') + '</option>';
       body += analysis.entries.filter(node => (node.node.execute || []).includes('train')).map(source => {
         const sourceMethod = C.family(C.resolve(source, 'train', catalog), 'train');
@@ -186,9 +186,9 @@
       const quantization = policy?.settings?.runtime?.quantization;
       if (quantization !== undefined) body += selectField('Inference quantization', 'config.evaluate.component_patches.policy.settings.runtime.quantization', quantization, (resolved.plugin?.deployment?.quantization || [quantization]).map(value => [value, value === 'none' ? 'Full precision' : value]));
       const benchmark = components.benchmark, protocol = components.protocol;
-      if (benchmark?.type === 'libero') body += field('Evaluation task indices', 'config.evaluate.component_patches.benchmark.settings.task_indices', benchmark.settings.task_indices, {hint: 'Comma-separated task indices, e.g. 0, 1. Use all for the entire suite.'}) + '<div class="task-shortcuts"><button data-eval-tasks="0">Task 0</button><button data-eval-tasks="0,1">First 2</button><button data-eval-tasks="all">All tasks</button></div>';
+      if (resolved.benchmarkPlugin?.authoring?.task_selection?.format === 'indices') body += field('Evaluation task indices', 'config.evaluate.component_patches.benchmark.settings.task_indices', benchmark.settings.task_indices, {hint: 'Comma-separated task indices, e.g. 0, 1. Use all for the entire suite.'}) + '<div class="task-shortcuts"><button data-eval-tasks="0">Task 0</button><button data-eval-tasks="0,1">First 2</button><button data-eval-tasks="all">All tasks</button></div>';
       body += '<div class="field-row">' + field('Episodes per task', 'config.evaluate.component_patches.protocol.execution.rollouts_per_task', protocol?.execution?.rollouts_per_task, {type: 'number', min: 1, step: 1, integer: true}) + field('Max. episode steps', 'config.evaluate.component_patches.protocol.execution.maximum_episode_steps', protocol?.execution?.maximum_episode_steps, {type: 'number', min: 1, step: 1, integer: true}) + '</div>';
-      if (doc.deployment) body += selectField('Renderer', 'config.evaluate.patch.deployment.renderer', doc.deployment.renderer, [['egl', 'EGL · headless'], ['glfw', 'GLFW · display']]);
+      if (doc.deployment && Object.keys(resolved.benchmarkPlugin?.execution_profiles || {}).length) body += selectField('Execution profile', 'config.evaluate.patch.deployment.renderer', doc.deployment.renderer, Object.keys(resolved.benchmarkPlugin.execution_profiles).map(value => [value, value]));
       for (const kind of ['benchmark', 'policy', 'protocol', 'metrics', 'artifacts']) {
         const current = C.get(item.node, 'config.evaluate.patch.components.' + kind);
         let candidates = catalog.components[kind] || [];

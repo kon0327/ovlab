@@ -622,6 +622,23 @@ def test_plugin_mount_contract_rejects_invalid_or_overlapping_paths(mount):
         validate_runtime_mounts([mount])
 
 
+@pytest.mark.parametrize('variable', [
+    'OVLAB_ROOT', 'OVLAB_EXTENSION_REGISTRY', 'OVLAB_PLUGIN_REGISTRY',
+    'OVLAB_EXPERIMENT_CONFIG', 'OVLAB_CONFIG_BUNDLE_PATH',
+])
+def test_plugin_mount_environment_cannot_redirect_worker_configuration(variable):
+    from ovlab_benchctl.plugin_mounts import validate_runtime_mounts
+    mount = {'source': '/tmp/resource', 'target': '/models/resource', 'environment': variable}
+    with pytest.raises(ConfigCompatibilityError, match='environment variable is invalid, reserved or duplicated'):
+        validate_runtime_mounts([mount])
+
+
+def test_plugin_mount_environment_can_name_its_own_resource():
+    from ovlab_benchctl.plugin_mounts import validate_runtime_mounts
+    mount = {'source': '/tmp/resource', 'target': '/models/resource', 'environment': 'OVLAB_VENDOR_RESOURCE_PATH'}
+    assert validate_runtime_mounts([mount])[0]['environment'] == 'OVLAB_VENDOR_RESOURCE_PATH'
+
+
 def test_persistent_deployment_checks_required_mount_files_before_build(external_plugin, monkeypatch):
     from ovlab_policy_sdk.plugin import PolicyPlugin
     root = external_plugin

@@ -164,4 +164,3 @@ class LiberoDatasetBridge(_HttpMixin, DatasetBridge):
                 "action": "steps.action:float32[7]",
             },
         }
-

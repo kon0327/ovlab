@@ -2,7 +2,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from ovlab_policy_sdk.plugin import PolicyPluginV2 as PolicyPlugin, PolicyPluginValidationError as ConfigSchemaError, PolicyPluginCompatibilityError as ConfigCompatibilityError, PolicyPluginReferenceError as ConfigReferenceError
+from ovlab_policy_sdk.plugin import PolicyPlugin, PolicyPluginValidationError as ConfigSchemaError, PolicyPluginCompatibilityError as ConfigCompatibilityError, PolicyPluginReferenceError as ConfigReferenceError
 from ovlab_policy_sdk.validation import mapping, exact_type, enum, non_empty_string, number
 
 
@@ -270,19 +270,6 @@ class OpenVlaPlugin(PolicyPlugin):
         value = environment.get("OVLAB_QUIC_ADAPTER_HOST_PATH", doc["settings"]["quic"]["adapter_path"])
         path = Path(value).expanduser()
         return [{"source": str((path if path.is_absolute() else Path(repository_root) / path).resolve()), "target": "/checkpoints/quic-adapter", "environment": "OVLAB_QUIC_ADAPTER_PATH", "required_files": ["adapter.json", "adapter.safetensors"]}]
-
-    def accepts_capabilities(self, capabilities):
-        return capabilities.component_name == self.component_name
-
-    def accepts_settings(self, settings):
-        if self.config_type == "openvla_oft":
-            from ovlab_openvla_oft import OpenVlaOftSettings
-            return isinstance(settings, OpenVlaOftSettings)
-        if self.config_type == "openvla_quic":
-            from ovlab_openvla_quic import OpenVlaQuICSettings
-            return isinstance(settings, OpenVlaQuICSettings)
-        from ovlab_openvla_vanilla import OpenVlaVanillaSettings
-        return isinstance(settings, OpenVlaVanillaSettings) and ((settings.method_descriptor.family.value == "lora") == (self.config_type == "openvla_lora_merged"))
 
     def create_adapter(self, settings):
         if self.config_type == "openvla_quic":

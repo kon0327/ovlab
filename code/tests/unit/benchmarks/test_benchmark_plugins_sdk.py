@@ -23,7 +23,7 @@ from ovlab_core.contracts import (
     SignalAccess, SignalRegistry, SignalSpec, TaskId,
 )
 from ovlab_core.datasets import DatasetProvider, DatasetRequest, DatasetRequestError, DatasetResolution
-from ovlab_policy_sdk import PolicyPlugin, PolicyPluginV2
+from ovlab_policy_sdk import PolicyPlugin
 
 
 @dataclass(frozen=True)
@@ -94,7 +94,7 @@ class Reject(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, Reject())
 import ovlab_benchmarks.plugin, ovlab_core.datasets
 from ovlab_core.contracts import BenchmarkContext
-from ovlab_policy_sdk import PolicyPluginV2
+from ovlab_policy_sdk import PolicyPlugin
 assert not any(name.split(".")[0] in blocked for name in sys.modules)
 '''
     completed = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
@@ -201,9 +201,9 @@ def test_dataset_resolution_preserves_portable_v1_identity():
         replace(resolution, expected_digest="invalid")
 
 
-def test_policy_api_v2_is_additive_and_has_no_fabricated_standalone_peer():
-    assert PolicyPlugin.api_version == "1" and PolicyPluginV2.api_version == "2"
-    assert PolicyPluginV2.deployment_context(None, {}, {"input": {"width": 64}}) is None
+def test_policy_api_v2_has_no_fabricated_standalone_peer():
+    assert PolicyPlugin.api_version == "2"
+    assert PolicyPlugin.deployment_context(None, {}, {"input": {"width": 64}}) is None
 
 
 def test_cpu_plugin_runs_through_metrics_canonical_verification_and_report(tmp_path):

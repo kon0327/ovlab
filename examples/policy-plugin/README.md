@@ -1,7 +1,7 @@
 # Develop an OVLAB policy plugin
 
 This separate project connects a constant-action CPU model to OVLAB through
-`PolicyPluginV2`. It demonstrates neutral extension registration, static
+`PolicyPlugin`. It demonstrates neutral extension registration, static
 capability description, checkpoint identity, adapter lifecycle, image builds and
 persistent RPC serving. Predictions have no scientific evaluation value. The
 bundled checkpoint is a tiny metadata file; no model weights are downloaded.

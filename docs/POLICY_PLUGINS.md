@@ -6,10 +6,10 @@ runtime mounts. OVLAB owns configuration composition, checkpoint verification,
 containers, RPC transport, evaluation lifecycle and artifacts. Adding a model requires a plugin and a registry entry; it requires no new branch in the
 resolver, CLI or deployment code.
 
-The current model contract is `ovlab_policy_sdk.plugin.PolicyPluginV2` (API
+The current model contract is `ovlab_policy_sdk.plugin.PolicyPlugin` (API
 `"2"`). OpenVLA, merged LoRA, OFT and QuIC use canonical `BenchmarkContext`
-rather than reading another project's benchmark YAML. The API v1 base remains
-only for migration compatibility. The standalone CPU example also uses API v2.
+rather than reading another project's benchmark YAML. The API v1 migration base
+is removed. The standalone CPU example also uses API v2.
 Their settings and artifact semantics remain in the integration packages. Model
 libraries and weights are imported only during adapter initialization. Registry
 listing and deployment planning work with the standard library alone when the
@@ -239,7 +239,7 @@ source for image construction.
 
 ## Developing the plugin
 
-The entrypoint is `module:object`. Export either a `PolicyPluginV2` instance or a
+The entrypoint is `module:object`. Export either a `PolicyPlugin` instance or a
 zero-argument class. The implementation must advertise `api_version = "2"`;
 unsupported versions fail before model initialization. Python packages can live
 at the source root or under `src/`. The exported object must implement the selected SDK contract. Instances are cached on their
@@ -284,10 +284,8 @@ configuration/checkpoint variables. Both serving and evaluation validate these
 contracts before starting containers. Dry runs show the mounts without requiring
 the model directories to exist yet.
 
-The `accepts_settings` and `accepts_capabilities` hooks support existing direct
-Python callers of the compatibility helpers. Normal service startup selects the
-qualified provider declared in the policy configuration; new plugins do not need these
-hooks.
+Service startup selects the qualified provider declared in the policy
+configuration. API v1 and first-match settings/capability discovery are removed.
 
 `PolicyAdapter` supplies the lifecycle and checks state transitions, prediction
 shape, horizon and action contract. Implement `_initialize`, `_reset_episode`,

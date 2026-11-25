@@ -66,9 +66,17 @@
   }
   function pluginForPolicy(catalog, policy) {
     if (!policy) return undefined;
-    if (policy.provider) return catalog.plugins?.[policy.provider];
+    if (policy.provider) {
+      const selected = catalog.plugins?.[policy.provider];
+      return selected?.config_type === policy.type ? selected : undefined;
+    }
     const matches = Object.values(catalog.plugins || {}).filter(item => item.config_type === policy.type);
     return matches.length === 1 ? matches[0] : undefined;
+  }
+  function pluginForBenchmark(catalog, benchmark) {
+    if (!benchmark) return undefined;
+    const selected = catalog.benchmarks?.[benchmark.provider];
+    return selected?.config_type === benchmark.type ? selected : undefined;
   }
   function resolve(entry, phase, catalog) {
     const state = entry.state[phase];
@@ -91,9 +99,10 @@
       for (const kind of ['policy', 'benchmark']) if (components[kind] && (!object(components[kind]) || !object(components[kind].settings))) return invalid(`${kind} patches must preserve their settings object.`);
       if (components.policy && components.policy.type !== 'mock' && !pluginForPolicy(catalog, components.policy)) return invalid('Unknown policy type; choose a registered policy component.');
       if (components.benchmark && !(catalog.components.benchmark || []).some(item => item.document.type === components.benchmark.type)) return invalid('Unknown benchmark type; choose a catalog benchmark component.');
+      if (components.benchmark && components.benchmark.type !== 'mock' && !pluginForBenchmark(catalog, components.benchmark)) return invalid('Unknown benchmark provider or configuration type; choose a registered benchmark component.');
       if (components.protocol && (!object(components.protocol) || !object(components.protocol.execution))) return invalid('Protocol patches must preserve execution settings.');
     }
-    return {document, components, source, state, plugin: phase === 'evaluate' ? pluginForPolicy(catalog, components.policy) : trainingPlugin};
+    return {document, components, source, state, benchmarkPlugin: phase === 'evaluate' ? pluginForBenchmark(catalog, components.benchmark) : undefined, plugin: phase === 'evaluate' ? pluginForPolicy(catalog, components.policy) : trainingPlugin};
   }
   function family(resolved, phase) {
     if (!resolved || resolved.unavailable) return '';
@@ -171,7 +180,8 @@
           if (quantization && !quantization.includes(policy?.settings?.runtime?.quantization)) issue('error', entry.path, `Unsupported inference quantization. This plugin supports: ${quantization.join(', ')}.`);
           const expectedDeployment = descriptor?.deployment?.profile;
           if (expectedDeployment && doc.deployment && doc.deployment.profile !== expectedDeployment) issue('error', entry.path, `This policy requires deployment.profile: ${expectedDeployment}.`);
-          if (doc.deployment && !['egl', 'glfw'].includes(doc.deployment.renderer)) issue('error', entry.path, 'Renderer must be egl or glfw.');
+          const profiles = resolved.benchmarkPlugin?.execution_profiles || {};
+          if (doc.deployment?.renderer !== undefined && !own(profiles, doc.deployment.renderer)) issue('error', entry.path, 'Choose an execution profile declared by the selected benchmark.');
           for (const key of ['rollouts_per_task', 'maximum_episode_steps']) if (protocol && (!Number.isInteger(protocol.execution[key]) || protocol.execution[key] < 1)) issue('error', entry.path, `${key} must be a positive integer.`);
           const indices = benchmark?.settings?.task_indices;
           if (indices !== undefined && indices !== 'all' && (!Array.isArray(indices) || !indices.length || new Set(indices).size !== indices.length || indices.some(n => !Number.isInteger(n) || n < 0 || (catalog.tasks[benchmark.settings.suite] && n >= catalog.tasks[benchmark.settings.suite].length)))) issue('error', entry.path, 'Task indices must be unique, nonnegative integers within the selected suite.');
@@ -415,7 +425,7 @@
     if (!object(document)) throw new Error('The root must be a mapping.');
     return guard(document);
   }
-  const api = {PHASES, RESERVED, SAFE, own, object, clone, merge, get, set, flatten, profile, pluginForPolicy, resolve, family, bindingCompatible, sameDocument,
+  const api = {PHASES, RESERVED, SAFE, own, object, clone, merge, get, set, flatten, profile, pluginForPolicy, pluginForBenchmark, resolve, family, bindingCompatible, sameDocument,
     analyze, rewriteReferences, uniqueId, moveNode, renameNode, dumpYaml, parse, guard};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.OVLABBuilder = api;
